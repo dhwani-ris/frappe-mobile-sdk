@@ -1,12 +1,12 @@
 import 'dart:convert';
-import 'package:erpnext_sdk_flutter/erpnext_sdk_flutter.dart';
+import '../api/client.dart';
 import '../models/doc_type_meta.dart';
 import '../database/app_database.dart';
 import '../database/entities/doctype_meta_entity.dart';
 
 /// Service for managing DocType metadata
 class MetaService {
-  final ERPNextClient _client;
+  final FrappeClient _client;
   final AppDatabase _database;
   final Map<String, DocTypeMeta> _metaCache = {};
 

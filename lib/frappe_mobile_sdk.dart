@@ -1,4 +1,4 @@
-/// Frappe Mobile SDK - Offline-first Flutter package for Frappe/ERPNext
+/// Frappe Mobile SDK - Offline-first Flutter package for Frappe
 /// 
 /// This package provides:
 /// - Offline-first architecture with Room (SQLite)
@@ -20,6 +20,15 @@ export 'src/database/entities/doctype_meta_entity.dart';
 export 'src/database/entities/document_entity.dart';
 export 'src/database/daos/doctype_meta_dao.dart';
 export 'src/database/daos/document_dao.dart';
+
+// API Client
+export 'src/api/client.dart' show FrappeClient;
+export 'src/api/doctype_service.dart' show DoctypeService;
+export 'src/api/document_service.dart' show DocumentService;
+export 'src/api/attachment_service.dart' show AttachmentService;
+export 'src/api/exceptions.dart' show FrappeException, AuthException, ApiException, NetworkException, ValidationException;
+export 'src/api/frappe_document.dart' show FrappeDocument;
+export 'src/api/query_builder.dart' show QueryBuilder;
 
 // Services
 export 'src/services/auth_service.dart';

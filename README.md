@@ -161,7 +161,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 This package uses the following open-source packages:
 
-- **[erpnext_sdk_flutter](https://pub.dev/packages/erpnext_sdk_flutter)** - ERPNext API client
+- **[http](https://pub.dev/packages/http)** - HTTP client
 - **[floor](https://pub.dev/packages/floor)** - SQLite database ORM
 - **[sqflite](https://pub.dev/packages/sqflite)** - SQLite plugin for Flutter
 - **[flutter_form_builder](https://pub.dev/packages/flutter_form_builder)** - Form building utilities
