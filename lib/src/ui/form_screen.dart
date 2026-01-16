@@ -48,9 +48,8 @@ class _FormScreenState extends State<FormScreen> {
           data: formData,
         );
       } else {
-        // Update existing document - merge with existing data to preserve all fields
         final existingData = Map<String, dynamic>.from(widget.document!.data);
-        existingData.addAll(formData); // formData overwrites existing values
+        existingData.addAll(formData);
         await widget.repository.updateDocumentData(
           widget.document!.localId,
           existingData,
@@ -62,13 +61,9 @@ class _FormScreenState extends State<FormScreen> {
         final isOnline = await widget.syncService!.isOnline();
         if (isOnline) {
           try {
-            // Push sync immediately after save
-            print('Pushing sync for doctype: ${widget.meta.name}');
             final syncResult = await widget.syncService!.pushSync(doctype: widget.meta.name);
-            print('Sync result: ${syncResult.success} success, ${syncResult.failed} failed, ${syncResult.total} total');
             if (mounted) {
               if (syncResult.errors.isNotEmpty) {
-                // Show error dialog with details
                 _showSyncErrorDialog(syncResult.errors);
               } else if (syncResult.failed > 0) {
                 ScaffoldMessenger.of(context).showSnackBar(
@@ -92,8 +87,6 @@ class _FormScreenState extends State<FormScreen> {
               }
             }
           } catch (e) {
-            // Sync failed, but document is saved locally
-            print('Sync failed: $e');
             if (mounted) {
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(
@@ -122,7 +115,6 @@ class _FormScreenState extends State<FormScreen> {
             }
           }
         } else {
-          // Offline - document is saved locally and will sync when online
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(
@@ -183,18 +175,15 @@ class _FormScreenState extends State<FormScreen> {
     });
 
     try {
-      // Delete the document (marks as deleted)
       await widget.repository.deleteDocument(widget.document!.localId);
 
-      // Try to sync if online
       if (widget.syncService != null) {
         final isOnline = await widget.syncService!.isOnline();
         if (isOnline) {
           try {
-            // Push the deletion to server
             await widget.syncService!.pushSync(doctype: widget.meta.name);
           } catch (e) {
-            print('Sync failed: $e');
+            // Ignore sync errors on delete
           }
         }
       }
@@ -206,7 +195,6 @@ class _FormScreenState extends State<FormScreen> {
             backgroundColor: Colors.orange,
           ),
         );
-        // Navigate back and refresh list
         Navigator.pop(context);
         widget.onSaveSuccess?.call();
       }

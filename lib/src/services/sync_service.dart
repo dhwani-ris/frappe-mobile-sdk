@@ -46,98 +46,54 @@ class SyncService {
       for (final doc in dirtyDocs) {
         try {
           if (doc.status == 'deleted') {
-            // Delete on server
             if (doc.serverId != null) {
-              print('=== Deleting document on server ===');
-              print('Doctype: ${doc.doctype}');
-              print('Server ID: ${doc.serverId}');
-              
               try {
                 await _client.document.deleteDocument(doc.doctype, doc.serverId!);
-                print('=== Delete API Response ===');
-                print('Response: Success (void)');
-                print('=== End Delete Response ===\n');
               } catch (e) {
-                print('=== Delete API Error ===');
-                print('Error: $e');
-                print('=== End Delete Error ===\n');
                 rethrow;
               }
             }
-            // Remove from local database
             await _repository.hardDeleteDocument(doc.localId);
             success++;
           } else if (doc.serverId == null) {
-            // Create on server
-            print('=== Creating document on server ===');
-            print('Doctype: ${doc.doctype}');
-            print('Data being sent: ${doc.data}');
-            
             try {
               final result = await _client.document.createDocument(
                 doc.doctype,
                 doc.data,
               );
               
-              print('=== Create API Response ===');
-              print('Response: $result');
-              print('Response type: ${result.runtimeType}');
               if (result is Map) {
-                print('Response keys: ${result.keys.toList()}');
-                // Update local document with server ID
                 final serverId = result['name'] as String? ?? result['docname'] as String?;
                 if (serverId != null) {
-                final updated = doc.copyWith(
-                  serverId: serverId,
-                  status: 'clean',
-                  modified: DateTime.now().millisecondsSinceEpoch,
-                );
+                  final updated = doc.copyWith(
+                    serverId: serverId,
+                    status: 'clean',
+                    modified: DateTime.now().millisecondsSinceEpoch,
+                  );
                   await _repository.updateDocument(updated);
                 }
               }
             } catch (e) {
-              print('=== Create API Error ===');
-              print('Error: $e');
-              print('=== End Create Error ===\n');
               rethrow;
             }
             success++;
           } else {
-            // Update on server
-            print('=== Updating document on server ===');
-            print('Doctype: ${doc.doctype}');
-            print('Server ID: ${doc.serverId}');
-            print('Data being sent: ${doc.data}');
-            
             try {
-              final result = await _client.document.updateDocument(
+              await _client.document.updateDocument(
                 doc.doctype,
                 doc.serverId!,
                 doc.data,
               );
-              
-              print('=== Update API Response ===');
-              print('Response: $result');
-              print('Response type: ${result.runtimeType}');
-              if (result is Map) {
-                print('Response keys: ${result.keys.toList()}');
-              }
-              print('=== End Update Response ===\n');
             } catch (e) {
-              print('=== Update API Error ===');
-              print('Error: $e');
-              print('=== End Update Error ===\n');
               rethrow;
             }
             
-            // Mark as clean
             final updated = doc.markClean();
             await _repository.updateDocument(updated);
             success++;
           }
         } catch (e) {
           final errorMsg = e.toString();
-          print('Sync failed for ${doc.localId}: $errorMsg');
           failed++;
           
           // Track error details
@@ -179,7 +135,6 @@ class SyncService {
     final List<SyncError> errors = [];
 
     try {
-      // Build filters for modified timestamp
       List<List<dynamic>>? filters;
       if (since != null) {
         final sinceDate = DateTime.fromMillisecondsSinceEpoch(since);
@@ -188,27 +143,12 @@ class SyncService {
         ];
       }
 
-      // Fetch documents from server
-      print('=== Fetching doctype: $doctype ===');
-      print('Filters: $filters');
-      print('Since timestamp: $since');
-      
       final result = await _client.doctype.list(
         doctype,
         filters: filters,
-        fields: ['*'], // Fetch all fields
+        fields: ['*'],
         limitPageLength: 1000,
       );
-
-      print('=== API Response for doctype: $doctype ===');
-      print('Response type: ${result.runtimeType}');
-      print('Response length: ${result.length}');
-      if (result.isNotEmpty) {
-        print('First document sample:');
-        print(result[0]);
-        print('First document keys: ${(result[0] as Map).keys.toList()}');
-      }
-      print('=== End API Response ===\n');
 
       total = result.length;
 
@@ -225,7 +165,6 @@ class SyncService {
           success++;
         } catch (e) {
           final errorMsg = e.toString();
-          print('Failed to save document: $errorMsg');
           failed++;
           
           final docId = docData['name'] as String? ?? docData['docname'] as String? ?? 'unknown';
@@ -257,20 +196,16 @@ class SyncService {
     _isSyncing = true;
 
     try {
-      // Push local changes first
       final pushResult = await pushSync(doctype: doctype);
 
-      // Get last sync timestamp
       final localDocs = await _repository.getDocumentsByDoctype(doctype);
       int? lastModified;
       if (localDocs.isNotEmpty) {
         lastModified = localDocs.map((d) => d.modified).reduce((a, b) => a > b ? a : b);
       }
 
-      // Pull server updates (fields: ["*"] fetches all fields)
       final pullResult = await pullSync(doctype: doctype, since: lastModified);
 
-      // Combine errors from both operations
       final allErrors = <SyncError>[];
       allErrors.addAll(pushResult.errors);
       allErrors.addAll(pullResult.errors);
@@ -320,7 +255,7 @@ class SyncResult {
 class SyncError {
   final String documentId;
   final String doctype;
-  final String operation; // 'create', 'update', 'delete'
+  final String operation;
   final String errorMessage;
   final DateTime timestamp;
 

@@ -146,7 +146,6 @@ class _LinkFieldDropdownState extends State<_LinkFieldDropdown> {
         _isLoading = false;
       });
     } catch (e) {
-      print('Error loading link options: $e');
       setState(() => _isLoading = false);
     }
   }

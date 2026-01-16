@@ -31,69 +31,43 @@ class MetaService {
       }
     }
 
-    // Fetch from server - matching frappe_huf implementation exactly
     try {
-      // Use the SDK's doctype service to get metadata (same as frappe_huf)
-      // This matches frappe_huf/lib/services/frappe_service.dart line 55
       final metaJson = await _client.doctype.getDocTypeMeta(doctype);
       
-      // Debug: Print the raw response structure (same as frappe_huf)
-      print('Raw metadata response keys: ${metaJson.keys.toList()}');
-      
-      // The response structure might vary, try to extract the actual meta (same as frappe_huf)
       Map<String, dynamic> metaData;
       
-      // PRIORITY 1: Check 'docs' array first (this is what the server actually returns!)
       if (metaJson.containsKey('docs') && metaJson['docs'] is List) {
         final docs = metaJson['docs'] as List;
         if (docs.isNotEmpty && docs[0] is Map<String, dynamic>) {
           metaData = docs[0] as Map<String, dynamic>;
-          print('Using metadata from docs array');
         } else {
           metaData = metaJson;
         }
-      }
-      // Check if it's wrapped in 'message' field (common in Frappe API)
-      else if (metaJson.containsKey('message')) {
+      } else if (metaJson.containsKey('message')) {
         final message = metaJson['message'];
         if (message is List && message.isNotEmpty) {
-          // message is an array, get first element
           metaData = message[0] as Map<String, dynamic>;
         } else if (message is Map<String, dynamic>) {
-          // message is the metadata directly
           metaData = message;
         } else {
           metaData = metaJson;
         }
-      }
-      // Check if it's wrapped in 'data' field
-      else if (metaJson.containsKey('data')) {
+      } else if (metaJson.containsKey('data')) {
         metaData = metaJson['data'] as Map<String, dynamic>;
-      }
-      // Direct metadata structure (has 'fields' array)
-      else if (metaJson.containsKey('fields')) {
+      } else if (metaJson.containsKey('fields')) {
         metaData = metaJson;
-      }
-      // Fallback: use the response as-is
-      else {
+      } else {
         metaData = metaJson;
       }
       
-      // Debug: Print the extracted metadata structure (same as frappe_huf)
-      print('Extracted metadata keys: ${metaData.keys.toList()}');
-      print('Fields count: ${metaData['fields'] is List ? (metaData['fields'] as List).length : 'N/A'}');
-      
-      // Validate that we have fields before parsing
       if (!metaData.containsKey('fields') || metaData['fields'] is! List) {
         throw Exception('Invalid metadata format: missing fields array. Response keys: ${metaData.keys.toList()}');
       }
       
       final meta = DocTypeMeta.fromJson(metaData);
       
-      // Cache in memory
       _metaCache[doctype] = meta;
       
-      // Save to database
       final entity = DoctypeMetaEntity(
         doctype: doctype,
         modified: metaData['modified']?.toString(),
@@ -103,20 +77,11 @@ class MetaService {
       
       return meta;
     } catch (e) {
-      print('Error fetching metadata: $e');
-      
-      // Check if it's a type casting error - the data might be valid but parsing failed
       final errorStr = e.toString();
       if (errorStr.contains('is not a subtype') || errorStr.contains('type cast')) {
-        // Try to parse with more lenient type handling
-        print('Type casting error detected, metadata might be valid but parsing failed');
-        // The error happened during DocField parsing, but we might have valid data
-        // Re-throw with more context
         throw Exception('Failed to parse metadata for $doctype due to type mismatch. The server returned data but field parsing failed. Error: $e');
       }
       
-      // Don't try frappe.client.get_meta fallback since it doesn't exist on this server
-      // The primary method getDocTypeMeta should work
       throw Exception('Failed to fetch metadata for $doctype: $e');
     }
   }
@@ -129,8 +94,7 @@ class MetaService {
       try {
         result[doctype] = await getMeta(doctype);
       } catch (e) {
-        // Log error but continue with other doctypes
-        print('Failed to fetch meta for $doctype: $e');
+        // Continue with other doctypes
       }
     }
     

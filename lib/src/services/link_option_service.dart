@@ -18,17 +18,13 @@ class LinkOptionService {
   /// Fetch and cache link options from server
   Future<List<LinkOptionEntity>> fetchAndCacheLinkOptions(String doctype) async {
     try {
-      // Fetch documents from the linked DocType
-      // doctype.list() returns List<Map<String, dynamic>>
       final documents = await _client.doctype.list(doctype) as List<dynamic>;
 
-      // Clear old cache for this doctype
       await _database.linkOptionDao.deleteByDoctype(doctype);
 
       final linkOptions = <LinkOptionEntity>[];
       final now = DateTime.now().millisecondsSinceEpoch;
 
-      // Add new options
       for (final doc in documents) {
         Map<String, dynamic> docMap;
         if (doc is Map<String, dynamic>) {
@@ -40,7 +36,6 @@ class LinkOptionService {
         final name = docMap['name'] as String? ?? '';
         if (name.isEmpty) continue;
 
-        // Try to get title field if available
         String? label;
         for (final key in ['title', 'full_name', 'customer_name', 'supplier_name', 'label']) {
           if (docMap.containsKey(key) && docMap[key] != null) {
@@ -60,15 +55,12 @@ class LinkOptionService {
         linkOptions.add(option);
       }
 
-      // Save to database
       if (linkOptions.isNotEmpty) {
         await _database.linkOptionDao.insertLinkOptions(linkOptions);
       }
 
       return linkOptions;
     } catch (e) {
-      print('Error fetching link options for $doctype: $e');
-      // If fetch fails, return cached data if available
       return await getCachedLinkOptions(doctype);
     }
   }
@@ -80,24 +72,20 @@ class LinkOptionService {
   }) async {
     final cached = await getCachedLinkOptions(doctype);
 
-    // If cache is empty or force refresh, fetch from server
     if (cached.isEmpty || forceRefresh) {
       try {
         return await fetchAndCacheLinkOptions(doctype);
       } catch (e) {
-        // If fetch fails, return cached data (even if empty)
         return cached;
       }
     }
 
-    // Check if cache is stale (older than 1 hour)
     final now = DateTime.now().millisecondsSinceEpoch;
     final oneHourAgo = now - (60 * 60 * 1000);
     final isStale = cached.isEmpty ||
         (cached.isNotEmpty && cached.first.lastUpdated < oneHourAgo);
 
     if (isStale) {
-      // Try to refresh in background, but return cached data immediately
       fetchAndCacheLinkOptions(doctype).catchError((_) {
         return <LinkOptionEntity>[];
       });
