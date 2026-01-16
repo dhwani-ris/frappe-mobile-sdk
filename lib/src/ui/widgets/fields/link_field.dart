@@ -8,6 +8,7 @@ import '../../../database/entities/link_option_entity.dart';
 class LinkField extends BaseField {
   final LinkOptionService? linkOptionService;
   final List<String>? options;
+  final Map<String, dynamic>? formData;
 
   const LinkField({
     super.key,
@@ -18,6 +19,7 @@ class LinkField extends BaseField {
     super.style,
     this.linkOptionService,
     this.options,
+    this.formData,
   });
 
   @override
@@ -74,6 +76,8 @@ class LinkField extends BaseField {
         enabled: enabled,
         linkOptionService: linkOptionService!,
         linkedDoctype: field.options!,
+        linkFilters: field.linkFilters,
+        formData: formData ?? {},
         style: style,
       );
     }
@@ -111,6 +115,8 @@ class _LinkFieldDropdown extends StatefulWidget {
   final bool enabled;
   final LinkOptionService linkOptionService;
   final String linkedDoctype;
+  final String? linkFilters;
+  final Map<String, dynamic> formData;
   final FieldStyle? style;
 
   const _LinkFieldDropdown({
@@ -120,6 +126,8 @@ class _LinkFieldDropdown extends StatefulWidget {
     required this.enabled,
     required this.linkOptionService,
     required this.linkedDoctype,
+    this.linkFilters,
+    required this.formData,
     this.style,
   });
 
@@ -140,13 +148,42 @@ class _LinkFieldDropdownState extends State<_LinkFieldDropdown> {
   Future<void> _loadOptions() async {
     setState(() => _isLoading = true);
     try {
-      final options = await widget.linkOptionService.getLinkOptions(widget.linkedDoctype);
+      final filters = LinkOptionService.parseLinkFilters(
+        widget.linkFilters,
+        widget.formData,
+      );
+      final options = await widget.linkOptionService.getLinkOptions(
+        widget.linkedDoctype,
+        filters: filters,
+      );
       setState(() {
         _options = options;
         _isLoading = false;
       });
     } catch (e) {
       setState(() => _isLoading = false);
+    }
+  }
+  
+  @override
+  void didUpdateWidget(_LinkFieldDropdown oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Reload options if filters or form data changed
+    // Deep comparison of formData to detect changes in dependent fields
+    bool formDataChanged = false;
+    if (oldWidget.formData.length != widget.formData.length) {
+      formDataChanged = true;
+    } else {
+      for (final key in widget.formData.keys) {
+        if (oldWidget.formData[key] != widget.formData[key]) {
+          formDataChanged = true;
+          break;
+        }
+      }
+    }
+    
+    if (oldWidget.linkFilters != widget.linkFilters || formDataChanged) {
+      _loadOptions();
     }
   }
 

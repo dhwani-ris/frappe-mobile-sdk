@@ -68,7 +68,7 @@ class _HomeScreenState extends State<HomeScreen> {
       // TODO: Replace with your Frappe server URL and doctypes
       _appConfig = AppConfig(
         baseUrl: 'https://stghufdms-frappe.dhwaniris.in/',
-        doctypes: ['State','District','Farmer Profiling'], // Configure your doctypes
+        doctypes: ['State','District','Farmer Profiling','frappe-form-test'], // Configure your doctypes
       );
 
       // Initialize auth service

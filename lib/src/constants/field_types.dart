@@ -8,6 +8,10 @@ class FieldTypes {
   static const String date = 'Date';
   static const String datetime = 'Datetime';
   static const String time = 'Time';
+  static const String duration = 'Duration';
+  static const String password = 'Password';
+  static const String rating = 'Rating';
+  static const String readOnly = 'Read Only';
   static const String check = 'Check';
   static const String int = 'Int';
   static const String float = 'Float';

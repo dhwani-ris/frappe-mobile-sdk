@@ -7,10 +7,18 @@ import 'data_field.dart';
 import 'text_field.dart';
 import 'select_field.dart';
 import 'date_field.dart';
+import 'datetime_field.dart';
+import 'time_field.dart';
+import 'duration_field.dart';
 import 'check_field.dart';
 import 'numeric_field.dart';
 import 'link_field.dart';
 import 'phone_field.dart';
+import 'password_field.dart';
+import 'rating_field.dart';
+import 'read_only_field.dart';
+import 'attach_field.dart';
+import 'image_field.dart';
 
 /// Factory class to create appropriate field widget based on field type
 /// 
@@ -43,6 +51,7 @@ class FieldFactory {
     ValueChanged<dynamic>? onChanged,
     bool enabled = true,
     List<String>? linkOptions,
+    Map<String, dynamic>? formData,
     FieldStyle? style,
   }) {
     if (field.hidden) {
@@ -99,6 +108,24 @@ class FieldFactory {
           style: fieldStyle,
         );
 
+      case FieldTypes.datetime:
+        return DatetimeField(
+          field: field,
+          value: value,
+          onChanged: onChanged,
+          enabled: enabled,
+          style: fieldStyle,
+        );
+
+      case FieldTypes.time:
+        return TimeField(
+          field: field,
+          value: value,
+          onChanged: onChanged,
+          enabled: enabled,
+          style: fieldStyle,
+        );
+
       case FieldTypes.check:
         return CheckField(
           field: field,
@@ -128,6 +155,62 @@ class FieldFactory {
           enabled: enabled,
           linkOptionService: linkOptionService,
           options: linkOptions,
+          formData: formData,
+          style: fieldStyle,
+        );
+
+      case 'Duration':
+        return DurationField(
+          field: field,
+          value: value,
+          onChanged: onChanged,
+          enabled: enabled,
+          style: fieldStyle,
+        );
+
+      case 'Password':
+        return PasswordField(
+          field: field,
+          value: value,
+          onChanged: onChanged,
+          enabled: enabled,
+          style: fieldStyle,
+        );
+
+      case 'Rating':
+        return RatingField(
+          field: field,
+          value: value,
+          onChanged: onChanged,
+          enabled: enabled,
+          style: fieldStyle,
+        );
+
+      case 'Read Only':
+        return ReadOnlyField(
+          field: field,
+          value: value,
+          onChanged: onChanged,
+          enabled: enabled,
+          style: fieldStyle,
+        );
+
+      case FieldTypes.attach:
+        return AttachField(
+          field: field,
+          value: value,
+          onChanged: onChanged,
+          enabled: enabled,
+          style: fieldStyle,
+        );
+
+      case FieldTypes.attachImage:
+      case FieldTypes.image:
+        return ImageField(
+          field: field,
+          value: value,
+          onChanged: onChanged,
+          enabled: enabled,
           style: fieldStyle,
         );
 
