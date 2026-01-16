@@ -1,177 +1,263 @@
 # Frappe Mobile SDK
 
-Offline-first Flutter package for Frappe/ERPNext integration with dynamic form rendering and bi-directional sync.
-
-## 📋 Table of Contents
-
-- [Features](#features)
-- [Installation](#installation)
-- [Quick Start](#quick-start)
-- [Documentation](#documentation)
-- [Architecture](#architecture)
-- [Field Types Supported](#field-types-supported)
-- [UI Customization](#ui-customization)
-- [Contributing](#contributing)
-- [License](#license)
-- [Credits](#credits)
+Flutter package for Frappe integration with direct API access, dynamic form rendering, and offline-first architecture.
 
 ## ✨ Features
 
-- ✅ **Offline-First Architecture** - Full offline capability with SQLite (Floor)
-- ✅ **Dynamic Form Rendering** - Auto-generate forms from Frappe metadata
+- ✅ **Frappe API Access** - Auth, CRUD, file upload via `FrappeClient`
+- ✅ **Dynamic Form Renderer** - Auto-generate forms from Frappe metadata
+- ✅ **Offline-First** - Full offline capability with SQLite
 - ✅ **Bi-directional Sync** - Push/pull sync with conflict resolution
-- ✅ **Token-based Auth** - Secure authentication with token storage
-- ✅ **Material 3 UI** - Modern, customizable UI components
-- ✅ **Sync Status Screen** - View sync errors and pending changes
+- ✅ **Customizable Styling** - Default styles + full customization support
 
-## 🚀 Installation
+## 🚀 Quick Start
 
-Add this to your `pubspec.yaml`:
+### Installation
 
 ```yaml
 dependencies:
   frappe_mobile_sdk:
     git:
-      url: https://github.com/your-repo/frappe_mobile_sdk.git
+      url: https://github.com/dhwani-ris/frappe-mobile-sdk
       ref: main
 ```
 
-Or if published to pub.dev:
-
-```yaml
-dependencies:
-  frappe_mobile_sdk: ^1.0.0
-```
-
-Then run:
-
-```bash
-flutter pub get
-```
-
-## 📖 Quick Start
-
-### 1. Initialize Database
+### 1. API Usage (No Form Renderer)
 
 ```dart
 import 'package:frappe_mobile_sdk/frappe_mobile_sdk.dart';
 
-final database = await AppDatabase.getInstance();
+// Initialize client
+final client = FrappeClient('https://your-frappe-site.com');
+
+// Login
+await client.auth.loginWithCredentials('username', 'password');
+
+// CRUD Operations
+final doc = await client.document.createDocument('Customer', {
+  'customer_name': 'John Doe',
+  'email': 'john@example.com',
+});
+
+await client.document.updateDocument('Customer', doc['name'], {
+  'phone': '1234567890',
+});
+
+final customer = await client.doctype.getByName('Customer', doc['name']);
+final customers = await client.doctype.list('Customer', fields: ['*']);
+
+await client.document.deleteDocument('Customer', doc['name']);
+
+// File Upload
+final file = File('/path/to/file.pdf');
+final uploaded = await client.attachment.uploadFile(file);
+
+// Query Builder
+final todos = await client.doc('ToDo')
+  .where('status', 'Open')
+  .orderBy('creation', descending: true)
+  .limit(10)
+  .get();
 ```
 
-### 2. Setup Authentication
+### 2. Form Renderer Usage
 
 ```dart
-final authService = AuthService(client);
-await authService.login(username: 'user', password: 'pass');
-```
+import 'package:frappe_mobile_sdk/frappe_mobile_sdk.dart';
 
-### 3. Load Metadata
+// Initialize SDK
+final sdk = FrappeSDK(
+  baseUrl: 'https://your-frappe-site.com',
+  doctypes: ['Customer', 'Lead', 'Item'],
+);
 
-```dart
-final metaService = MetaService(client, database);
-final meta = await metaService.getMeta('State');
-```
+await sdk.initialize();
+await sdk.login('username', 'password');
 
-### 4. Render Form
+// Option A: Use Form Renderer Helper
+final renderer = FrappeFormRenderer(
+  sdk: sdk,
+  style: DefaultFormStyle.standard, // or .compact, .material
+);
 
-```dart
-FrappeFormBuilder(
-  meta: meta,
-  initialData: document?.data,
-  onSubmit: (formData) async {
-    // Save document
+// Render form widget
+final formWidget = await renderer.renderForm(
+  'Customer',
+  onSubmit: (data) async {
+    await sdk.repository.createDocument(doctype: 'Customer', data: data);
+    await sdk.sync.pushSync(doctype: 'Customer');
   },
+);
+
+// Option B: Use FormScreen directly
+Navigator.push(
+  context,
+  MaterialPageRoute(
+    builder: (context) => FormScreen(
+      meta: await sdk.meta.getMeta('Customer'),
+      repository: sdk.repository,
+      syncService: sdk.sync,
+      linkOptionService: sdk.linkOptions,
+    ),
+  ),
+);
+
+// Option C: Use FrappeFormBuilder directly
+FrappeFormBuilder(
+  meta: await sdk.meta.getMeta('Customer'),
+  onSubmit: (data) async {
+    // Handle submission
+  },
+  style: DefaultFormStyle.standard,
 )
 ```
 
-## 📚 Documentation
+### 3. Custom Forms Using Same APIs
 
-- **[SETUP.md](SETUP.md)** - Detailed setup instructions and configuration
-- **[CUSTOMIZATION.md](CUSTOMIZATION.md)** - UI customization guide with examples
-- **[TESTING.md](TESTING.md)** - Testing strategies and examples
-- **[QUICK_TEST.md](QUICK_TEST.md)** - Quick testing guide for developers
-- **[LINUX_DEPENDENCIES.md](LINUX_DEPENDENCIES.md)** - Linux system dependencies and setup
+```dart
+// Use FrappeClient for any custom form implementation
+final client = FrappeSDK(...).api;
+
+// Your custom form widget
+class CustomCustomerForm extends StatefulWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        TextField(
+          onChanged: (value) => _data['customer_name'] = value,
+        ),
+        ElevatedButton(
+          onPressed: () async {
+            // Use same API
+            await client.document.createDocument('Customer', _data);
+          },
+          child: Text('Save'),
+        ),
+      ],
+    );
+  }
+}
+```
+
+## 📚 API Reference
+
+### FrappeClient (Direct API)
+
+```dart
+// Authentication
+client.auth.loginWithCredentials(username, password);
+client.auth.setApiKey(apiKey, apiSecret);
+client.auth.logout();
+
+// Documents
+client.document.createDocument(doctype, data);
+client.document.updateDocument(doctype, name, data);
+client.document.deleteDocument(doctype, name);
+client.document.submitDocument(doctype, name);
+client.document.cancelDocument(doctype, name);
+
+// DocType Operations
+client.doctype.getDocTypeMeta(doctype);
+client.doctype.list(doctype, fields: ['*'], filters: [...]);
+client.doctype.getByName(doctype, name);
+
+// File Upload
+client.attachment.uploadFile(file, doctype: 'Customer', docname: 'CUST-001');
+
+// Query Builder
+client.doc('ToDo').where('status', 'Open').get();
+```
+
+### FrappeSDK (High-Level)
+
+```dart
+final sdk = FrappeSDK(baseUrl: '...', doctypes: ['...']);
+await sdk.initialize();
+await sdk.login(username, password);
+
+// Access services
+sdk.api          // FrappeClient
+sdk.auth         // AuthService
+sdk.meta         // MetaService
+sdk.sync         // SyncService
+sdk.repository   // OfflineRepository
+sdk.linkOptions  // LinkOptionService
+```
+
+### Form Styling
+
+```dart
+// Use predefined styles
+DefaultFormStyle.standard  // Standard Material 3 style
+DefaultFormStyle.compact    // Compact style
+DefaultFormStyle.material   // Material Design style
+
+// Or create custom style
+FrappeFormStyle(
+  labelStyle: TextStyle(fontSize: 16),
+  sectionPadding: EdgeInsets.all(20),
+  fieldDecoration: (field) => InputDecoration(...),
+)
+```
+
+## 🎨 Styling Options
+
+The package provides three default styles:
+
+- **Standard** - Material 3 with rounded borders, proper spacing
+- **Compact** - Reduced spacing for dense layouts
+- **Material** - Classic Material Design with underline inputs
+
+You can also create fully custom styles using `FrappeFormStyle`.
+
+## 📖 Documentation
+
+- **[SETUP.md](SETUP.md)** - Detailed setup instructions
+- **[CUSTOMIZATION.md](CUSTOMIZATION.md)** - UI customization guide
+- **[TESTING.md](TESTING.md)** - Testing strategies
 
 ## 🏗️ Architecture
 
 ```
 ┌─────────────────────────────────────────┐
-│ Flutter App                             │
+│ Your Flutter App                        │
 ├─────────────────────────────────────────┤
-│ UI Layer (Material 3)                  │
-│ ├── Login Screen                        │
-│ ├── DocType List                        │
-│ ├── Document List                       │
-│ ├── Form Screen                         │
-│ └── Sync Status Screen                  │
-├─────────────────────────────────────────┤
-│ Services Layer                          │
-│ ├── AuthService                         │
-│ ├── MetaService                         │
-│ ├── SyncService                         │
-│ ├── OfflineRepository                  │
-│ └── LinkOptionService                   │
-├─────────────────────────────────────────┤
-│ Data Layer (SQLite via Floor)          │
-│ ├── Documents                           │
-│ ├── DocType Meta                        │
-│ └── Link Options                        │
+│ Option 1: Direct API (FrappeClient)    │
+│ Option 2: Form Renderer (FrappeSDK)     │
+│ Option 3: Custom Forms (FrappeClient)  │
 └─────────────────────────────────────────┘
          │
          ▼
 ┌─────────────────────────────────────────┐
-│ Frappe/ERPNext Server                   │
+│ Frappe Mobile SDK                       │
+├─────────────────────────────────────────┤
+│ API Layer (FrappeClient)               │
+│ Services Layer (Auth, Meta, Sync)       │
+│ Database Layer (SQLite)                │
+│ UI Layer (Form Renderer)                │
+└─────────────────────────────────────────┘
+         │
+         ▼
+┌─────────────────────────────────────────┐
+│ Frappe Server                           │
 └─────────────────────────────────────────┘
 ```
 
-## 🎨 Field Types Supported
+## 🎯 Use Cases
 
-- **Data** - Text input
-- **Text/Long Text** - Multi-line text areas
-- **Select** - Dropdown selection
-- **Date** - Date picker
-- **Check** - Checkbox/Boolean
-- **Float/Currency/Int/Percent** - Numeric inputs
-- **Link** - Link fields with option caching
-- **Phone** - Phone number with country code selector
-
-## 🎨 UI Customization
-
-The package provides extensive customization options:
-
-- **Form-level styling** via `FrappeFormStyle`
-- **Field-level styling** via `FieldStyle`
-- **Custom field factories** for complete control
-- **Extensible base classes** for custom fields
-
-See [CUSTOMIZATION.md](CUSTOMIZATION.md) for detailed examples.
-
-## 🤝 Contributing
-
-Contributions are welcome! Please read our contributing guidelines before submitting PRs.
+1. **Direct API Access** - Use `FrappeClient` for custom implementations
+2. **Form Renderer** - Use `FrappeFormRenderer` for dynamic forms
+3. **Hybrid Approach** - Mix API calls with form renderer
+4. **Offline-First** - Use `OfflineRepository` + `SyncService`
 
 ## 📄 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+MIT License - see [LICENSE](LICENSE) file
 
-## 🙏 Credits
-
-### Third-Party Packages
-
-This package uses the following open-source packages:
-
-- **[http](https://pub.dev/packages/http)** - HTTP client
-- **[floor](https://pub.dev/packages/floor)** - SQLite database ORM
-- **[sqflite](https://pub.dev/packages/sqflite)** - SQLite plugin for Flutter
-- **[flutter_form_builder](https://pub.dev/packages/flutter_form_builder)** - Form building utilities
-- **[provider](https://pub.dev/packages/provider)** - State management
-- **[connectivity_plus](https://pub.dev/packages/connectivity_plus)** - Network connectivity checking
-- **[flutter_secure_storage](https://pub.dev/packages/flutter_secure_storage)** - Secure token storage
-- **[json_annotation](https://pub.dev/packages/json_annotation)** - JSON serialization
-- **[uuid](https://pub.dev/packages/uuid)** - UUID generation
-- **[intl](https://pub.dev/packages/intl)** - Internationalization
+**Copyright (c) 2026 Dhwani Rural Information System**
 
 ---
 
-**Copyright (c) 2026 Dhwani Rural Information System**
+**Designed by:** Bhushan Barbuddhe  
+**Technical Guidance:** Deepak Batra
