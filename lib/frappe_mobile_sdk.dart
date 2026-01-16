@@ -1,0 +1,49 @@
+/// Frappe Mobile SDK - Offline-first Flutter package for Frappe/ERPNext
+/// 
+/// This package provides:
+/// - Offline-first architecture with Room (SQLite)
+/// - Dynamic form rendering using Frappe Meta
+/// - Bi-directional sync engine
+/// - Generic storage (no table per Doctype)
+/// - Authentication flow
+library frappe_mobile_sdk;
+
+// Core models
+export 'src/models/app_config.dart';
+export 'src/models/doc_type_meta.dart';
+export 'src/models/doc_field.dart';
+export 'src/models/document.dart';
+
+// Database
+export 'src/database/app_database.dart';
+export 'src/database/entities/doctype_meta_entity.dart';
+export 'src/database/entities/document_entity.dart';
+export 'src/database/daos/doctype_meta_dao.dart';
+export 'src/database/daos/document_dao.dart';
+
+// Services
+export 'src/services/auth_service.dart';
+export 'src/services/meta_service.dart';
+export 'src/services/sync_service.dart';
+export 'src/services/offline_repository.dart';
+export 'src/services/link_option_service.dart';
+
+// UI Components
+export 'src/ui/login_screen.dart';
+export 'src/ui/doctype_list_screen.dart';
+export 'src/ui/form_screen.dart';
+export 'src/ui/sync_status_screen.dart';
+export 'src/ui/widgets/form_builder.dart'; // Exports FrappeFormStyle
+export 'src/ui/widgets/fields/field_factory.dart';
+export 'src/ui/widgets/fields/base_field.dart'; // Exports FieldStyle
+export 'src/ui/widgets/fields/data_field.dart';
+export 'src/ui/widgets/fields/text_field.dart';
+export 'src/ui/widgets/fields/select_field.dart';
+export 'src/ui/widgets/fields/date_field.dart';
+export 'src/ui/widgets/fields/check_field.dart';
+export 'src/ui/widgets/fields/numeric_field.dart';
+export 'src/ui/widgets/fields/link_field.dart';
+export 'src/ui/widgets/fields/phone_field.dart';
+
+// Constants
+export 'src/constants/field_types.dart';
