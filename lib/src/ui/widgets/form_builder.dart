@@ -6,6 +6,7 @@ import '../../constants/field_types.dart';
 import '../../services/link_option_service.dart';
 import 'fields/field_factory.dart';
 import 'fields/base_field.dart';
+import 'default_form_style.dart';
 
 /// Customization options for form styling
 class FrappeFormStyle {
@@ -158,13 +159,12 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder> {
 
         default:
           // Regular field
-          final fieldStyle = widget.style != null
-              ? FieldStyle(
-                  labelStyle: widget.style!.labelStyle,
-                  descriptionStyle: widget.style!.descriptionStyle,
-                  decoration: widget.style!.fieldDecoration?.call(field),
-                )
-              : null;
+          final formStyle = widget.style ?? DefaultFormStyle.standard;
+          final fieldStyle = FieldStyle(
+            labelStyle: formStyle.labelStyle,
+            descriptionStyle: formStyle.descriptionStyle,
+            decoration: formStyle.fieldDecoration?.call(field),
+          );
           
           // Get initial value: initialData > defaultValue > empty
           final initialValue = widget.initialData?[field.fieldname] ?? field.defaultValue;
@@ -200,7 +200,7 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder> {
           if (fieldWidget != null) {
             currentSectionChildren.add(
               Padding(
-                padding: widget.style?.fieldPadding ?? 
+                padding: formStyle.fieldPadding ?? 
                     const EdgeInsets.only(bottom: 16.0),
                 child: fieldWidget,
               ),
@@ -227,17 +227,17 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder> {
   }
 
   Widget _buildSection(BuildContext context, DocField sectionField, List<Widget> children) {
-    final style = widget.style;
+    final formStyle = widget.style ?? DefaultFormStyle.standard;
     return Card(
-      margin: style?.sectionMargin ?? const EdgeInsets.only(bottom: 16.0),
+      margin: formStyle.sectionMargin ?? const EdgeInsets.only(bottom: 16.0),
       child: Padding(
-        padding: style?.sectionPadding ?? const EdgeInsets.all(16.0),
+        padding: formStyle.sectionPadding ?? const EdgeInsets.all(16.0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
               sectionField.displayLabel,
-              style: style?.sectionTitleStyle ?? 
+              style: formStyle.sectionTitleStyle ?? 
                   Theme.of(context).textTheme.titleMedium?.copyWith(
                     fontWeight: FontWeight.bold,
                   ),

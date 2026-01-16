@@ -1,9 +1,9 @@
 name: frappe_mobile_sdk
-description: Offline-first Flutter package for Frappe/ERPNext integration with dynamic form rendering and bi-directional sync
+description: Flutter package for Frappe integration with direct API access, dynamic form rendering, and offline-first architecture
 version: 1.0.0+1
 publish_to: 'none'
-homepage: https://github.com/your-repo/frappe_mobile_sdk
-repository: https://github.com/your-repo/frappe_mobile_sdk
+homepage: https://github.com/dhwani-ris/frappe-mobile-sdk
+repository: https://github.com/dhwani-ris/frappe-mobile-sdk
 
 environment:
   sdk: ^3.10.4
