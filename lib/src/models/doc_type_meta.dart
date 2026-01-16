@@ -27,8 +27,6 @@ class DocTypeMeta {
           try {
             return DocField.fromJson(field as Map<String, dynamic>);
           } catch (e) {
-            print('Error parsing field: $field, error: $e');
-            // Return a basic field to avoid crashing
             return DocField(
               fieldname: field['fieldname'] as String?,
               fieldtype: field['fieldtype'] as String? ?? 'Data',

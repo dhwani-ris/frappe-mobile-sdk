@@ -43,7 +43,7 @@ class _DoctypeListScreenState extends State<DoctypeListScreen> {
         _documentCounts[doctype] = docs.length;
       }
     } catch (e) {
-      print('Error loading document counts: $e');
+      // Ignore errors
     } finally {
       setState(() {
         _isLoading = false;

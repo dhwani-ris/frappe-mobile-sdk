@@ -38,10 +38,6 @@ class AuthService {
     try {
       await _client!.auth.loginWithCredentials(username, password);
       _isAuthenticated = true;
-      
-      // Note: ERPNext SDK handles token storage internally
-      // We just mark as authenticated
-      
       return true;
     } catch (e) {
       _isAuthenticated = false;
@@ -88,16 +84,10 @@ class AuthService {
         _isAuthenticated = true;
         return true;
       } catch (e) {
-        print('Failed to restore API key session: $e');
         return false;
       }
     }
 
-    // Check if client has valid session (ERPNext SDK manages tokens internally)
-    // The SDK might have a valid session from previous login
-    // We can't directly check, so we'll assume false and require re-login
-    // This is safer than assuming we're authenticated
-    
     return false;
   }
 
@@ -110,7 +100,6 @@ class AuthService {
     }
     
     _isAuthenticated = false;
-    // Note: ERPNext SDK clears its own tokens on logout
     await _storage.delete(key: _keyApiKey);
     await _storage.delete(key: _keyApiSecret);
   }

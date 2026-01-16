@@ -92,12 +92,8 @@ class OfflineRepository {
       throw Exception('Document not found: $localId');
     }
 
-    // Mark as deleted
     final deleted = document.markDeleted();
     await updateDocument(deleted);
-    
-    // Also try to delete on server if it has a serverId
-    // (The sync service will handle this, but we mark it deleted locally)
     return deleted;
   }
   
