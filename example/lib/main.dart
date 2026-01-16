@@ -102,7 +102,6 @@ class _HomeScreenState extends State<HomeScreen> {
         _isInitialized = true;
       });
     } catch (e) {
-      print('Initialization error: $e');
       setState(() {
         _isInitialized = true;
         _errorMessage = e.toString();
@@ -116,18 +115,15 @@ class _HomeScreenState extends State<HomeScreen> {
     try {
       await _metaService!.getMetas(_appConfig!.doctypes);
     } catch (e) {
-      print('Error loading metas: $e');
+      // Ignore errors
     }
   }
 
   Future<void> _handleLoginSuccess() async {
-    // Ensure services are initialized after login (matching frappe_huf pattern)
     if (_authService == null || _authService!.client == null || _database == null) {
-      print('Error: Cannot initialize services - missing dependencies');
       return;
     }
 
-    // Initialize services (including link option service for link fields)
     _metaService = MetaService(_authService!.client!, _database!);
     _repository = OfflineRepository(_database!);
     _syncService = SyncService(_authService!.client!, _repository!, _database!);
@@ -137,28 +133,18 @@ class _HomeScreenState extends State<HomeScreen> {
       _isAuthenticated = true;
     });
 
-    // Load metadata for configured doctypes (only after successful login)
-    // This matches frappe_huf - metadata is fetched AFTER login succeeds
     if (_appConfig != null) {
       await _loadMetas();
       
-      // Sync all configured doctypes from server after login
       if (_syncService != null && _appConfig!.doctypes.isNotEmpty) {
         try {
-          print('Starting initial sync after login...');
           for (final doctype in _appConfig!.doctypes) {
             try {
-              print('Syncing doctype: $doctype');
-              final result = await _syncService!.syncDoctype(doctype);
-              print('Synced $doctype: ${result.success} succeeded, ${result.failed} failed');
-              if (mounted && result.errors.isNotEmpty) {
-                print('Sync errors for $doctype: ${result.errors.length}');
-              }
+              await _syncService!.syncDoctype(doctype);
             } catch (e) {
-              print('Error syncing $doctype: $e');
+              // Continue with other doctypes
             }
           }
-          print('Initial sync completed');
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(
@@ -168,7 +154,7 @@ class _HomeScreenState extends State<HomeScreen> {
             );
           }
         } catch (e) {
-          print('Error during initial sync: $e');
+          // Ignore sync errors
         }
       }
     }
@@ -353,10 +339,8 @@ class _HomeScreenState extends State<HomeScreen> {
               final isOnline = await _syncService!.isOnline();
               if (isOnline) {
                 try {
-                  // Pull latest documents from server
                   await _syncService!.pullSync(doctype: doctype);
                 } catch (syncError) {
-                  print('Sync error (non-fatal): $syncError');
                   // Continue even if sync fails - show local data
                 }
               }
@@ -487,19 +471,14 @@ class _DocumentListScreenState extends State<DocumentListScreen> {
     try {
       final isOnline = await widget.syncService.isOnline();
       if (isOnline) {
-        // Pull latest documents from server
-        final result = await widget.syncService.pullSync(doctype: widget.doctype);
-        print('Pulled ${result.success} documents from server');
+        await widget.syncService.pullSync(doctype: widget.doctype);
       }
       
-      // Refresh local documents
       final docs = await widget.repository.getDocumentsByDoctype(widget.doctype);
       setState(() {
         _documents = docs;
       });
     } catch (e) {
-      print('Error pulling documents: $e');
-      // Still show local documents even if sync fails
       final docs = await widget.repository.getDocumentsByDoctype(widget.doctype);
       setState(() {
         _documents = docs;
