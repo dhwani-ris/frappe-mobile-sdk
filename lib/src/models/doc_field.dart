@@ -13,6 +13,10 @@ class DocField {
   final bool hidden;
   final String? options;
   final String? dependsOn;
+  final String? mandatoryDependsOn;
+  final String? readOnlyDependsOn;
+  final String? linkFilters;
+  final String? section;
   final String? defaultValue;
   final String? description;
   final String? placeholder;
@@ -30,6 +34,10 @@ class DocField {
     this.hidden = false,
     this.options,
     this.dependsOn,
+    this.mandatoryDependsOn,
+    this.readOnlyDependsOn,
+    this.linkFilters,
+    this.section,
     this.defaultValue,
     this.description,
     this.placeholder,
@@ -66,6 +74,10 @@ class DocField {
       hidden: _parseBool(json['hidden']),
       options: json['options'] as String?,
       dependsOn: json['depends_on'] as String? ?? json['dependsOn'] as String?,
+      mandatoryDependsOn: json['mandatory_depends_on'] as String? ?? json['mandatoryDependsOn'] as String?,
+      readOnlyDependsOn: json['read_only_depends_on'] as String? ?? json['readOnlyDependsOn'] as String?,
+      linkFilters: json['link_filters'] as String? ?? json['linkFilters'] as String?,
+      section: json['section'] as String?,
       defaultValue: json['default'] as String? ?? json['defaultValue'] as String?,
       description: json['description'] as String?,
       placeholder: json['placeholder'] as String?,

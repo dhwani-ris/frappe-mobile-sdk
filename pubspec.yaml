@@ -46,6 +46,12 @@ dependencies:
   # UUID generation
   uuid: ^4.3.3
 
+  # File picker for attachments
+  file_picker: ^8.0.0+1
+
+  # Image picker for image fields
+  image_picker: ^1.1.2
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
