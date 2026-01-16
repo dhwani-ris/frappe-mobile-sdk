@@ -1,11 +1,11 @@
 import 'dart:convert';
-import 'package:erpnext_sdk_flutter/erpnext_sdk_flutter.dart';
+import '../api/client.dart';
 import '../database/app_database.dart';
 import '../database/entities/link_option_entity.dart';
 
 /// Service for fetching and caching link field options
 class LinkOptionService {
-  final ERPNextClient _client;
+  final FrappeClient _client;
   final AppDatabase _database;
 
   LinkOptionService(this._client, this._database);

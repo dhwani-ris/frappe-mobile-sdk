@@ -1,4 +1,4 @@
-import 'package:erpnext_sdk_flutter/erpnext_sdk_flutter.dart';
+import '../api/client.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 /// Service for handling Frappe authentication
@@ -9,12 +9,12 @@ class AuthService {
   static const String _keyToken = 'frappe_token';
 
   final FlutterSecureStorage _storage = const FlutterSecureStorage();
-  ERPNextClient? _client;
+  FrappeClient? _client;
   bool _isAuthenticated = false;
 
   /// Initialize with base URL
   void initialize(String baseUrl) {
-    _client = ERPNextClient(baseUrl);
+    _client = FrappeClient(baseUrl);
     _storage.write(key: _keyBaseUrl, value: baseUrl);
   }
 
@@ -23,8 +23,8 @@ class AuthService {
     return await _storage.read(key: _keyBaseUrl);
   }
 
-  /// Get ERPNext client instance
-  ERPNextClient? get client => _client;
+  /// Get Frappe client instance
+  FrappeClient? get client => _client;
 
   /// Check if authenticated
   bool get isAuthenticated => _isAuthenticated && _client != null;

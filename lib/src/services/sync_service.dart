@@ -1,11 +1,11 @@
 import 'package:connectivity_plus/connectivity_plus.dart';
-import 'package:erpnext_sdk_flutter/erpnext_sdk_flutter.dart';
+import '../api/client.dart';
 import '../database/app_database.dart';
 import 'offline_repository.dart';
 
 /// Service for bi-directional sync
 class SyncService {
-  final ERPNextClient _client;
+  final FrappeClient _client;
   final OfflineRepository _repository;
   final AppDatabase _database;
   bool _isSyncing = false;
@@ -147,7 +147,7 @@ class SyncService {
         doctype,
         filters: filters,
         fields: ['*'],
-        limitPageLength: 1000,
+        limit_page_length: 1000,
       );
 
       total = result.length;
