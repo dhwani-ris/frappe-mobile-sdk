@@ -1,4 +1,7 @@
 import 'package:flutter/material.dart';
+import '../api/client.dart';
+import '../api/exceptions.dart';
+import '../api/utils.dart';
 import '../models/doc_type_meta.dart';
 import '../models/document.dart';
 import '../services/offline_repository.dart';
@@ -7,13 +10,16 @@ import '../services/link_option_service.dart';
 import 'widgets/form_builder.dart';
 import 'sync_status_screen.dart';
 
-/// Screen for displaying and editing a Frappe document form
+/// Screen for displaying and editing a Frappe document form.
+/// When [api] is set, CRUD is done directly on the server then local repo is updated.
 class FormScreen extends StatefulWidget {
   final DocTypeMeta meta;
   final Document? document;
   final OfflineRepository repository;
   final SyncService? syncService;
   final LinkOptionService? linkOptionService;
+  /// When set, save/delete go to server first; local repo is updated after success.
+  final FrappeClient? api;
   final Function()? onSaveSuccess;
 
   const FormScreen({
@@ -23,6 +29,7 @@ class FormScreen extends StatefulWidget {
     required this.repository,
     this.syncService,
     this.linkOptionService,
+    this.api,
     this.onSaveSuccess,
   });
 
@@ -35,28 +42,77 @@ class _FormScreenState extends State<FormScreen> {
   String? _errorMessage;
 
   Future<void> _handleSubmit(Map<String, dynamic> formData) async {
+    // Normalize multi-select: Frappe expects comma-separated string
+    final payload = Map<String, dynamic>.from(formData);
+    for (final f in widget.meta.fields) {
+      final name = f.fieldname;
+      if (f.allowMultiple && name != null && payload[name] is List) {
+        payload[name] = (payload[name] as List).map((e) => e.toString()).join(',');
+      }
+    }
+
     setState(() {
       _isSaving = true;
       _errorMessage = null;
     });
 
     try {
+      if (widget.api != null) {
+        // Server-first: create/update on server, then update local
+        if (widget.document == null) {
+          final result = await widget.api!.document.createDocument(
+            widget.meta.name,
+            payload,
+          );
+          final serverName = result['name']?.toString() ?? result['docname']?.toString();
+          if (serverName != null) {
+            final merged = Map<String, dynamic>.from(payload)..['name'] = serverName;
+            await widget.repository.saveServerDocument(
+              doctype: widget.meta.name,
+              serverId: serverName,
+              data: merged,
+            );
+          }
+        } else {
+          final existingData = Map<String, dynamic>.from(widget.document!.data);
+          existingData.addAll(payload);
+          await widget.api!.document.updateDocument(
+            widget.meta.name,
+            widget.document!.serverId!,
+            existingData,
+          );
+          await widget.repository.updateDocumentData(
+            widget.document!.localId,
+            existingData,
+          );
+        }
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Saved successfully'),
+              backgroundColor: Colors.green,
+            ),
+          );
+          widget.onSaveSuccess?.call();
+        }
+        return;
+      }
+
+      // Offline / store-then-sync path
       if (widget.document == null) {
-        // Create new document
         await widget.repository.createDocument(
           doctype: widget.meta.name,
-          data: formData,
+          data: payload,
         );
       } else {
         final existingData = Map<String, dynamic>.from(widget.document!.data);
-        existingData.addAll(formData);
+        existingData.addAll(payload);
         await widget.repository.updateDocumentData(
           widget.document!.localId,
           existingData,
         );
       }
 
-      // Try to sync if online
       if (widget.syncService != null) {
         final isOnline = await widget.syncService!.isOnline();
         if (isOnline) {
@@ -80,7 +136,7 @@ class _FormScreenState extends State<FormScreen> {
               } else if (syncResult.success > 0) {
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
-                    content: Text('Saved and synced successfully (${syncResult.success} document(s))'),
+                    content: Text('Saved and synced (${syncResult.success} document(s))'),
                     backgroundColor: Colors.green,
                   ),
                 );
@@ -93,37 +149,35 @@ class _FormScreenState extends State<FormScreen> {
                   content: Text('Saved locally. Sync failed: ${e.toString()}'),
                   backgroundColor: Colors.orange,
                   duration: const Duration(seconds: 3),
-                    action: SnackBarAction(
-                      label: 'View Status',
-                      textColor: Colors.white,
-                      onPressed: () {
-                        if (widget.syncService != null && widget.repository != null) {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) => SyncStatusScreen(
-                                syncService: widget.syncService!,
-                                repository: widget.repository,
-                              ),
+                  action: SnackBarAction(
+                    label: 'View Status',
+                    textColor: Colors.white,
+                    onPressed: () {
+                      if (widget.syncService != null) {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => SyncStatusScreen(
+                              syncService: widget.syncService!,
+                              repository: widget.repository,
                             ),
-                          );
-                        }
-                      },
-                    ),
+                          ),
+                        );
+                      }
+                    },
+                  ),
                 ),
               );
             }
           }
-        } else {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('Saved locally. Will sync when online.'),
-                backgroundColor: Colors.blue,
-                duration: Duration(seconds: 2),
-              ),
-            );
-          }
+        } else if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Saved locally. Will sync when online.'),
+              backgroundColor: Colors.blue,
+              duration: Duration(seconds: 2),
+            ),
+          );
         }
       }
 
@@ -138,7 +192,9 @@ class _FormScreenState extends State<FormScreen> {
       }
     } catch (e) {
       setState(() {
-        _errorMessage = e.toString();
+        _errorMessage = e is FrappeException
+            ? e.message
+            : toUserFriendlyMessage(e);
       });
     } finally {
       setState(() {
@@ -175,15 +231,20 @@ class _FormScreenState extends State<FormScreen> {
     });
 
     try {
-      await widget.repository.deleteDocument(widget.document!.localId);
-
-      if (widget.syncService != null) {
-        final isOnline = await widget.syncService!.isOnline();
-        if (isOnline) {
-          try {
-            await widget.syncService!.pushSync(doctype: widget.meta.name);
-          } catch (e) {
-            // Ignore sync errors on delete
+      if (widget.api != null && widget.document!.serverId != null) {
+        await widget.api!.document.deleteDocument(
+          widget.meta.name,
+          widget.document!.serverId!,
+        );
+        await widget.repository.hardDeleteDocument(widget.document!.localId);
+      } else {
+        await widget.repository.deleteDocument(widget.document!.localId);
+        if (widget.syncService != null) {
+          final isOnline = await widget.syncService!.isOnline();
+          if (isOnline) {
+            try {
+              await widget.syncService!.pushSync(doctype: widget.meta.name);
+            } catch (_) {}
           }
         }
       }
@@ -200,7 +261,9 @@ class _FormScreenState extends State<FormScreen> {
       }
     } catch (e) {
       setState(() {
-        _errorMessage = e.toString();
+        _errorMessage = e is FrappeException
+            ? e.message
+            : toUserFriendlyMessage(e);
       });
     } finally {
       setState(() {
@@ -258,7 +321,7 @@ class _FormScreenState extends State<FormScreen> {
             onPressed: () => Navigator.pop(context),
             child: const Text('Close'),
           ),
-          if (widget.syncService != null && widget.repository != null)
+          if (widget.syncService != null)
             TextButton(
               onPressed: () {
                 Navigator.pop(context);
@@ -323,6 +386,13 @@ class _FormScreenState extends State<FormScreen> {
               onSubmit: _handleSubmit,
               readOnly: _isSaving,
               linkOptionService: widget.linkOptionService,
+              uploadFile: widget.api != null
+                  ? (file) async {
+                      final res = await widget.api!.attachment.uploadFile(file);
+                      return res['file_url'] as String? ?? res['file_name'] as String?;
+                    }
+                  : null,
+              fileUrlBase: widget.api?.baseUrl,
             ),
           ),
         ],

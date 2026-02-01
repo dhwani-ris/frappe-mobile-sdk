@@ -40,6 +40,12 @@ dependencies:
   # Secure storage for tokens
   flutter_secure_storage: ^9.0.0
 
+  # OAuth PKCE
+  crypto: ^3.0.3
+
+  # Open OAuth URL in browser
+  url_launcher: ^6.2.0
+
   # JSON serialization
   json_annotation: ^4.8.1
 

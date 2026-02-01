@@ -29,6 +29,7 @@ export 'src/api/attachment_service.dart' show AttachmentService;
 export 'src/api/exceptions.dart' show FrappeException, AuthException, ApiException, NetworkException, ValidationException;
 export 'src/api/frappe_document.dart' show FrappeDocument;
 export 'src/api/query_builder.dart' show QueryBuilder;
+export 'src/api/oauth2_helper.dart' show OAuth2Helper, OAuth2TokenResponse, PkcePair;
 
 // SDK Initialization (Easy Setup)
 export 'src/sdk/frappe_sdk.dart';
@@ -61,3 +62,7 @@ export 'src/ui/widgets/fields/phone_field.dart';
 
 // Constants
 export 'src/constants/field_types.dart';
+
+// Utils (debug tracer + user-friendly errors)
+export 'src/api/utils.dart' show extractErrorMessage, toUserFriendlyMessage;
+export 'src/utils/api_tracer.dart' show ApiTracer;

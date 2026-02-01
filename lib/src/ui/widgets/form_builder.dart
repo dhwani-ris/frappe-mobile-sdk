@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_form_builder/flutter_form_builder.dart';
 import '../../models/doc_type_meta.dart';
@@ -57,6 +58,11 @@ class FrappeFormBuilder extends StatefulWidget {
   /// Custom styling options
   final FrappeFormStyle? style;
 
+  /// Upload file to server; when set, Image/Attach fields upload first and store file_url
+  final Future<String?> Function(File file)? uploadFile;
+  /// Base URL for displaying uploaded file URLs (e.g. for image preview)
+  final String? fileUrlBase;
+
   const FrappeFormBuilder({
     super.key,
     required this.meta,
@@ -66,6 +72,8 @@ class FrappeFormBuilder extends StatefulWidget {
     this.linkOptionService,
     this.customFieldFactory,
     this.style,
+    this.uploadFile,
+    this.fileUrlBase,
   });
 
   @override
@@ -283,6 +291,7 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder> with SingleTicker
       length: field.length,
       idx: field.idx,
       inListView: field.inListView,
+      allowMultiple: field.allowMultiple,
     );
 
     final initialValue = widget.initialData?[field.fieldname] ?? field.defaultValue;
@@ -290,6 +299,8 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder> with SingleTicker
     final fieldWidget = _fieldFactory.createField(
       field: fieldWithEffectiveProps,
       value: initialValue,
+      uploadFile: widget.uploadFile,
+      fileUrlBase: widget.fileUrlBase,
       onChanged: (value) {
         setState(() {
           final oldValue = _formData[field.fieldname];
@@ -327,7 +338,7 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder> with SingleTicker
         });
       },
       enabled: !effectiveReadOnly,
-      formData: _formData,
+      formData: Map<String, dynamic>.from(_formData),
       style: fieldStyle,
     );
 
@@ -514,12 +525,16 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder> with SingleTicker
           if (!widget.readOnly && widget.onSubmit != null)
             Padding(
               padding: const EdgeInsets.all(16.0),
-              child: ElevatedButton(
-                onPressed: _handleSubmit,
-                style: ElevatedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 16),
+              child: SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: _handleSubmit,
+                  style: ElevatedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    minimumSize: const Size(double.infinity, 48),
+                  ),
+                  child: const Text('Submit'),
                 ),
-                child: const Text('Submit'),
               ),
             ),
         ],

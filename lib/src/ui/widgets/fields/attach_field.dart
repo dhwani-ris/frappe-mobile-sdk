@@ -7,8 +7,11 @@ import 'package:flutter_form_builder/flutter_form_builder.dart';
 import 'package:file_picker/file_picker.dart';
 import 'base_field.dart';
 
-/// Widget for Attach field type
+/// Widget for Attach field type.
+/// When [uploadFile] is set, picks upload to server first and store file_url; otherwise stores local path.
 class AttachField extends BaseField {
+  final Future<String?> Function(File file)? uploadFile;
+
   const AttachField({
     super.key,
     required super.field,
@@ -16,6 +19,7 @@ class AttachField extends BaseField {
     super.onChanged,
     super.enabled,
     super.style,
+    this.uploadFile,
   });
 
   @override
@@ -53,8 +57,20 @@ class AttachField extends BaseField {
                       final result = await FilePicker.platform.pickFiles();
                       if (result != null && result.files.single.path != null) {
                         final path = result.files.single.path!;
-                        fieldState.didChange(path);
-                        onChanged?.call(path);
+                        final file = File(path);
+                        if (uploadFile != null) {
+                          try {
+                            final url = await uploadFile!(file);
+                            if (url != null && url.isNotEmpty) {
+                              fieldState.didChange(url);
+                              onChanged?.call(url);
+                            }
+                            // On failure do not store local path (server expects file_url)
+                          } catch (_) {}
+                        } else {
+                          fieldState.didChange(path);
+                          onChanged?.call(path);
+                        }
                       }
                     }
                   : null,

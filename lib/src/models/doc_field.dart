@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:json_annotation/json_annotation.dart';
 
 part 'doc_field.g.dart';
@@ -24,6 +25,7 @@ class DocField {
   final int? length;
   final int? idx;
   final bool inListView;
+  final bool allowMultiple;
 
   DocField({
     this.fieldname,
@@ -45,6 +47,7 @@ class DocField {
     this.length,
     this.idx,
     this.inListView = false,
+    this.allowMultiple = false,
   });
 
   factory DocField.fromJson(Map<String, dynamic> json) {
@@ -65,6 +68,13 @@ class DocField {
       return null;
     }
 
+    String? _linkFiltersFromJson(dynamic value) {
+      if (value == null) return null;
+      if (value is String) return value.isEmpty ? null : value;
+      if (value is List) return value.isEmpty ? null : jsonEncode(value);
+      return null;
+    }
+
     return DocField(
       fieldname: json['fieldname'] as String?,
       fieldtype: json['fieldtype'] as String? ?? 'Data',
@@ -76,7 +86,7 @@ class DocField {
       dependsOn: json['depends_on'] as String? ?? json['dependsOn'] as String?,
       mandatoryDependsOn: json['mandatory_depends_on'] as String? ?? json['mandatoryDependsOn'] as String?,
       readOnlyDependsOn: json['read_only_depends_on'] as String? ?? json['readOnlyDependsOn'] as String?,
-      linkFilters: json['link_filters'] as String? ?? json['linkFilters'] as String?,
+      linkFilters: _linkFiltersFromJson(json['link_filters'] ?? json['linkFilters']),
       section: json['section'] as String?,
       defaultValue: json['default'] as String? ?? json['defaultValue'] as String?,
       description: json['description'] as String?,
@@ -85,7 +95,16 @@ class DocField {
       length: _parseInt(json['length']),
       idx: _parseInt(json['idx']),
       inListView: _parseBool(json['in_list_view']) || _parseBool(json['inListView']),
+      allowMultiple: _parseBool(json['allow_multiple']) ||
+          _parseBool(json['allowMultiple']) ||
+          _isMultiSelectFieldType(json['fieldtype'] as String?),
     );
+  }
+
+  static bool _isMultiSelectFieldType(String? fieldtype) {
+    if (fieldtype == null) return false;
+    final t = fieldtype.toLowerCase().replaceAll(' ', '');
+    return t == 'tablemultiselect' || t == 'multiselect';
   }
 
   Map<String, dynamic> toJson() => _$DocFieldToJson(this);

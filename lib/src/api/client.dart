@@ -33,6 +33,7 @@ class FrappeClient {
   }
 
   RestHelper get rest => _restHelper;
+  String get baseUrl => _restHelper.baseUrl;
 
   QueryBuilder doc(String doctype) {
     return QueryBuilder(this.doctype, doctype);

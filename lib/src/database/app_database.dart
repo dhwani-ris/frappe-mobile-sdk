@@ -37,4 +37,12 @@ abstract class AppDatabase extends FloorDatabase {
         ])
         .build();
   }
+
+  /// Clear all data from all tables. Call on logout to wipe local DB.
+  static Future<void> clearAllData() async {
+    final db = await getInstance();
+    await db.doctypeMetaDao.deleteAll();
+    await db.documentDao.deleteAll();
+    await db.linkOptionDao.deleteAll();
+  }
 }
