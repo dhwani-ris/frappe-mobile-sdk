@@ -1,258 +1,147 @@
 import 'dart:convert';
 import '../api/client.dart';
-import '../database/app_database.dart';
 import '../database/entities/link_option_entity.dart';
 
-/// Service for fetching and caching link field options
+const int _kLinkOptionCacheMaxEntries = 30;
+
+/// Fetches link field options from API at runtime. Link filters are sent to the API; no DB table.
 class LinkOptionService {
   final FrappeClient _client;
-  final AppDatabase _database;
+  final Map<String, List<LinkOptionEntity>> _memoryCache = {};
+  final List<String> _cacheKeys = [];
 
-  LinkOptionService(this._client, this._database);
+  LinkOptionService(this._client);
 
-  /// Get cached link options for a DocType
-  Future<List<LinkOptionEntity>> getCachedLinkOptions(String doctype) async {
-    return await _database.linkOptionDao.findByDoctype(doctype);
+  String _cacheKey(String doctype, List<List<dynamic>>? filters) {
+    if (filters == null || filters.isEmpty) return doctype;
+    return '$doctype|${filters.hashCode}';
   }
 
-  /// Fetch and cache link options from server
-  /// Note: When filters are provided, results are NOT cached (always fetch fresh)
-  Future<List<LinkOptionEntity>> fetchAndCacheLinkOptions(
-    String doctype, {
-    List<List<dynamic>>? filters,
-  }) async {
-    try {
-      // Fetch with filters from server
-      final documents = await _client.doctype.list(
-        doctype,
-        filters: filters,
-        limit_page_length: 1000, // Fetch more records for filtered results
-      ) as List<dynamic>;
-
-      // Only cache if no filters (unfiltered data can be cached)
-      // Filtered data should always be fetched fresh
-      if (filters == null || filters.isEmpty) {
-        await _database.linkOptionDao.deleteByDoctype(doctype);
+  void _putCache(String key, List<LinkOptionEntity> options) {
+    if (_memoryCache.length >= _kLinkOptionCacheMaxEntries && !_memoryCache.containsKey(key)) {
+      if (_cacheKeys.isNotEmpty) {
+        final evict = _cacheKeys.removeAt(0);
+        _memoryCache.remove(evict);
       }
-
-      final linkOptions = <LinkOptionEntity>[];
-      final now = DateTime.now().millisecondsSinceEpoch;
-
-      for (final doc in documents) {
-        Map<String, dynamic> docMap;
-        if (doc is Map<String, dynamic>) {
-          docMap = doc;
-        } else {
-          continue;
-        }
-        
-        final name = docMap['name'] as String? ?? '';
-        if (name.isEmpty) continue;
-
-        String? label;
-        for (final key in ['title', 'full_name', 'customer_name', 'supplier_name', 'label']) {
-          if (docMap.containsKey(key) && docMap[key] != null) {
-            label = docMap[key].toString();
-            break;
-          }
-        }
-        label ??= name;
-
-        final option = LinkOptionEntity(
-          doctype: doctype,
-          name: name,
-          label: label,
-          dataJson: jsonEncode(docMap),
-          lastUpdated: now,
-        );
-        linkOptions.add(option);
-      }
-
-      // Only cache unfiltered results
-      if ((filters == null || filters.isEmpty) && linkOptions.isNotEmpty) {
-        await _database.linkOptionDao.insertLinkOptions(linkOptions);
-      }
-
-      return linkOptions;
-    } catch (e) {
-      // On error, return cached data (may be unfiltered, but better than nothing)
-      return await getCachedLinkOptions(doctype);
     }
+    if (!_memoryCache.containsKey(key)) _cacheKeys.add(key);
+    _memoryCache[key] = options;
   }
 
-  /// Get link options (from cache or fetch if needed)
-  /// When filters are provided, always fetches fresh data from server
+  /// Fetches link options from API (with optional filters). No DB; filters sent to server.
   Future<List<LinkOptionEntity>> getLinkOptions(
     String doctype, {
     bool forceRefresh = false,
     List<List<dynamic>>? filters,
   }) async {
-    // If filters are provided, always fetch fresh data from server
-    // because cached data may not match the current filter criteria
-    if (filters != null && filters.isNotEmpty) {
-      try {
-        return await fetchAndCacheLinkOptions(doctype, filters: filters);
-      } catch (e) {
-        // On error, try to filter cached data client-side as fallback
-        final cached = await getCachedLinkOptions(doctype);
-        return _filterCachedOptions(cached, filters);
-      }
+    final key = _cacheKey(doctype, filters);
+    if (!forceRefresh && _memoryCache.containsKey(key)) {
+      return _memoryCache[key]!;
     }
 
-    // No filters: use cache as before
-    final cached = await getCachedLinkOptions(doctype);
-
-    if (cached.isEmpty || forceRefresh) {
-      try {
-        return await fetchAndCacheLinkOptions(doctype, filters: filters);
-      } catch (e) {
-        return cached;
-      }
+    List<dynamic> documents;
+    try {
+      documents = await _client.doctype.list(
+        doctype,
+        filters: filters,
+        limit_page_length: 1000,
+      );
+    } catch (_) {
+      return [];
     }
 
     final now = DateTime.now().millisecondsSinceEpoch;
-    final oneHourAgo = now - (60 * 60 * 1000);
-    final isStale = cached.isEmpty ||
-        (cached.isNotEmpty && cached.first.lastUpdated < oneHourAgo);
+    final linkOptions = <LinkOptionEntity>[];
 
-    if (isStale) {
-      fetchAndCacheLinkOptions(doctype, filters: filters).catchError((_) {
-        return <LinkOptionEntity>[];
-      });
+    for (final doc in documents) {
+      final docMap = doc is Map<String, dynamic> ? doc : null;
+      if (docMap == null) continue;
+      final name = docMap['name'] as String? ?? '';
+      if (name.isEmpty) continue;
+      String? label;
+      for (final k in ['title', 'full_name', 'customer_name', 'supplier_name', 'label']) {
+        if (docMap.containsKey(k) && docMap[k] != null) {
+          label = docMap[k].toString();
+          break;
+        }
+      }
+      label ??= name;
+      linkOptions.add(LinkOptionEntity(
+        doctype: doctype,
+        name: name,
+        label: label,
+        dataJson: jsonEncode(docMap),
+        lastUpdated: now,
+      ));
     }
 
-    return cached;
+    _putCache(key, linkOptions);
+    return linkOptions;
   }
-  
-  /// Filter cached options client-side (fallback when server fetch fails)
-  List<LinkOptionEntity> _filterCachedOptions(
-    List<LinkOptionEntity> cached,
-    List<List<dynamic>> filters,
-  ) {
-    if (cached.isEmpty || filters.isEmpty) return cached;
-    
-    return cached.where((option) {
-      try {
-        final dataJson = option.dataJson;
-        if (dataJson == null) return false;
-        
-        final docData = jsonDecode(dataJson) as Map<String, dynamic>;
-        
-        // Check if option matches all filters
-        for (final filter in filters) {
-          if (filter.length < 4) continue;
-          
-          final field = filter[1] as String;
-          final operator = filter[2] as String;
-          final value = filter[3];
-          
-          final fieldValue = docData[field];
-          
-          // Apply filter logic
-          bool matches = false;
-          switch (operator) {
-            case '=':
-              matches = fieldValue == value;
-              break;
-            case '!=':
-            case '<>':
-              matches = fieldValue != value;
-              break;
-            case '>':
-              matches = (fieldValue as num?) != null && (value as num?) != null && 
-                       (fieldValue as num) > (value as num);
-              break;
-            case '<':
-              matches = (fieldValue as num?) != null && (value as num?) != null && 
-                       (fieldValue as num) < (value as num);
-              break;
-            case '>=':
-              matches = (fieldValue as num?) != null && (value as num?) != null && 
-                       (fieldValue as num) >= (value as num);
-              break;
-            case '<=':
-              matches = (fieldValue as num?) != null && (value as num?) != null && 
-                       (fieldValue as num) <= (value as num);
-              break;
-            case 'like':
-            case 'LIKE':
-              matches = fieldValue?.toString().toLowerCase().contains(value.toString().toLowerCase()) ?? false;
-              break;
-            case 'in':
-            case 'IN':
-              if (value is List) {
-                matches = value.contains(fieldValue);
-              }
-              break;
-            default:
-              matches = fieldValue == value;
+
+  /// Returns field names that are dependencies in link_filters (eval:doc.xxx).
+  /// e.g. [["District","state","=","eval:doc.state"]] -> ["state"]
+  static List<String> getDependentFieldNames(String? linkFiltersJson) {
+    if (linkFiltersJson == null || linkFiltersJson.isEmpty) return [];
+    try {
+      final decoded = jsonDecode(linkFiltersJson) as dynamic;
+      final filters = decoded is List ? List<dynamic>.from(decoded) : <dynamic>[];
+      final names = <String>[];
+      for (final filter in filters) {
+        if (filter is! List || filter.length < 4) continue;
+        final value = filter[3];
+        if (value is String && value.startsWith('eval:doc.')) {
+          final fieldName = value.substring(9).trim();
+          if (fieldName.isNotEmpty && !names.contains(fieldName)) {
+            names.add(fieldName);
           }
-          
-          if (!matches) return false;
         }
-        
-        return true;
-      } catch (e) {
-        return false;
       }
-    }).toList();
+      return names;
+    } catch (_) {
+      return [];
+    }
   }
-  
-  /// Parse link_filters JSON string and build filters from form data
-  /// Format: [["DocType", "field", "=", "eval:doc.other_field"]]
-  /// Supports multiple filters: [["District","state","=","eval:doc.state"],["District","active","=",1]]
+
+  /// Parse Frappe link_filters and build API filters.
+  /// Frappe format: [["District","state","=","eval:doc.state"]]
+  /// API get_list accepts: [["DocType", "field", "operator", value]] (4 elements).
   static List<List<dynamic>>? parseLinkFilters(
     String? linkFiltersJson,
     Map<String, dynamic> formData,
   ) {
-    if (linkFiltersJson == null || linkFiltersJson.isEmpty) {
-      return null;
-    }
-    
+    if (linkFiltersJson == null || linkFiltersJson.isEmpty) return null;
     try {
-      final filters = jsonDecode(linkFiltersJson) as List<dynamic>;
+      final decoded = jsonDecode(linkFiltersJson) as dynamic;
+      final filters = decoded is List ? List<dynamic>.from(decoded) : <dynamic>[];
       final result = <List<dynamic>>[];
-      
       for (final filter in filters) {
-        if (filter is List && filter.length >= 4) {
-          // Filter format: [DocType, field, operator, value]
-          final doctype = filter[0] as String;
-          final field = filter[1] as String;
-          final operator = filter[2] as String;
-          dynamic value = filter[3];
-          
-          // Handle eval:doc.field expressions (e.g., "eval:doc.state")
-          if (value is String && value.startsWith('eval:doc.')) {
-            final fieldName = value.substring(9).trim();
-            value = formData[fieldName];
-            // Skip filter if dependent field has no value (allows all options)
-            if (value == null || value == '') {
-              continue;
-            }
-          }
-          
-          // Handle eval: expressions (e.g., "eval:doc.field1 + doc.field2")
-          // For now, we only support simple eval:doc.fieldname
-          // Complex expressions can be added later if needed
-          
-          result.add([doctype, field, operator, value]);
+        if (filter is! List || filter.length < 4) continue;
+        dynamic value = filter[3];
+        if (value is String && value.startsWith('eval:doc.')) {
+          final fieldName = value.substring(9).trim();
+          value = formData[fieldName];
+          if (value == null || value == '') continue;
         }
+        result.add([filter[0], filter[1], filter[2], value]);
       }
-      
       return result.isEmpty ? null : result;
-    } catch (e) {
-      // Return null on parse error (invalid JSON)
+    } catch (_) {
       return null;
     }
   }
 
-  /// Clear cache for a specific DocType
-  Future<void> clearCache(String doctype) async {
-    await _database.linkOptionDao.deleteByDoctype(doctype);
+  void clearCache(String doctype) {
+    for (final k in _memoryCache.keys.toList()) {
+      if (k == doctype || k.startsWith('$doctype|')) {
+        _memoryCache.remove(k);
+        _cacheKeys.remove(k);
+      }
+    }
   }
 
-  /// Clear all caches
-  Future<void> clearAllCache() async {
-    await _database.linkOptionDao.deleteAll();
+  void clearAllCache() {
+    _memoryCache.clear();
+    _cacheKeys.clear();
   }
 }

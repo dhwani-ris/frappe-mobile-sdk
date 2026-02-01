@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import '../../../models/doc_field.dart';
 import '../../../constants/field_types.dart';
@@ -53,6 +54,8 @@ class FieldFactory {
     List<String>? linkOptions,
     Map<String, dynamic>? formData,
     FieldStyle? style,
+    Future<String?> Function(File file)? uploadFile,
+    String? fileUrlBase,
   }) {
     if (field.hidden) {
       return null;
@@ -91,6 +94,8 @@ class FieldFactory {
         );
 
       case FieldTypes.select:
+      case 'Table MultiSelect':
+      case 'Multi Select':
         return SelectField(
           field: field,
           value: value,
@@ -202,6 +207,7 @@ class FieldFactory {
           onChanged: onChanged,
           enabled: enabled,
           style: fieldStyle,
+          uploadFile: uploadFile,
         );
 
       case FieldTypes.attachImage:
@@ -212,6 +218,8 @@ class FieldFactory {
           onChanged: onChanged,
           enabled: enabled,
           style: fieldStyle,
+          uploadFile: uploadFile,
+          fileUrlBase: fileUrlBase,
         );
 
       default:

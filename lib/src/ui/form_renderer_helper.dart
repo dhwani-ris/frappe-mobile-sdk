@@ -74,6 +74,7 @@ class FrappeFormRenderer {
           repository: sdk.repository,
           syncService: sdk.sync,
           linkOptionService: sdk.linkOptions,
+          api: sdk.api,
           onSaveSuccess: onSaveSuccess,
         ),
       ),

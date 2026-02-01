@@ -66,9 +66,13 @@ class _HomeScreenState extends State<HomeScreen> {
 
       // Load app config
       // TODO: Replace with your Frappe server URL and doctypes
+      // _appConfig = AppConfig(
+      //   baseUrl: 'https://stgbsebeam.dhwaniris.in/',
+      //   doctypes: ['Procurement','Farmer Registration','Land Record','Farmer Scheduling','Farmer Scheduling history'], // Configure your doctypes
+      // );
       _appConfig = AppConfig(
         baseUrl: 'https://stghufdms-frappe.dhwaniris.in/',
-        doctypes: ['State','District','Farmer Profiling','frappe-form-test'], // Configure your doctypes
+        doctypes: ['Partner Master','frappe-form-test'], // Configure your doctypes
       );
 
       // Initialize auth service
@@ -89,7 +93,7 @@ class _HomeScreenState extends State<HomeScreen> {
           _metaService = MetaService(_authService!.client!, _database!);
           _repository = OfflineRepository(_database!);
           _syncService = SyncService(_authService!.client!, _repository!, _database!);
-          _linkOptionService = LinkOptionService(_authService!.client!, _database!);
+          _linkOptionService = LinkOptionService(_authService!.client!);
           
           // If authenticated, fetch metadata for configured doctypes
           if (_appConfig != null) {
@@ -111,12 +115,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _loadMetas() async {
     if (_appConfig == null || _metaService == null) return;
-
     try {
-      await _metaService!.getMetas(_appConfig!.doctypes);
-    } catch (e) {
-      // Ignore errors
-    }
+      await _metaService!.prefetchToDb(_appConfig!.doctypes);
+    } catch (_) {}
   }
 
   Future<void> _handleLoginSuccess() async {
@@ -127,7 +128,7 @@ class _HomeScreenState extends State<HomeScreen> {
     _metaService = MetaService(_authService!.client!, _database!);
     _repository = OfflineRepository(_database!);
     _syncService = SyncService(_authService!.client!, _repository!, _database!);
-    _linkOptionService = LinkOptionService(_authService!.client!, _database!);
+    _linkOptionService = LinkOptionService(_authService!.client!);
 
     setState(() {
       _isAuthenticated = true;
@@ -239,7 +240,7 @@ class _HomeScreenState extends State<HomeScreen> {
         _metaService = MetaService(_authService!.client!, _database!);
         _repository = OfflineRepository(_database!);
         _syncService = SyncService(_authService!.client!, _repository!, _database!);
-        _linkOptionService = LinkOptionService(_authService!.client!, _database!);
+        _linkOptionService = LinkOptionService(_authService!.client!);
       } else {
         return const Scaffold(
           body: Center(child: Text('Services not initialized. Please restart the app.')),
@@ -362,6 +363,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     syncService: _syncService!,
                     metaService: _metaService!,
                     linkOptionService: _linkOptionService,
+                    api: _authService?.client,
                   ),
                 ),
               );
@@ -401,6 +403,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             repository: _repository!,
                             syncService: _syncService!,
                             linkOptionService: _linkOptionService,
+                            api: _authService?.client,
                             onSaveSuccess: () => Navigator.pop(context),
                           ),
                 ),
@@ -432,6 +435,7 @@ class DocumentListScreen extends StatefulWidget {
   final SyncService syncService;
   final MetaService metaService;
   final LinkOptionService? linkOptionService;
+  final FrappeClient? api;
 
   const DocumentListScreen({
     super.key,
@@ -442,6 +446,7 @@ class DocumentListScreen extends StatefulWidget {
     required this.syncService,
     required this.metaService,
     this.linkOptionService,
+    this.api,
   });
 
   @override
@@ -545,6 +550,7 @@ class _DocumentListScreenState extends State<DocumentListScreen> {
                                 meta: widget.meta,
                                 repository: widget.repository,
                                 syncService: widget.syncService,
+                                api: widget.api,
                                 onSaveSuccess: () {
                                   Navigator.pop(context);
                                   _pullDocuments();
@@ -617,6 +623,7 @@ class _DocumentListScreenState extends State<DocumentListScreen> {
                           repository: widget.repository,
                           syncService: widget.syncService,
                           linkOptionService: widget.linkOptionService,
+                          api: widget.api,
                           onSaveSuccess: () {
                             Navigator.pop(context);
                             _pullDocuments();
@@ -638,6 +645,7 @@ class _DocumentListScreenState extends State<DocumentListScreen> {
                 meta: widget.meta,
                 repository: widget.repository,
                 syncService: widget.syncService,
+                api: widget.api,
                 onSaveSuccess: () {
                   Navigator.pop(context);
                   _pullDocuments();

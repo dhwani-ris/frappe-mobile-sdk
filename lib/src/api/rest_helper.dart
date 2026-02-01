@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 import 'package:path/path.dart';
 import 'exceptions.dart';
 import 'utils.dart';
+import '../utils/api_tracer.dart';
 
 class RestHelper {
   final String baseUrl;
@@ -16,6 +17,7 @@ class RestHelper {
   String? _sidCookie;
   String? _apiKey;
   String? _apiSecret;
+  String? _bearerToken;
 
   http.Client get client => _client;
 
@@ -31,16 +33,23 @@ class RestHelper {
     _apiSecret = secret;
   }
 
+  void setBearerToken(String? token) {
+    _bearerToken = token;
+  }
+
   void clearSession() {
     _sidCookie = null;
     _apiKey = null;
     _apiSecret = null;
+    _bearerToken = null;
   }
 
   Map<String, String> _getHeaders() {
     final headers = <String, String>{'Accept': 'application/json'};
 
-    if (_sidCookie != null) {
+    if (_bearerToken != null) {
+      headers['Authorization'] = 'Bearer $_bearerToken';
+    } else if (_sidCookie != null) {
       headers['Cookie'] =
           'sid=$_sidCookie; system_user=yes; full_name=Guest; user_id=Guest; user_image=';
     } else if (_apiKey != null && _apiSecret != null) {
@@ -87,6 +96,13 @@ class RestHelper {
       headers['Content-Type'] = 'application/json';
     }
 
+    ApiTracer.traceRequest(
+      method: method,
+      url: uri.toString(),
+      queryParams: method == 'GET' ? queryParams : null,
+      body: method != 'GET' ? body : null,
+    );
+
     int attempts = 0;
     while (attempts < 3) {
       try {
@@ -116,6 +132,13 @@ class RestHelper {
             throw ApiException('Unsupported HTTP method: $method');
         }
 
+        ApiTracer.traceResponse(
+          statusCode: response.statusCode,
+          url: uri.toString(),
+          body: response.statusCode >= 400 ? response.body : null,
+          error: null,
+        );
+
         return _handleResponse(response);
       } on SocketException {
         if (method == 'GET' && attempts < 2) {
@@ -142,7 +165,7 @@ class RestHelper {
         return response.body;
       }
       throw ApiException(
-        'Invalid JSON response',
+        toUserFriendlyMessage(response.body),
         response.statusCode,
         response.body,
       );
@@ -154,21 +177,30 @@ class RestHelper {
 
     if (response.statusCode == 401 || response.statusCode == 403) {
       throw AuthException(
-        'Unauthorized: ${extractErrorMessage(body)}',
+        toUserFriendlyMessage(extractErrorMessage(body)),
         response.statusCode,
       );
     }
 
     if (response.statusCode == 417) {
-      throw ValidationException(extractErrorMessage(body),
-          body is Map<String, dynamic> ? body : null);
+      throw ValidationException(
+        toUserFriendlyMessage(extractErrorMessage(body)),
+        body is Map<String, dynamic> ? body : null,
+      );
     }
 
     if (response.statusCode == 404) {
-      throw ApiException('Not Found: ${extractErrorMessage(body)}', 404);
+      throw ApiException(
+        toUserFriendlyMessage(extractErrorMessage(body)),
+        404,
+      );
     }
 
-    throw ApiException(extractErrorMessage(body), response.statusCode, body);
+    throw ApiException(
+      toUserFriendlyMessage(extractErrorMessage(body)),
+      response.statusCode,
+      body,
+    );
   }
 
   Future<dynamic> call(String method,

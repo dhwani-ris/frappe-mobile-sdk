@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_form_builder/flutter_form_builder.dart';
 import 'base_field.dart';
 
-/// Widget for Select field type
+/// Widget for Select field type. Supports single and multi-select (when field.allowMultiple).
 class SelectField extends BaseField {
   const SelectField({
     super.key,
@@ -20,11 +20,22 @@ class SelectField extends BaseField {
     return field.options!.split('\n').where((e) => e.isNotEmpty).toList();
   }
 
+  /// Parse stored value to list for multi-select (comma-separated)
+  List<String> _valueToList(String? raw) {
+    if (raw == null || raw.isEmpty) return [];
+    return raw.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+  }
+
+  /// Serialize list to comma-separated string for form/server
+  String _listToValue(List<String>? list) {
+    if (list == null || list.isEmpty) return '';
+    return list.join(',');
+  }
+
   @override
   Widget buildField(BuildContext context) {
     final options = _getOptions();
 
-    // If no options available, show a message (matching frappe_huf behavior)
     if (options.isEmpty) {
       return FormBuilderTextField(
         key: ValueKey('${field.fieldname}_no_options'),
@@ -40,14 +51,40 @@ class SelectField extends BaseField {
       );
     }
 
-    // Validate initialValue is in options list
+    if (field.allowMultiple) {
+      final initialList = _valueToList(value?.toString() ?? field.defaultValue);
+      final validInitialList = initialList.where((v) => options.contains(v)).toList();
+
+      return FormBuilderCheckboxGroup<String>(
+        key: ValueKey('${field.fieldname}_multi_${options.length}'),
+        name: field.fieldname ?? '',
+        initialValue: validInitialList,
+        enabled: enabled && !field.readOnly,
+        decoration: style?.decoration ?? InputDecoration(
+          labelText: field.placeholder ?? 'Select ${field.displayLabel}',
+          border: const OutlineInputBorder(),
+          filled: field.readOnly,
+          fillColor: field.readOnly ? Colors.grey[200] : null,
+        ),
+        options: options.map((opt) => FormBuilderFieldOption(value: opt, child: Text(opt))).toList(),
+        validator: field.reqd
+            ? (value) {
+                if (value == null || value.isEmpty) {
+                  return '${field.displayLabel} is required';
+                }
+                return null;
+              }
+            : null,
+        onChanged: (val) => onChanged?.call(_listToValue(val)),
+      );
+    }
+
     final initialValueStr = value?.toString() ?? field.defaultValue;
     String? validInitialValue;
     if (initialValueStr != null && initialValueStr.isNotEmpty) {
       if (options.contains(initialValueStr)) {
         validInitialValue = initialValueStr;
       } else {
-        // Value not in options - use null or first option
         validInitialValue = null;
       }
     }

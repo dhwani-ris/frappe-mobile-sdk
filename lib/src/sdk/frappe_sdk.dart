@@ -41,7 +41,7 @@ class FrappeSDK {
     _repository = OfflineRepository(_database!);
     _metaService = MetaService(_client!, _database!);
     _syncService = SyncService(_client!, _repository!, _database!);
-    _linkOptionService = LinkOptionService(_client!, _database!);
+    _linkOptionService = LinkOptionService(_client!);
     
     _initialized = true;
   }
@@ -56,6 +56,45 @@ class FrappeSDK {
   Future<bool> loginWithApiKey(String apiKey, String apiSecret) async {
     if (!_initialized) await initialize();
     return await _authService!.loginWithApiKey(apiKey, apiSecret);
+  }
+
+  /// Prepare OAuth login: returns authorize_url and code_verifier. Open URL in browser/WebView; capture redirect with ?code=... then call loginWithOAuth.
+  Future<Map<String, String>> prepareOAuthLogin({
+    required String clientId,
+    required String redirectUri,
+    String scope = 'openid all',
+    String? state,
+  }) async {
+    if (!_initialized) await initialize();
+    return AuthService.prepareOAuthLogin(
+      baseUrl: baseUrl,
+      clientId: clientId,
+      redirectUri: redirectUri,
+      scope: scope,
+      state: state,
+    );
+  }
+
+  /// Login via Frappe OAuth 2.0 (authorization code + PKCE). Call after user authorizes and you have the code from redirect.
+  Future<bool> loginWithOAuth({
+    required String code,
+    required String codeVerifier,
+    required String clientId,
+    required String redirectUri,
+  }) async {
+    if (!_initialized) await initialize();
+    return await _authService!.loginWithOAuth(
+      code: code,
+      codeVerifier: codeVerifier,
+      clientId: clientId,
+      redirectUri: redirectUri,
+    );
+  }
+
+  /// Logout and clear all local DB data (default). Set clearDatabase: false to keep DB.
+  Future<void> logout({bool clearDatabase = true}) async {
+    if (!_initialized) return;
+    await _authService!.logout(clearDatabase: clearDatabase);
   }
 
   /// Get Frappe API client (for direct API calls)
@@ -123,10 +162,11 @@ class FrappeSDK {
   /// Check if authenticated
   bool get isAuthenticated => _authService?.isAuthenticated ?? false;
 
-  /// Load metadata for all configured doctypes
+  /// Prefetch metadata for configured doctypes into DB only (no in-memory cache).
+  /// Use this at app start; meta is loaded into cache only when getMeta(doctype) is used.
   Future<void> loadMetadata() async {
     if (!_initialized) await initialize();
-    await _metaService!.getMetas(doctypes);
+    await _metaService!.prefetchToDb(doctypes);
   }
 
   /// Sync all configured doctypes

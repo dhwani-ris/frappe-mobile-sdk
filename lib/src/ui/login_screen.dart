@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../services/auth_service.dart';
 
-/// Login screen for Frappe authentication
+/// Login screen for Frappe authentication (credentials or OAuth)
 class LoginScreen extends StatefulWidget {
   final AuthService authService;
   final String? initialBaseUrl;
@@ -23,9 +24,13 @@ class _LoginScreenState extends State<LoginScreen> {
   final _baseUrlController = TextEditingController();
   final _usernameController = TextEditingController();
   final _passwordController = TextEditingController();
+  final _oauthClientIdController = TextEditingController();
+  final _oauthRedirectController = TextEditingController(text: 'myapp://oauth/callback');
   bool _isLoading = false;
   String? _errorMessage;
   bool _showBaseUrl = true;
+  String? _oauthCodeVerifier;
+  bool _showOAuthSection = false;
 
   @override
   void initState() {
@@ -41,7 +46,129 @@ class _LoginScreenState extends State<LoginScreen> {
     _baseUrlController.dispose();
     _usernameController.dispose();
     _passwordController.dispose();
+    _oauthClientIdController.dispose();
+    _oauthRedirectController.dispose();
     super.dispose();
+  }
+
+  Future<void> _startOAuth() async {
+    final baseUrl = _baseUrlController.text.trim();
+    final clientId = _oauthClientIdController.text.trim();
+    final redirectUri = _oauthRedirectController.text.trim();
+    if (baseUrl.isEmpty || clientId.isEmpty || redirectUri.isEmpty) {
+      setState(() {
+        _errorMessage = 'Enter Base URL, OAuth Client ID and Redirect URI for OAuth';
+      });
+      return;
+    }
+    if (widget.authService.client == null) {
+      widget.authService.initialize(baseUrl);
+    }
+    try {
+      final map = await AuthService.prepareOAuthLogin(
+        baseUrl: baseUrl,
+        clientId: clientId,
+        redirectUri: redirectUri,
+      );
+      final authorizeUrl = map['authorize_url']!;
+      _oauthCodeVerifier = map['code_verifier'];
+      if (await canLaunchUrl(Uri.parse(authorizeUrl))) {
+        await launchUrl(Uri.parse(authorizeUrl), mode: LaunchMode.externalApplication);
+      }
+      if (!mounted) return;
+      _showOAuthCodeDialog(authorizeUrl);
+    } catch (e) {
+      setState(() {
+        _errorMessage = e.toString().replaceAll('Exception: ', '');
+      });
+    }
+  }
+
+  void _showOAuthCodeDialog(String authorizeUrl) {
+    final codeController = TextEditingController();
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: const Text('OAuth - Paste code'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Text(
+                'After authorizing in the browser you will be redirected. Copy the "code" from the redirect URL and paste it below.',
+                style: TextStyle(fontSize: 13),
+              ),
+              const SizedBox(height: 16),
+              TextButton.icon(
+                onPressed: () async {
+                  if (await canLaunchUrl(Uri.parse(authorizeUrl))) {
+                    await launchUrl(Uri.parse(authorizeUrl), mode: LaunchMode.externalApplication);
+                  }
+                },
+                icon: const Icon(Icons.open_in_browser),
+                label: const Text('Open in browser again'),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: codeController,
+                decoration: const InputDecoration(
+                  labelText: 'Authorization code',
+                  hintText: 'Paste code from redirect URL',
+                  border: OutlineInputBorder(),
+                ),
+                maxLines: 2,
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () async {
+              final code = codeController.text.trim();
+              if (code.isEmpty || _oauthCodeVerifier == null) {
+                return;
+              }
+              Navigator.pop(ctx);
+              setState(() {
+                _isLoading = true;
+                _errorMessage = null;
+              });
+              try {
+                final clientId = _oauthClientIdController.text.trim();
+                final redirectUri = _oauthRedirectController.text.trim();
+                final success = await widget.authService.loginWithOAuth(
+                  code: code,
+                  codeVerifier: _oauthCodeVerifier!,
+                  clientId: clientId,
+                  redirectUri: redirectUri,
+                );
+                if (mounted) {
+                  setState(() => _isLoading = false);
+                  if (success) {
+                    await Future.delayed(const Duration(milliseconds: 100));
+                    widget.onLoginSuccess?.call();
+                  }
+                }
+              } catch (e) {
+                if (mounted) {
+                  setState(() {
+                    _errorMessage = e.toString().replaceAll('Exception: ', '');
+                    _isLoading = false;
+                  });
+                }
+              }
+            },
+            child: const Text('Complete Login'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _handleLogin() async {
@@ -187,19 +314,64 @@ class _LoginScreenState extends State<LoginScreen> {
                   ),
                 ],
                 const SizedBox(height: 24),
-                ElevatedButton(
-                  onPressed: _isLoading ? null : _handleLogin,
-                  style: ElevatedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 16),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: _isLoading ? null : _handleLogin,
+                    style: ElevatedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      minimumSize: const Size(double.infinity, 48),
+                    ),
+                    child: _isLoading
+                        ? const SizedBox(
+                            height: 20,
+                            width: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Text('Login'),
                   ),
-                  child: _isLoading
-                      ? const SizedBox(
-                          height: 20,
-                          width: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Text('Login'),
                 ),
+                const SizedBox(height: 16),
+                OutlinedButton.icon(
+                  onPressed: () => setState(() => _showOAuthSection = !_showOAuthSection),
+                  icon: Icon(_showOAuthSection ? Icons.expand_less : Icons.expand_more),
+                  label: Text(_showOAuthSection ? 'Hide OAuth' : 'Login with OAuth'),
+                ),
+                if (_showOAuthSection) ...[
+                  const SizedBox(height: 16),
+                  TextFormField(
+                    controller: _oauthClientIdController,
+                    decoration: const InputDecoration(
+                      labelText: 'OAuth Client ID',
+                      hintText: 'From Frappe OAuth Client',
+                      prefixIcon: Icon(Icons.vpn_key),
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    controller: _oauthRedirectController,
+                    decoration: const InputDecoration(
+                      labelText: 'Redirect URI',
+                      hintText: 'e.g. myapp://oauth/callback',
+                      prefixIcon: Icon(Icons.link),
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.tonalIcon(
+                      onPressed: _isLoading ? null : _startOAuth,
+                      icon: const Icon(Icons.login),
+                      label: const Text('Login with OAuth'),
+                      style: FilledButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        minimumSize: const Size(double.infinity, 48),
+                      ),
+                    ),
+                  ),
+                ],
               ],
             ),
           ),

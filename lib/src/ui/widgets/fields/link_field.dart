@@ -136,8 +136,12 @@ class _LinkFieldDropdown extends StatefulWidget {
 }
 
 class _LinkFieldDropdownState extends State<_LinkFieldDropdown> {
+  static const String _kBlankValue = '__blank__';
+
   List<LinkOptionEntity> _options = [];
   bool _isLoading = true;
+  bool _waitingForDependent = false;
+  String _dependentFieldName = '';
 
   @override
   void initState() {
@@ -146,12 +150,28 @@ class _LinkFieldDropdownState extends State<_LinkFieldDropdown> {
   }
 
   Future<void> _loadOptions() async {
-    setState(() => _isLoading = true);
+    setState(() {
+      _isLoading = true;
+      _waitingForDependent = false;
+    });
+    final filters = LinkOptionService.parseLinkFilters(
+      widget.linkFilters,
+      widget.formData,
+    );
+    final dependentNames = LinkOptionService.getDependentFieldNames(widget.linkFilters);
+    if (widget.linkFilters != null &&
+        widget.linkFilters!.isNotEmpty &&
+        filters == null &&
+        dependentNames.isNotEmpty) {
+      setState(() {
+        _options = [];
+        _isLoading = false;
+        _waitingForDependent = true;
+        _dependentFieldName = dependentNames.first;
+      });
+      return;
+    }
     try {
-      final filters = LinkOptionService.parseLinkFilters(
-        widget.linkFilters,
-        widget.formData,
-      );
       final options = await widget.linkOptionService.getLinkOptions(
         widget.linkedDoctype,
         filters: filters,
@@ -159,9 +179,14 @@ class _LinkFieldDropdownState extends State<_LinkFieldDropdown> {
       setState(() {
         _options = options;
         _isLoading = false;
+        _waitingForDependent = false;
       });
     } catch (e) {
-      setState(() => _isLoading = false);
+      setState(() {
+        _options = [];
+        _isLoading = false;
+        _waitingForDependent = false;
+      });
     }
   }
   
@@ -193,9 +218,10 @@ class _LinkFieldDropdownState extends State<_LinkFieldDropdown> {
       return FormBuilderDropdown<String>(
         key: ValueKey('${widget.field.fieldname}_loading'),
         name: widget.field.fieldname ?? '',
+        initialValue: _kBlankValue,
         enabled: false,
         decoration: widget.style?.decoration ?? InputDecoration(
-          hintText: 'Loading options...',
+          hintText: 'Loading...',
           border: const OutlineInputBorder(),
           suffixIcon: const SizedBox(
             width: 20,
@@ -203,25 +229,53 @@ class _LinkFieldDropdownState extends State<_LinkFieldDropdown> {
             child: CircularProgressIndicator(strokeWidth: 2),
           ),
         ),
-        items: const [],
+        items: [
+          DropdownMenuItem<String>(
+            value: _kBlankValue,
+            child: Row(
+              children: [
+                const SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+                const SizedBox(width: 8),
+                Text('Loading...', style: TextStyle(color: Colors.grey[600])),
+              ],
+            ),
+          ),
+        ],
       );
     }
 
     if (_options.isEmpty) {
-      return FormBuilderTextField(
-        key: ValueKey('${widget.field.fieldname}_empty_${widget.value?.toString() ?? ''}'),
+      final isWaiting = _waitingForDependent && _dependentFieldName.isNotEmpty;
+      final hint = isWaiting
+          ? 'Select $_dependentFieldName first'
+          : 'No options available';
+      return FormBuilderDropdown<String>(
+        key: ValueKey('${widget.field.fieldname}_empty_$isWaiting'),
         name: widget.field.fieldname ?? '',
-        initialValue: widget.value?.toString() ?? '',
-        enabled: widget.enabled && !widget.field.readOnly,
+        initialValue: _kBlankValue,
+        enabled: !isWaiting && (widget.enabled && !widget.field.readOnly),
         decoration: widget.style?.decoration ?? InputDecoration(
-          hintText: 'No options available. Tap refresh to load.',
+          hintText: hint,
           border: const OutlineInputBorder(),
-          suffixIcon: IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: _loadOptions,
-            tooltip: 'Refresh options',
-          ),
+          suffixIcon: isWaiting
+              ? null
+              : IconButton(
+                  icon: const Icon(Icons.refresh),
+                  onPressed: _loadOptions,
+                  tooltip: 'Refresh options',
+                ),
         ),
+        items: [
+          DropdownMenuItem<String>(
+            value: _kBlankValue,
+            child: Text(hint, style: TextStyle(color: Colors.grey[600])),
+          ),
+        ],
+        onChanged: isWaiting ? null : (v) => widget.onChanged?.call(v == _kBlankValue ? null : v),
       );
     }
 
@@ -249,13 +303,26 @@ class _LinkFieldDropdownState extends State<_LinkFieldDropdown> {
       }
     }
 
+    final placeholder = widget.field.placeholder ?? 'Select ${widget.field.displayLabel}';
+    final allItems = <DropdownMenuItem<String>>[
+      DropdownMenuItem<String>(
+        value: _kBlankValue,
+        child: Text(placeholder, style: TextStyle(color: Colors.grey[600])),
+      ),
+      ..._options.map((option) => DropdownMenuItem<String>(
+            value: option.name,
+            child: Text(option.label ?? option.name),
+          )),
+    ];
+    final initialVal = validInitialValue ?? _kBlankValue;
+
     return FormBuilderDropdown<String>(
-      key: ValueKey('${widget.field.fieldname}_${validInitialValue ?? ''}_${_options.length}'),
+      key: ValueKey('${widget.field.fieldname}_${initialVal}_${_options.length}'),
       name: widget.field.fieldname ?? '',
-      initialValue: validInitialValue,
+      initialValue: initialVal,
       enabled: widget.enabled && !widget.field.readOnly,
       decoration: widget.style?.decoration ?? InputDecoration(
-        hintText: widget.field.placeholder ?? 'Select ${widget.field.displayLabel}',
+        hintText: placeholder,
         border: const OutlineInputBorder(),
         filled: widget.field.readOnly,
         fillColor: widget.field.readOnly ? Colors.grey[200] : null,
@@ -265,21 +332,16 @@ class _LinkFieldDropdownState extends State<_LinkFieldDropdown> {
           tooltip: 'Refresh options',
         ),
       ),
-      items: _options
-          .map((option) => DropdownMenuItem(
-                value: option.name,
-                child: Text(option.label ?? option.name),
-              ))
-          .toList(),
+      items: allItems,
       validator: widget.field.reqd
           ? (value) {
-              if (value == null || value.toString().isEmpty) {
+              if (value == null || value.toString().isEmpty || value == _kBlankValue) {
                 return '${widget.field.displayLabel} is required';
               }
               return null;
             }
           : null,
-      onChanged: (val) => widget.onChanged?.call(val),
+      onChanged: (val) => widget.onChanged?.call(val == _kBlankValue ? null : val),
     );
   }
 }
