@@ -1,0 +1,17 @@
+# Pre-commit hooks (install: pip install pre-commit && pre-commit install)
+# Run: pre-commit run --all-files
+# Flutter-native alternative: dart run flutter_pre_commit (uses same checks)
+repos:
+  - repo: local
+    hooks:
+      - id: dart-format
+        name: dart format
+        entry: dart format --set-exit-if-changed
+        language: system
+        types: [dart]
+
+      - id: flutter-analyze
+        name: flutter analyze
+        entry: flutter analyze --no-fatal-infos
+        language: system
+        pass_filenames: false
