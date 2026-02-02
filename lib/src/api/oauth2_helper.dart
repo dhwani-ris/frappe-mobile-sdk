@@ -1,12 +1,10 @@
-// Copyright (c) 2026, Bhushan Barbuddhe and contributors
-// Frappe OAuth 2.0 with PKCE (RFC 7636)
-
 import 'dart:convert';
 import 'dart:math';
+
 import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 
-/// Result of PKCE generation
+/// PKCE code verifier and challenge pair (RFC 7636).
 class PkcePair {
   final String codeVerifier;
   final String codeChallenge;
@@ -14,7 +12,7 @@ class PkcePair {
   PkcePair({required this.codeVerifier, required this.codeChallenge});
 }
 
-/// Frappe OAuth 2.0 token response
+/// OAuth 2.0 token response from Frappe.
 class OAuth2TokenResponse {
   final String accessToken;
   final String? refreshToken;
@@ -41,7 +39,7 @@ class OAuth2TokenResponse {
   }
 }
 
-/// Helper for Frappe OAuth 2.0 (authorization code + PKCE)
+/// Frappe OAuth 2.0 helper (authorization code + PKCE).
 class OAuth2Helper {
   static Map<String, dynamic> _unwrapFrappeResponse(Map<String, dynamic> json) {
     if (json.containsKey('access_token')) return json;
@@ -59,7 +57,7 @@ class OAuth2Helper {
   static const String _chars =
       'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~';
 
-  /// Generate code_verifier (43–128 chars) and code_challenge (S256)
+  /// Generates a PKCE pair (43–128 char verifier, S256 challenge).
   static PkcePair generatePkce() {
     final random = Random.secure();
     final verifier = List.generate(
@@ -72,8 +70,7 @@ class OAuth2Helper {
     return PkcePair(codeVerifier: verifier, codeChallenge: challenge);
   }
 
-  /// Build authorize URL for Frappe
-  /// GET /api/method/frappe.integrations.oauth2.authorize
+  /// Builds the OAuth authorize URL for user consent.
   static String getAuthorizeUrl({
     required String baseUrl,
     required String clientId,
@@ -102,7 +99,10 @@ class OAuth2Helper {
     return uri.replace(queryParameters: q).toString();
   }
 
-  /// Exchange authorization code for tokens (with optional PKCE code_verifier)
+  /// Exchanges authorization code for access and refresh tokens.
+  ///
+  /// [codeVerifier] must match the PKCE verifier used in the authorize request.
+  /// [clientSecret] is required for confidential OAuth clients.
   static Future<OAuth2TokenResponse> exchangeCodeForToken({
     required String baseUrl,
     required String clientId,
@@ -152,7 +152,9 @@ class OAuth2Helper {
     return OAuth2TokenResponse.fromJson(tokenJson);
   }
 
-  /// Refresh access token
+  /// Refreshes the access token using [refreshToken].
+  ///
+  /// [clientSecret] is required for confidential OAuth clients.
   static Future<OAuth2TokenResponse> refreshToken({
     required String baseUrl,
     required String clientId,
@@ -190,7 +192,7 @@ class OAuth2Helper {
     return OAuth2TokenResponse.fromJson(json);
   }
 
-  /// Verify access token by calling OpenID userinfo endpoint
+  /// Verifies [accessToken] by calling the OpenID userinfo endpoint.
   static Future<Map<String, dynamic>> verifyToken({
     required String baseUrl,
     required String accessToken,
@@ -211,7 +213,7 @@ class OAuth2Helper {
     return jsonDecode(response.body) as Map<String, dynamic>;
   }
 
-  /// Revoke token (access or refresh)
+  /// Revokes an access or refresh token.
   static Future<void> revokeToken({
     required String baseUrl,
     required String token,

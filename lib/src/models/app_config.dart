@@ -2,22 +2,13 @@ import 'package:json_annotation/json_annotation.dart';
 
 part 'app_config.g.dart';
 
-/// Login method configuration
+/// Login method configuration (password, OAuth, social).
 @JsonSerializable()
 class LoginConfig {
-  /// Enable username/password login
   final bool enablePasswordLogin;
-
-  /// Enable OAuth 2.0 login
   final bool enableOAuth;
-
-  /// Enable social login (Google, Apple, etc.) - for future use
   final bool enableSocialLogin;
-
-  /// OAuth Client ID (required when enableOAuth is true)
   final String? oauthClientId;
-
-  /// OAuth Client Secret (required for confidential clients)
   final String? oauthClientSecret;
 
   const LoginConfig({
@@ -33,18 +24,11 @@ class LoginConfig {
   Map<String, dynamic> toJson() => _$LoginConfigToJson(this);
 }
 
-/// Application configuration for Frappe Mobile SDK
-///
-/// Defines base URL, doctypes, and login method options
+/// Application configuration for Frappe Mobile SDK.
 @JsonSerializable()
 class AppConfig {
-  /// Frappe server base URL
   final String baseUrl;
-
-  /// List of Doctype names to support offline
   final List<String> doctypes;
-
-  /// Login method configuration (enable/disable password, OAuth)
   final LoginConfig? loginConfig;
 
   AppConfig({required this.baseUrl, required this.doctypes, this.loginConfig});
@@ -54,7 +38,7 @@ class AppConfig {
 
   Map<String, dynamic> toJson() => _$AppConfigToJson(this);
 
-  /// Create from JSON file
+  /// Builds [AppConfig] from a JSON map (supports snake_case and camelCase).
   static AppConfig fromJsonFile(Map<String, dynamic> json) {
     final login = json['login_config'] ?? json['loginConfig'];
     LoginConfig? loginConfig;

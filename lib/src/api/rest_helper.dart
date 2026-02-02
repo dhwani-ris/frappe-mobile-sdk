@@ -1,6 +1,3 @@
-// Copyright (c) 2026, Bhushan Barbuddhe and contributors
-// For license information, please see license.txt
-
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -10,11 +7,13 @@ import 'exceptions.dart';
 import 'utils.dart';
 import '../utils/api_tracer.dart';
 
+/// HTTP client for Frappe REST API.
+///
+/// Supports session cookie, API key, and Bearer token auth.
+/// [onTokenExpired] is invoked on 401 when using Bearer token; return true to retry.
 class RestHelper {
   final String baseUrl;
   final http.Client _client;
-
-  /// Called on 401 when using bearer token. Return true if token was refreshed.
   final Future<bool> Function()? onTokenExpired;
 
   String? _sidCookie;
@@ -30,19 +29,23 @@ class RestHelper {
           : baseUrlParam,
       _client = client ?? http.Client();
 
+  /// Sets session cookie for credential-based auth.
   void setSessionCookie(String sid) {
     _sidCookie = sid;
   }
 
+  /// Sets API key and secret for token-based auth.
   void setApiKey(String key, String secret) {
     _apiKey = key;
     _apiSecret = secret;
   }
 
+  /// Sets Bearer token for OAuth auth.
   void setBearerToken(String? token) {
     _bearerToken = token;
   }
 
+  /// Clears all auth state.
   void clearSession() {
     _sidCookie = null;
     _apiKey = null;
@@ -65,6 +68,7 @@ class RestHelper {
     return headers;
   }
 
+  /// Performs a GET request.
   Future<dynamic> get(
     String endpoint, {
     Map<String, dynamic>? queryParams,
@@ -72,14 +76,17 @@ class RestHelper {
     return _request('GET', endpoint, queryParams: queryParams);
   }
 
+  /// Performs a POST request.
   Future<dynamic> post(String endpoint, {dynamic body}) async {
     return _request('POST', endpoint, body: body);
   }
 
+  /// Performs a PUT request.
   Future<dynamic> put(String endpoint, {dynamic body}) async {
     return _request('PUT', endpoint, body: body);
   }
 
+  /// Performs a DELETE request.
   Future<dynamic> delete(String endpoint) async {
     return _request('DELETE', endpoint);
   }
@@ -215,6 +222,7 @@ class RestHelper {
     );
   }
 
+  /// Calls a Frappe API method (e.g. frappe.client.get_list).
   Future<dynamic> call(
     String method, {
     Map<String, dynamic>? args,
@@ -228,6 +236,7 @@ class RestHelper {
     }
   }
 
+  /// Uploads a file via multipart/form-data.
   Future<dynamic> uploadFile(
     String endpoint,
     String fieldName,
