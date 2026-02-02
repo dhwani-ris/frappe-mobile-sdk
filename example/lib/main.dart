@@ -71,11 +71,15 @@ class _HomeScreenState extends State<HomeScreen> {
       //   doctypes: ['Procurement','Farmer Registration','Land Record','Farmer Scheduling','Farmer Scheduling history'], // Configure your doctypes
       // );
       _appConfig = AppConfig(
-        baseUrl: 'https://stghufdms-frappe.dhwaniris.in/',
-        doctypes: [
-          'Partner Master',
-          'frappe-form-test',
-        ], // Configure your doctypes
+        baseUrl: 'https://stgbsebeam.dhwaniris.in/',
+        doctypes: ['Farmer Registration'],
+        loginConfig: const LoginConfig(
+          enablePasswordLogin: true,
+          enableOAuth: true,
+          oauthClientId: 'p97ndoqlk8',
+          oauthClientSecret: '2010aad104', // From Frappe OAuth Client
+          // Redirect URI in Frappe: frappemobilesdk://oauth/callback
+        ),
       );
 
       // Initialize auth service
@@ -231,6 +235,7 @@ class _HomeScreenState extends State<HomeScreen> {
       }
       return LoginScreen(
         authService: _authService!,
+        appConfig: _appConfig,
         initialBaseUrl: _appConfig?.baseUrl,
         onLoginSuccess: _handleLoginSuccess,
       );

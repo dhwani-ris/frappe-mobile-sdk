@@ -14,6 +14,9 @@ class RestHelper {
   final String baseUrl;
   final http.Client _client;
 
+  /// Called on 401 when using bearer token. Return true if token was refreshed.
+  final Future<bool> Function()? onTokenExpired;
+
   String? _sidCookie;
   String? _apiKey;
   String? _apiSecret;
@@ -21,8 +24,11 @@ class RestHelper {
 
   http.Client get client => _client;
 
-  RestHelper(this.baseUrl, {http.Client? client})
-    : _client = client ?? http.Client();
+  RestHelper(String baseUrlParam, {http.Client? client, this.onTokenExpired})
+    : baseUrl = baseUrlParam.endsWith('/')
+          ? baseUrlParam.substring(0, baseUrlParam.length - 1)
+          : baseUrlParam,
+      _client = client ?? http.Client();
 
   void setSessionCookie(String sid) {
     _sidCookie = sid;
@@ -140,6 +146,17 @@ class RestHelper {
         );
 
         return _handleResponse(response);
+      } on AuthException catch (e) {
+        if (e.statusCode == 401 &&
+            _bearerToken != null &&
+            onTokenExpired != null) {
+          final refreshed = await onTokenExpired!();
+          if (refreshed) {
+            attempts++;
+            continue;
+          }
+        }
+        rethrow;
       } on SocketException {
         if (method == 'GET' && attempts < 2) {
           attempts++;

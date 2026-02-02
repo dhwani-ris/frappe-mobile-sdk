@@ -46,6 +46,9 @@ dependencies:
   # Open OAuth URL in browser
   url_launcher: ^6.2.0
 
+  # Deep links for OAuth redirect (auto-capture code)
+  app_links: ^7.0.0
+
   # JSON serialization
   json_annotation: ^4.8.1
 

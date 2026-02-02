@@ -140,6 +140,54 @@ class CustomCustomerForm extends StatefulWidget {
 }
 ```
 
+## OAuth 2.0 Login
+
+OAuth uses a **system-defined redirect URI** so you can configure it once in Frappe:
+
+1. **Redirect URI**: `frappemobilesdk://oauth/callback` (constant: `oauthRedirectUri`)
+2. **Frappe setup**: Setup → Integrations → OAuth Provider → Create OAuth Client → set Redirect URI to the above
+3. **App config**:
+```dart
+loginConfig: LoginConfig(
+  enableOAuth: true,
+  oauthClientId: 'your-frappe-oauth-client-id',
+  oauthClientSecret: 'your-client-secret', // Required for confidential clients
+),
+```
+
+4. **Android**: Add to `AndroidManifest.xml`:
+   - OAuth redirect intent (inside `<activity>`):
+```xml
+<intent-filter>
+  <action android:name="android.intent.action.VIEW"/>
+  <category android:name="android.intent.category.DEFAULT"/>
+  <category android:name="android.intent.category.BROWSABLE"/>
+  <data android:scheme="frappemobilesdk" android:host="oauth" android:pathPrefix="/callback"/>
+</intent-filter>
+```
+   - Package visibility for browser (inside `<queries>`, required on Android 11+):
+```xml
+<intent>
+  <action android:name="android.intent.action.VIEW"/>
+  <data android:scheme="https"/>
+</intent>
+```
+
+5. **iOS**: Add to `Info.plist` under `CFBundleURLTypes`:
+```xml
+<key>CFBundleURLTypes</key>
+<array>
+  <dict>
+    <key>CFBundleURLSchemes</key>
+    <array><string>frappemobilesdk</string></array>
+    <key>CFBundleURLName</key>
+    <string>OAuth Callback</string>
+  </dict>
+</array>
+```
+
+Flow: User taps "Login with OAuth" → browser opens → user authorizes → app reopens automatically with tokens. Tokens are stored in secure storage. On 401, refresh token is used automatically; if refresh fails, user must re-login.
+
 ## 📚 API Reference
 
 ### FrappeClient (Direct API)

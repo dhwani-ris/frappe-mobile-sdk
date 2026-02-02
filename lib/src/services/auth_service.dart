@@ -12,6 +12,7 @@ class AuthService {
   static const String _keyOAuthRefreshToken = 'frappe_oauth_refresh_token';
   static const String _keyOAuthExpiresAt = 'frappe_oauth_expires_at';
   static const String _keyOAuthClientId = 'frappe_oauth_client_id';
+  static const String _keyOAuthClientSecret = 'frappe_oauth_client_secret';
 
   final FlutterSecureStorage _storage = const FlutterSecureStorage();
   FrappeClient? _client;
@@ -19,7 +20,7 @@ class AuthService {
 
   /// Initialize with base URL
   void initialize(String baseUrl) {
-    _client = FrappeClient(baseUrl);
+    _client = FrappeClient(baseUrl, onTokenExpired: _tryRefreshOAuthToken);
     _storage.write(key: _keyBaseUrl, value: baseUrl);
   }
 
@@ -92,6 +93,7 @@ class AuthService {
         return true;
       }
       final oauthClientId = await _storage.read(key: _keyOAuthClientId);
+      final oauthClientSecret = await _storage.read(key: _keyOAuthClientSecret);
       if (refreshToken != null &&
           refreshToken.isNotEmpty &&
           oauthClientId != null &&
@@ -101,6 +103,7 @@ class AuthService {
             baseUrl: baseUrl,
             clientId: oauthClientId,
             refreshToken: refreshToken,
+            clientSecret: oauthClientSecret,
           );
           await _storeOAuthTokens(
             refreshed.accessToken,
@@ -148,11 +151,43 @@ class AuthService {
     }
   }
 
+  /// Try to refresh OAuth token. Returns true if refreshed.
+  Future<bool> _tryRefreshOAuthToken() async {
+    final baseUrl = await getBaseUrl();
+    final refreshToken = await _storage.read(key: _keyOAuthRefreshToken);
+    final oauthClientId = await _storage.read(key: _keyOAuthClientId);
+    if (baseUrl == null ||
+        refreshToken == null ||
+        refreshToken.isEmpty ||
+        oauthClientId == null ||
+        oauthClientId.isEmpty) {
+      return false;
+    }
+    try {
+      final refreshed = await OAuth2Helper.refreshToken(
+        baseUrl: baseUrl,
+        clientId: oauthClientId,
+        refreshToken: refreshToken,
+      );
+      await _storeOAuthTokens(
+        refreshed.accessToken,
+        refreshed.refreshToken ?? refreshToken,
+        refreshed.expiresIn,
+      );
+      _client?.rest.setBearerToken(refreshed.accessToken);
+      return true;
+    } catch (_) {
+      await _clearOAuthTokens();
+      return false;
+    }
+  }
+
   Future<void> _clearOAuthTokens() async {
     await _storage.delete(key: _keyOAuthAccessToken);
     await _storage.delete(key: _keyOAuthRefreshToken);
     await _storage.delete(key: _keyOAuthExpiresAt);
     await _storage.delete(key: _keyOAuthClientId);
+    await _storage.delete(key: _keyOAuthClientSecret);
   }
 
   /// Login via Frappe OAuth 2.0 (authorization code + PKCE).
@@ -162,6 +197,7 @@ class AuthService {
     required String codeVerifier,
     required String clientId,
     required String redirectUri,
+    String? clientSecret,
   }) async {
     if (_client == null) {
       throw Exception('AuthService not initialized. Call initialize() first.');
@@ -177,14 +213,22 @@ class AuthService {
         redirectUri: redirectUri,
         code: code,
         codeVerifier: codeVerifier,
+        clientSecret: clientSecret,
       );
+      final accessToken = tokens.accessToken.trim();
+      if (accessToken.isEmpty) {
+        throw Exception('OAuth returned empty access token');
+      }
       await _storeOAuthTokens(
-        tokens.accessToken,
-        tokens.refreshToken ?? '',
+        accessToken,
+        (tokens.refreshToken ?? '').trim(),
         tokens.expiresIn,
       );
       await _storage.write(key: _keyOAuthClientId, value: clientId);
-      _client!.rest.setBearerToken(tokens.accessToken);
+      if (clientSecret != null && clientSecret.isNotEmpty) {
+        await _storage.write(key: _keyOAuthClientSecret, value: clientSecret);
+      }
+      _client!.rest.setBearerToken(accessToken);
       _isAuthenticated = true;
       return true;
     } catch (e) {
