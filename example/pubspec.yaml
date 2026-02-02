@@ -2,7 +2,7 @@ name: frappe_mobile_sdk_example
 description: Example app demonstrating Frappe Mobile SDK usage
 publish_to: 'none'
 
-version: 1.0.0+1
+version: 1.0.0-dev
 
 environment:
   sdk: ^3.10.4
