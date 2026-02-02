@@ -43,6 +43,19 @@ class OAuth2TokenResponse {
 
 /// Helper for Frappe OAuth 2.0 (authorization code + PKCE)
 class OAuth2Helper {
+  static Map<String, dynamic> _unwrapFrappeResponse(Map<String, dynamic> json) {
+    if (json.containsKey('access_token')) return json;
+    final msg = json['message'];
+    if (msg is Map<String, dynamic> && msg.containsKey('access_token')) {
+      return msg;
+    }
+    final data = json['data'];
+    if (data is Map<String, dynamic> && data.containsKey('access_token')) {
+      return data;
+    }
+    return json;
+  }
+
   static const String _chars =
       'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~';
 
@@ -96,6 +109,7 @@ class OAuth2Helper {
     required String redirectUri,
     required String code,
     String? codeVerifier,
+    String? clientSecret,
   }) async {
     final path = baseUrl.endsWith('/') ? baseUrl : '$baseUrl/';
     final uri = Uri.parse(
@@ -109,6 +123,9 @@ class OAuth2Helper {
     };
     if (codeVerifier != null && codeVerifier.isNotEmpty) {
       body['code_verifier'] = codeVerifier;
+    }
+    if (clientSecret != null && clientSecret.isNotEmpty) {
+      body['client_secret'] = clientSecret;
     }
     final response = await http.post(
       uri,
@@ -126,7 +143,13 @@ class OAuth2Helper {
       );
     }
     final json = jsonDecode(response.body) as Map<String, dynamic>;
-    return OAuth2TokenResponse.fromJson(json);
+    if (json['error'] != null) {
+      throw Exception(
+        'OAuth error: ${json['error']} - ${json['error_description'] ?? ''}',
+      );
+    }
+    final tokenJson = _unwrapFrappeResponse(json);
+    return OAuth2TokenResponse.fromJson(tokenJson);
   }
 
   /// Refresh access token
@@ -134,6 +157,7 @@ class OAuth2Helper {
     required String baseUrl,
     required String clientId,
     required String refreshToken,
+    String? clientSecret,
   }) async {
     final path = baseUrl.endsWith('/') ? baseUrl : '$baseUrl/';
     final uri = Uri.parse(
@@ -144,6 +168,9 @@ class OAuth2Helper {
       'refresh_token': refreshToken,
       'client_id': clientId,
     };
+    if (clientSecret != null && clientSecret.isNotEmpty) {
+      body['client_secret'] = clientSecret;
+    }
     final response = await http.post(
       uri,
       headers: {
@@ -161,6 +188,27 @@ class OAuth2Helper {
     }
     final json = jsonDecode(response.body) as Map<String, dynamic>;
     return OAuth2TokenResponse.fromJson(json);
+  }
+
+  /// Verify access token by calling OpenID userinfo endpoint
+  static Future<Map<String, dynamic>> verifyToken({
+    required String baseUrl,
+    required String accessToken,
+  }) async {
+    final path = baseUrl.endsWith('/') ? baseUrl : '$baseUrl/';
+    final uri = Uri.parse(
+      '${path}api/method/frappe.integrations.oauth2.openid_profile',
+    );
+    final response = await http.get(
+      uri,
+      headers: {'Authorization': 'Bearer $accessToken'},
+    );
+    if (response.statusCode != 200) {
+      throw Exception(
+        'Token verification failed: ${response.statusCode} ${response.body}',
+      );
+    }
+    return jsonDecode(response.body) as Map<String, dynamic>;
   }
 
   /// Revoke token (access or refresh)

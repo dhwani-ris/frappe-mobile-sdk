@@ -21,7 +21,12 @@ class FrappeClient {
     String baseUrl, {
     http.Client? httpClient,
     SessionStorage? sessionStorage,
-  }) : _restHelper = RestHelper(baseUrl, client: httpClient) {
+    Future<bool> Function()? onTokenExpired,
+  }) : _restHelper = RestHelper(
+         baseUrl,
+         client: httpClient,
+         onTokenExpired: onTokenExpired,
+       ) {
     auth = AuthService(_restHelper, sessionStorage: sessionStorage);
     doctype = DoctypeService(_restHelper);
     document = DocumentService(_restHelper);

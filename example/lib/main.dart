@@ -72,10 +72,14 @@ class _HomeScreenState extends State<HomeScreen> {
       // );
       _appConfig = AppConfig(
         baseUrl: 'https://your-frappe-site.example.com/',
-        doctypes: [
-          'SamplePartner',
-          'frappe-form-test',
-        ], // Configure your doctypes
+        doctypes: ['SampleDoctype'],
+        loginConfig: const LoginConfig(
+          enablePasswordLogin: true,
+          enableOAuth: true,
+          oauthClientId: 'your_oauth_client_id',
+          oauthClientSecret: 'your_oauth_client_secret', // From Frappe OAuth Client
+          // Redirect URI in Frappe: frappemobilesdk://oauth/callback
+        ),
       );
 
       // Initialize auth service
@@ -231,6 +235,7 @@ class _HomeScreenState extends State<HomeScreen> {
       }
       return LoginScreen(
         authService: _authService!,
+        appConfig: _appConfig,
         initialBaseUrl: _appConfig?.baseUrl,
         onLoginSuccess: _handleLoginSuccess,
       );

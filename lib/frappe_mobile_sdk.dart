@@ -69,6 +69,7 @@ export 'src/ui/widgets/fields/phone_field.dart';
 
 // Constants
 export 'src/constants/field_types.dart';
+export 'src/constants/oauth_constants.dart';
 
 // Utils (debug tracer + user-friendly errors)
 export 'src/api/utils.dart' show extractErrorMessage, toUserFriendlyMessage;
