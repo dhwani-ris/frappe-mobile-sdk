@@ -8,9 +8,10 @@ import '../constants/oauth_constants.dart';
 import '../models/app_config.dart';
 import '../services/auth_service.dart';
 
-/// Login screen for Frappe authentication (credentials or OAuth).
-/// Login methods and OAuth credentials are driven by [AppConfig.loginConfig].
-/// OAuth uses system redirect URI [oauthRedirectUri] - configure this in Frappe.
+/// Login screen for Frappe (credentials or OAuth).
+///
+/// Login methods and OAuth credentials come from [AppConfig.loginConfig].
+/// OAuth uses [oauthRedirectUri]; configure this in Frappe OAuth Client.
 class LoginScreen extends StatefulWidget {
   final AuthService authService;
   final AppConfig? appConfig;
@@ -41,9 +42,7 @@ class _LoginScreenState extends State<LoginScreen> {
   String? _oauthCodeVerifier;
 
   String get _baseUrl {
-    if (widget.appConfig != null) {
-      return widget.appConfig!.baseUrl;
-    }
+    if (widget.appConfig != null) return widget.appConfig!.baseUrl;
     return _baseUrlController.text.trim();
   }
 
@@ -56,6 +55,7 @@ class _LoginScreenState extends State<LoginScreen> {
   bool get _enableOAuth => widget.appConfig?.enableOAuth ?? false;
 
   String? get _oauthClientId => widget.appConfig?.oauthClientId;
+
   String? get _oauthClientSecret => widget.appConfig?.oauthClientSecret;
 
   @override
@@ -70,18 +70,14 @@ class _LoginScreenState extends State<LoginScreen> {
   Future<void> _checkInitialUri() async {
     try {
       final uri = await _appLinks.getInitialLink();
-      if (uri != null && mounted) {
-        _handleOAuthRedirect(uri);
-      }
+      if (uri != null && mounted) _handleOAuthRedirect(uri);
     } catch (_) {}
   }
 
   void _listenForOAuthRedirect() {
     _linkSubscription?.cancel();
     _linkSubscription = _appLinks.uriLinkStream.listen((uri) {
-      if (mounted) {
-        _handleOAuthRedirect(uri);
-      }
+      if (mounted) _handleOAuthRedirect(uri);
     });
   }
 
@@ -97,13 +93,10 @@ class _LoginScreenState extends State<LoginScreen> {
       return;
     }
     final code = uri.queryParameters['code'];
-    if (code == null || code.isEmpty || _oauthCodeVerifier == null) {
-      return;
-    }
+    if (code == null || code.isEmpty || _oauthCodeVerifier == null) return;
     final clientId = _oauthClientId;
-    if (clientId == null || clientId.isEmpty) {
-      return;
-    }
+    if (clientId == null || clientId.isEmpty) return;
+
     _cancelOAuthListener();
     setState(() {
       _isLoading = true;
@@ -192,27 +185,21 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   Future<void> _handleLogin() async {
-    if (!(_formKey.currentState?.validate() ?? false)) {
-      return;
-    }
+    if (!(_formKey.currentState?.validate() ?? false)) return;
 
     setState(() {
       _isLoading = true;
       _errorMessage = null;
     });
-
     try {
       final baseUrl = _baseUrl;
-
       if (widget.authService.client == null) {
         widget.authService.initialize(baseUrl);
       }
-
       final success = await widget.authService.login(
         _usernameController.text.trim(),
         _passwordController.text,
       );
-
       if (success && mounted) {
         await Future.delayed(const Duration(milliseconds: 100));
         widget.onLoginSuccess?.call();
