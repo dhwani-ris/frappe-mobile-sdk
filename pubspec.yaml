@@ -62,11 +62,14 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
-  
+
+  # Pre-commit: format + analyze before commit (run: dart run flutter_pre_commit)
+  flutter_pre_commit: ^0.2.4
+
   # Floor code generator
   build_runner: ^2.4.8
   floor_generator: ^1.5.0
-  
+
   # JSON serialization code generator
   json_serializable: ^6.7.1
 

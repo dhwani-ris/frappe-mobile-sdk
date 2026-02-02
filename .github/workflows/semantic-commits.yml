@@ -1,0 +1,48 @@
+# Validate commit messages follow Conventional Commits (e.g. feat:, fix:, chore:)
+# https://www.conventionalcommits.org/
+name: Semantic commit messages
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+    branches: [main, master, develop]
+  push:
+    branches: [main, master, develop]
+
+jobs:
+  validate-commits:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate commit messages
+        run: |
+          # Conventional Commits: type(scope)?: subject
+          # Types: build, chore, ci, docs, feat, fix, perf, refactor, revert, style, test
+          PATTERN='^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)(\([a-zA-Z0-9._-]+\))?!?: .{1,}'
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE="${{ github.event.pull_request.base.sha }}"
+            HEAD="${{ github.event.pull_request.head.sha }}"
+          else
+            BASE="${{ github.event.before }}"
+            HEAD="${{ github.sha }}"
+          fi
+          # Handle first push (before is 0{40})
+          if [ "$BASE" = "0000000000000000000000000000000000000000" ]; then
+            COMMITS=$(git rev-list --no-merges $HEAD)
+          else
+            COMMITS=$(git rev-list --no-merges $BASE..$HEAD)
+          fi
+          FAIL=0
+          for sha in $COMMITS; do
+            MSG=$(git log -1 --format=%B $sha)
+            if ! echo "$MSG" | head -1 | grep -qE "$PATTERN"; then
+              echo "Invalid commit: $sha"
+              echo "  $MSG" | head -1
+              echo "  Expected: type(scope)?: subject (e.g. feat: add login)"
+              FAIL=1
+            fi
+          done
+          [ $FAIL -eq 0 ] || exit 1
