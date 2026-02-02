@@ -22,7 +22,7 @@ class RestHelper {
   http.Client get client => _client;
 
   RestHelper(this.baseUrl, {http.Client? client})
-      : _client = client ?? http.Client();
+    : _client = client ?? http.Client();
 
   void setSessionCookie(String sid) {
     _sidCookie = sid;
@@ -143,9 +143,7 @@ class RestHelper {
       } on SocketException {
         if (method == 'GET' && attempts < 2) {
           attempts++;
-          await Future.delayed(
-            Duration(milliseconds: 500 * (1 << attempts)),
-          );
+          await Future.delayed(Duration(milliseconds: 500 * (1 << attempts)));
           continue;
         }
         throw NetworkException('No internet connection');
@@ -190,10 +188,7 @@ class RestHelper {
     }
 
     if (response.statusCode == 404) {
-      throw ApiException(
-        toUserFriendlyMessage(extractErrorMessage(body)),
-        404,
-      );
+      throw ApiException(toUserFriendlyMessage(extractErrorMessage(body)), 404);
     }
 
     throw ApiException(
@@ -203,8 +198,11 @@ class RestHelper {
     );
   }
 
-  Future<dynamic> call(String method,
-      {Map<String, dynamic>? args, String httpMethod = 'POST'}) async {
+  Future<dynamic> call(
+    String method, {
+    Map<String, dynamic>? args,
+    String httpMethod = 'POST',
+  }) async {
     final endpoint = '/api/method/$method';
     if (httpMethod.toUpperCase() == 'GET') {
       return get(endpoint, queryParams: args);

@@ -22,7 +22,7 @@ import 'attach_field.dart';
 import 'image_field.dart';
 
 /// Factory class to create appropriate field widget based on field type
-/// 
+///
 /// Extend this class to customize field creation behavior.
 /// Example:
 /// ```dart
@@ -38,13 +38,10 @@ class FieldFactory {
   LinkOptionService? linkOptionService;
   FieldStyle? defaultStyle;
 
-  FieldFactory({
-    this.linkOptionService,
-    this.defaultStyle,
-  });
+  FieldFactory({this.linkOptionService, this.defaultStyle});
 
   /// Create a field widget based on field type
-  /// 
+  ///
   /// Override this method to customize field creation.
   BaseField? createField({
     required DocField field,
@@ -62,7 +59,7 @@ class FieldFactory {
     }
 
     final fieldStyle = style ?? defaultStyle;
-    
+
     switch (field.fieldtype) {
       case FieldTypes.data:
         return DataField(

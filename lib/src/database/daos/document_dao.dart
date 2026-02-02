@@ -6,22 +6,35 @@ abstract class DocumentDao {
   @Query('SELECT * FROM documents WHERE localId = :localId')
   Future<DocumentEntity?> findByLocalId(String localId);
 
-  @Query('SELECT * FROM documents WHERE serverId = :serverId AND doctype = :doctype')
+  @Query(
+    'SELECT * FROM documents WHERE serverId = :serverId AND doctype = :doctype',
+  )
   Future<DocumentEntity?> findByServerId(String serverId, String doctype);
 
-  @Query('SELECT * FROM documents WHERE doctype = :doctype ORDER BY modified DESC')
+  @Query(
+    'SELECT * FROM documents WHERE doctype = :doctype ORDER BY modified DESC',
+  )
   Future<List<DocumentEntity>> findByDoctype(String doctype);
 
-  @Query('SELECT * FROM documents WHERE doctype = :doctype AND status = :status ORDER BY modified DESC')
-  Future<List<DocumentEntity>> findByDoctypeAndStatus(String doctype, String status);
+  @Query(
+    'SELECT * FROM documents WHERE doctype = :doctype AND status = :status ORDER BY modified DESC',
+  )
+  Future<List<DocumentEntity>> findByDoctypeAndStatus(
+    String doctype,
+    String status,
+  );
 
   @Query('SELECT * FROM documents WHERE status = :status ORDER BY modified ASC')
   Future<List<DocumentEntity>> findByStatus(String status);
 
-  @Query('SELECT * FROM documents WHERE doctype = :doctype AND modified > :since ORDER BY modified DESC')
+  @Query(
+    'SELECT * FROM documents WHERE doctype = :doctype AND modified > :since ORDER BY modified DESC',
+  )
   Future<List<DocumentEntity>> findByDoctypeSince(String doctype, int since);
 
-  @Query('SELECT * FROM documents WHERE doctype IN (:doctypes) ORDER BY modified DESC')
+  @Query(
+    'SELECT * FROM documents WHERE doctype IN (:doctypes) ORDER BY modified DESC',
+  )
   Future<List<DocumentEntity>> findByDoctypes(List<String> doctypes);
 
   @Query('SELECT * FROM documents ORDER BY modified DESC')

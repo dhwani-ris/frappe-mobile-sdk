@@ -52,7 +52,7 @@ class DocField {
 
   factory DocField.fromJson(Map<String, dynamic> json) {
     // Handle Frappe's JSON format - can be int (0/1) or bool
-    bool _parseBool(dynamic value, {bool defaultValue = false}) {
+    bool parseBool(dynamic value, {bool defaultValue = false}) {
       if (value == null) return defaultValue;
       if (value is bool) return value;
       if (value is int) return value == 1;
@@ -60,7 +60,7 @@ class DocField {
       return defaultValue;
     }
 
-    int? _parseInt(dynamic value) {
+    int? parseInt(dynamic value) {
       if (value == null) return null;
       if (value is int) return value;
       if (value is num) return value.toInt();
@@ -68,7 +68,7 @@ class DocField {
       return null;
     }
 
-    String? _linkFiltersFromJson(dynamic value) {
+    String? linkFiltersFromJson(dynamic value) {
       if (value == null) return null;
       if (value is String) return value.isEmpty ? null : value;
       if (value is List) return value.isEmpty ? null : jsonEncode(value);
@@ -79,24 +79,33 @@ class DocField {
       fieldname: json['fieldname'] as String?,
       fieldtype: json['fieldtype'] as String? ?? 'Data',
       label: json['label'] as String?,
-      reqd: _parseBool(json['reqd']),
-      readOnly: _parseBool(json['read_only']) || _parseBool(json['readOnly']),
-      hidden: _parseBool(json['hidden']),
+      reqd: parseBool(json['reqd']),
+      readOnly: parseBool(json['read_only']) || parseBool(json['readOnly']),
+      hidden: parseBool(json['hidden']),
       options: json['options'] as String?,
       dependsOn: json['depends_on'] as String? ?? json['dependsOn'] as String?,
-      mandatoryDependsOn: json['mandatory_depends_on'] as String? ?? json['mandatoryDependsOn'] as String?,
-      readOnlyDependsOn: json['read_only_depends_on'] as String? ?? json['readOnlyDependsOn'] as String?,
-      linkFilters: _linkFiltersFromJson(json['link_filters'] ?? json['linkFilters']),
+      mandatoryDependsOn:
+          json['mandatory_depends_on'] as String? ??
+          json['mandatoryDependsOn'] as String?,
+      readOnlyDependsOn:
+          json['read_only_depends_on'] as String? ??
+          json['readOnlyDependsOn'] as String?,
+      linkFilters: linkFiltersFromJson(
+        json['link_filters'] ?? json['linkFilters'],
+      ),
       section: json['section'] as String?,
-      defaultValue: json['default'] as String? ?? json['defaultValue'] as String?,
+      defaultValue:
+          json['default'] as String? ?? json['defaultValue'] as String?,
       description: json['description'] as String?,
       placeholder: json['placeholder'] as String?,
-      precision: _parseInt(json['precision']),
-      length: _parseInt(json['length']),
-      idx: _parseInt(json['idx']),
-      inListView: _parseBool(json['in_list_view']) || _parseBool(json['inListView']),
-      allowMultiple: _parseBool(json['allow_multiple']) ||
-          _parseBool(json['allowMultiple']) ||
+      precision: parseInt(json['precision']),
+      length: parseInt(json['length']),
+      idx: parseInt(json['idx']),
+      inListView:
+          parseBool(json['in_list_view']) || parseBool(json['inListView']),
+      allowMultiple:
+          parseBool(json['allow_multiple']) ||
+          parseBool(json['allowMultiple']) ||
           _isMultiSelectFieldType(json['fieldtype'] as String?),
     );
   }

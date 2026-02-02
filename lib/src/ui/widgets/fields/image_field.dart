@@ -30,8 +30,14 @@ class ImageField extends BaseField {
     if (path.startsWith('http://') || path.startsWith('https://')) return true;
     // Frappe file_url is typically /files/...; avoid treating local paths as server
     if (path.startsWith('/files/')) return true;
-    if (path.startsWith('/home/') || path.startsWith('/Users/') || path.startsWith('/tmp/')) return false;
-    if (path.contains('/Pictures/') || path.contains('/Screenshots/')) return false;
+    if (path.startsWith('/home/') ||
+        path.startsWith('/Users/') ||
+        path.startsWith('/tmp/')) {
+      return false;
+    }
+    if (path.contains('/Pictures/') || path.contains('/Screenshots/')) {
+      return false;
+    }
     // Other leading / could be server path
     return path.startsWith('/');
   }
@@ -44,7 +50,10 @@ class ImageField extends BaseField {
     return path.startsWith('/') ? '$base${path.substring(1)}' : '$base$path';
   }
 
-  Future<void> _onImagePicked(FormFieldState<String> fieldState, File file) async {
+  Future<void> _onImagePicked(
+    FormFieldState<String> fieldState,
+    File file,
+  ) async {
     if (uploadFile != null) {
       try {
         final url = await uploadFile!(file);
@@ -90,10 +99,7 @@ class ImageField extends BaseField {
             if (field.label != null)
               Padding(
                 padding: const EdgeInsets.only(bottom: 8.0),
-                child: Text(
-                  field.label!,
-                  style: style?.labelStyle,
-                ),
+                child: Text(field.label!, style: style?.labelStyle),
               ),
             if (currentValue != null && currentValue.isNotEmpty)
               Padding(
@@ -135,7 +141,9 @@ class ImageField extends BaseField {
                   onPressed: enabled && !field.readOnly
                       ? () async {
                           final picker = ImagePicker();
-                          final result = await picker.pickImage(source: ImageSource.gallery);
+                          final result = await picker.pickImage(
+                            source: ImageSource.gallery,
+                          );
                           if (result != null) {
                             await _onImagePicked(fieldState, File(result.path));
                           }
@@ -149,7 +157,9 @@ class ImageField extends BaseField {
                   onPressed: enabled && !field.readOnly
                       ? () async {
                           final picker = ImagePicker();
-                          final result = await picker.pickImage(source: ImageSource.camera);
+                          final result = await picker.pickImage(
+                            source: ImageSource.camera,
+                          );
                           if (result != null) {
                             await _onImagePicked(fieldState, File(result.path));
                           }

@@ -36,8 +36,14 @@ class OfflineRepository {
   }
 
   /// Get document by server ID
-  Future<Document?> getDocumentByServerId(String serverId, String doctype) async {
-    final entity = await _database.documentDao.findByServerId(serverId, doctype);
+  Future<Document?> getDocumentByServerId(
+    String serverId,
+    String doctype,
+  ) async {
+    final entity = await _database.documentDao.findByServerId(
+      serverId,
+      doctype,
+    );
     return entity != null ? _entityToDocument(entity) : null;
   }
 
@@ -62,7 +68,10 @@ class OfflineRepository {
 
   /// Get dirty documents for a specific DocType
   Future<List<Document>> getDirtyDocumentsByDoctype(String doctype) async {
-    final entities = await _database.documentDao.findByDoctypeAndStatus(doctype, 'dirty');
+    final entities = await _database.documentDao.findByDoctypeAndStatus(
+      doctype,
+      'dirty',
+    );
     return entities.map(_entityToDocument).toList();
   }
 
@@ -74,7 +83,10 @@ class OfflineRepository {
   }
 
   /// Update document data
-  Future<Document> updateDocumentData(String localId, Map<String, dynamic> data) async {
+  Future<Document> updateDocumentData(
+    String localId,
+    Map<String, dynamic> data,
+  ) async {
     final document = await getDocumentByLocalId(localId);
     if (document == null) {
       throw Exception('Document not found: $localId');
@@ -96,12 +108,11 @@ class OfflineRepository {
     await updateDocument(deleted);
     return deleted;
   }
-  
+
   /// Hard delete document (permanently remove from database)
   Future<void> hardDeleteDocument(String localId) async {
     await _database.documentDao.deleteByLocalId(localId);
   }
-
 
   /// Save server document locally
   Future<Document> saveServerDocument({

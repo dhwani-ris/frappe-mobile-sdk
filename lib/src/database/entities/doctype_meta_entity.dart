@@ -1,7 +1,7 @@
 import 'package:floor/floor.dart';
 
 /// Entity for storing DocType metadata
-/// 
+///
 /// Uses generic storage - no table per Doctype
 @Entity(tableName: 'doctype_meta')
 class DoctypeMetaEntity {

@@ -49,7 +49,10 @@ class OAuth2Helper {
   /// Generate code_verifier (43–128 chars) and code_challenge (S256)
   static PkcePair generatePkce() {
     final random = Random.secure();
-    final verifier = List.generate(64, (_) => _chars[random.nextInt(_chars.length)]).join();
+    final verifier = List.generate(
+      64,
+      (_) => _chars[random.nextInt(_chars.length)],
+    ).join();
     final verifierBytes = utf8.encode(verifier);
     final digest = sha256.convert(verifierBytes);
     final challenge = base64Url.encode(digest.bytes).replaceAll('=', '');
@@ -69,7 +72,9 @@ class OAuth2Helper {
     String responseType = 'code',
   }) {
     final path = baseUrl.endsWith('/') ? baseUrl : '$baseUrl/';
-    final uri = Uri.parse('${path}api/method/frappe.integrations.oauth2.authorize');
+    final uri = Uri.parse(
+      '${path}api/method/frappe.integrations.oauth2.authorize',
+    );
     final q = <String, String>{
       'client_id': clientId,
       'redirect_uri': redirectUri,
@@ -93,7 +98,9 @@ class OAuth2Helper {
     String? codeVerifier,
   }) async {
     final path = baseUrl.endsWith('/') ? baseUrl : '$baseUrl/';
-    final uri = Uri.parse('${path}api/method/frappe.integrations.oauth2.get_token');
+    final uri = Uri.parse(
+      '${path}api/method/frappe.integrations.oauth2.get_token',
+    );
     final body = <String, String>{
       'grant_type': 'authorization_code',
       'code': code,
@@ -105,11 +112,18 @@ class OAuth2Helper {
     }
     final response = await http.post(
       uri,
-      headers: {'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json'},
-      body: body.keys.map((k) => '$k=${Uri.encodeComponent(body[k]!)}').join('&'),
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Accept': 'application/json',
+      },
+      body: body.keys
+          .map((k) => '$k=${Uri.encodeComponent(body[k]!)}')
+          .join('&'),
     );
     if (response.statusCode != 200) {
-      throw Exception('OAuth token exchange failed: ${response.statusCode} ${response.body}');
+      throw Exception(
+        'OAuth token exchange failed: ${response.statusCode} ${response.body}',
+      );
     }
     final json = jsonDecode(response.body) as Map<String, dynamic>;
     return OAuth2TokenResponse.fromJson(json);
@@ -122,7 +136,9 @@ class OAuth2Helper {
     required String refreshToken,
   }) async {
     final path = baseUrl.endsWith('/') ? baseUrl : '$baseUrl/';
-    final uri = Uri.parse('${path}api/method/frappe.integrations.oauth2.get_token');
+    final uri = Uri.parse(
+      '${path}api/method/frappe.integrations.oauth2.get_token',
+    );
     final body = <String, String>{
       'grant_type': 'refresh_token',
       'refresh_token': refreshToken,
@@ -130,11 +146,18 @@ class OAuth2Helper {
     };
     final response = await http.post(
       uri,
-      headers: {'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json'},
-      body: body.keys.map((k) => '$k=${Uri.encodeComponent(body[k]!)}').join('&'),
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Accept': 'application/json',
+      },
+      body: body.keys
+          .map((k) => '$k=${Uri.encodeComponent(body[k]!)}')
+          .join('&'),
     );
     if (response.statusCode != 200) {
-      throw Exception('OAuth refresh failed: ${response.statusCode} ${response.body}');
+      throw Exception(
+        'OAuth refresh failed: ${response.statusCode} ${response.body}',
+      );
     }
     final json = jsonDecode(response.body) as Map<String, dynamic>;
     return OAuth2TokenResponse.fromJson(json);
@@ -146,7 +169,9 @@ class OAuth2Helper {
     required String token,
   }) async {
     final path = baseUrl.endsWith('/') ? baseUrl : '$baseUrl/';
-    final uri = Uri.parse('${path}api/method/frappe.integrations.oauth2.revoke_token');
+    final uri = Uri.parse(
+      '${path}api/method/frappe.integrations.oauth2.revoke_token',
+    );
     await http.post(
       uri,
       headers: {'Content-Type': 'application/x-www-form-urlencoded'},

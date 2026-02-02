@@ -26,19 +26,23 @@ class DateField extends BaseField {
     }
 
     return FormBuilderDateTimePicker(
-      key: ValueKey('${field.fieldname}_${initialDate?.toIso8601String() ?? ''}'),
+      key: ValueKey(
+        '${field.fieldname}_${initialDate?.toIso8601String() ?? ''}',
+      ),
       name: field.fieldname ?? '',
       initialValue: initialDate,
       enabled: enabled && !field.readOnly,
       inputType: InputType.date,
       format: DateFormat('yyyy-MM-dd'),
-      decoration: style?.decoration ?? InputDecoration(
-        hintText: field.placeholder ?? 'Select date',
-        border: const OutlineInputBorder(),
-        filled: field.readOnly,
-        fillColor: field.readOnly ? Colors.grey[200] : null,
-        suffixIcon: const Icon(Icons.calendar_today),
-      ),
+      decoration:
+          style?.decoration ??
+          InputDecoration(
+            hintText: field.placeholder ?? 'Select date',
+            border: const OutlineInputBorder(),
+            filled: field.readOnly,
+            fillColor: field.readOnly ? Colors.grey[200] : null,
+            suffixIcon: const Icon(Icons.calendar_today),
+          ),
       validator: field.reqd
           ? (value) {
               if (value == null) {

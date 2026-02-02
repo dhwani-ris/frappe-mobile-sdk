@@ -21,21 +21,21 @@ abstract class AppDatabase extends FloorDatabase {
 
   /// Get database instance
   static Future<AppDatabase> getInstance() async {
-    return await $FloorAppDatabase
-        .databaseBuilder('frappe_mobile_sdk.db')
-        .addMigrations([
-          Migration(1, 2, (database) async {
-            // Create link_options table
-            await database.execute(
-                'CREATE TABLE IF NOT EXISTS `link_options` (`id` INTEGER PRIMARY KEY AUTOINCREMENT, `doctype` TEXT NOT NULL, `name` TEXT NOT NULL, `label` TEXT, `dataJson` TEXT, `lastUpdated` INTEGER NOT NULL)');
-            // Create indexes
-            await database.execute(
-                'CREATE INDEX IF NOT EXISTS `index_link_options_doctype` ON `link_options` (`doctype`)');
-            await database.execute(
-                'CREATE INDEX IF NOT EXISTS `index_link_options_lastUpdated` ON `link_options` (`lastUpdated`)');
-          }),
-        ])
-        .build();
+    return await $FloorAppDatabase.databaseBuilder('frappe_mobile_sdk.db').addMigrations([
+      Migration(1, 2, (database) async {
+        // Create link_options table
+        await database.execute(
+          'CREATE TABLE IF NOT EXISTS `link_options` (`id` INTEGER PRIMARY KEY AUTOINCREMENT, `doctype` TEXT NOT NULL, `name` TEXT NOT NULL, `label` TEXT, `dataJson` TEXT, `lastUpdated` INTEGER NOT NULL)',
+        );
+        // Create indexes
+        await database.execute(
+          'CREATE INDEX IF NOT EXISTS `index_link_options_doctype` ON `link_options` (`doctype`)',
+        );
+        await database.execute(
+          'CREATE INDEX IF NOT EXISTS `index_link_options_lastUpdated` ON `link_options` (`lastUpdated`)',
+        );
+      }),
+    ]).build();
   }
 
   /// Clear all data from all tables. Call on logout to wipe local DB.

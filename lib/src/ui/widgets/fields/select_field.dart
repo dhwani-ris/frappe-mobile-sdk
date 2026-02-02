@@ -23,7 +23,11 @@ class SelectField extends BaseField {
   /// Parse stored value to list for multi-select (comma-separated)
   List<String> _valueToList(String? raw) {
     if (raw == null || raw.isEmpty) return [];
-    return raw.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+    return raw
+        .split(',')
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toList();
   }
 
   /// Serialize list to comma-separated string for form/server
@@ -42,31 +46,39 @@ class SelectField extends BaseField {
         name: field.fieldname ?? '',
         initialValue: value?.toString() ?? field.defaultValue ?? '',
         enabled: false,
-        decoration: style?.decoration ?? InputDecoration(
-          hintText: 'No options available',
-          border: const OutlineInputBorder(),
-          filled: true,
-          fillColor: Colors.grey[200],
-        ),
+        decoration:
+            style?.decoration ??
+            InputDecoration(
+              hintText: 'No options available',
+              border: const OutlineInputBorder(),
+              filled: true,
+              fillColor: Colors.grey[200],
+            ),
       );
     }
 
     if (field.allowMultiple) {
       final initialList = _valueToList(value?.toString() ?? field.defaultValue);
-      final validInitialList = initialList.where((v) => options.contains(v)).toList();
+      final validInitialList = initialList
+          .where((v) => options.contains(v))
+          .toList();
 
       return FormBuilderCheckboxGroup<String>(
         key: ValueKey('${field.fieldname}_multi_${options.length}'),
         name: field.fieldname ?? '',
         initialValue: validInitialList,
         enabled: enabled && !field.readOnly,
-        decoration: style?.decoration ?? InputDecoration(
-          labelText: field.placeholder ?? 'Select ${field.displayLabel}',
-          border: const OutlineInputBorder(),
-          filled: field.readOnly,
-          fillColor: field.readOnly ? Colors.grey[200] : null,
-        ),
-        options: options.map((opt) => FormBuilderFieldOption(value: opt, child: Text(opt))).toList(),
+        decoration:
+            style?.decoration ??
+            InputDecoration(
+              labelText: field.placeholder ?? 'Select ${field.displayLabel}',
+              border: const OutlineInputBorder(),
+              filled: field.readOnly,
+              fillColor: field.readOnly ? Colors.grey[200] : null,
+            ),
+        options: options
+            .map((opt) => FormBuilderFieldOption(value: opt, child: Text(opt)))
+            .toList(),
         validator: field.reqd
             ? (value) {
                 if (value == null || value.isEmpty) {
@@ -90,21 +102,22 @@ class SelectField extends BaseField {
     }
 
     return FormBuilderDropdown<String>(
-      key: ValueKey('${field.fieldname}_${validInitialValue ?? ''}_${options.length}'),
+      key: ValueKey(
+        '${field.fieldname}_${validInitialValue ?? ''}_${options.length}',
+      ),
       name: field.fieldname ?? '',
       initialValue: validInitialValue,
       enabled: enabled && !field.readOnly,
-      decoration: style?.decoration ?? InputDecoration(
-        hintText: field.placeholder ?? 'Select ${field.displayLabel}',
-        border: const OutlineInputBorder(),
-        filled: field.readOnly,
-        fillColor: field.readOnly ? Colors.grey[200] : null,
-      ),
+      decoration:
+          style?.decoration ??
+          InputDecoration(
+            hintText: field.placeholder ?? 'Select ${field.displayLabel}',
+            border: const OutlineInputBorder(),
+            filled: field.readOnly,
+            fillColor: field.readOnly ? Colors.grey[200] : null,
+          ),
       items: options.map((option) {
-        return DropdownMenuItem<String>(
-          value: option,
-          child: Text(option),
-        );
+        return DropdownMenuItem<String>(value: option, child: Text(option));
       }).toList(),
       validator: field.reqd
           ? (value) {

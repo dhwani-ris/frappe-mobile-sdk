@@ -20,7 +20,10 @@ class RatingField extends BaseField {
   Widget buildField(BuildContext context) {
     int maxRating = 5;
     if (field.options != null) {
-      final options = field.options!.split('\n').where((o) => o.trim().isNotEmpty).toList();
+      final options = field.options!
+          .split('\n')
+          .where((o) => o.trim().isNotEmpty)
+          .toList();
       if (options.isNotEmpty) {
         maxRating = int.tryParse(options.first) ?? 5;
       }
@@ -55,15 +58,13 @@ class RatingField extends BaseField {
             if (field.label != null)
               Padding(
                 padding: const EdgeInsets.only(bottom: 8.0),
-                child: Text(
-                  field.label!,
-                  style: style?.labelStyle,
-                ),
+                child: Text(field.label!, style: style?.labelStyle),
               ),
             Row(
               children: List.generate(maxRating, (index) {
                 final rating = index + 1;
-                final isSelected = fieldState.value != null && fieldState.value! >= rating;
+                final isSelected =
+                    fieldState.value != null && fieldState.value! >= rating;
                 return GestureDetector(
                   onTap: enabled && !field.readOnly
                       ? () {

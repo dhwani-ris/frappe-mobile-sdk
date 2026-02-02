@@ -24,8 +24,8 @@ class ApiTracer {
     if (body != null) {
       final preview = body is Map || body is List
           ? body.toString().length > 500
-              ? '${body.toString().substring(0, 500)}...'
-              : body.toString()
+                ? '${body.toString().substring(0, 500)}...'
+                : body.toString()
           : body.toString();
       buffer.writeln('  body: $preview');
     }
@@ -47,8 +47,8 @@ class ApiTracer {
     } else if (body != null) {
       final preview = body is Map || body is List
           ? body.toString().length > 500
-              ? '${body.toString().substring(0, 500)}...'
-              : body.toString()
+                ? '${body.toString().substring(0, 500)}...'
+                : body.toString()
           : body.toString();
       buffer.writeln('  body: $preview');
     }

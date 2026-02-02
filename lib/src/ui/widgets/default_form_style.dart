@@ -12,10 +12,7 @@ class DefaultFormStyle {
       fontWeight: FontWeight.w500,
       color: Colors.black87,
     ),
-    descriptionStyle: TextStyle(
-      fontSize: 12,
-      color: Colors.grey[600],
-    ),
+    descriptionStyle: TextStyle(fontSize: 12, color: Colors.grey[600]),
     sectionTitleStyle: const TextStyle(
       fontSize: 18,
       fontWeight: FontWeight.bold,
@@ -28,9 +25,7 @@ class DefaultFormStyle {
       labelText: field.label ?? field.fieldname,
       hintText: field.placeholder,
       helperText: field.description,
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(8),
-      ),
+      border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
       enabledBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(8),
         borderSide: BorderSide(color: Colors.grey[300]!),
@@ -50,10 +45,7 @@ class DefaultFormStyle {
   );
 
   static FrappeFormStyle get compact => FrappeFormStyle(
-    labelStyle: const TextStyle(
-      fontSize: 12,
-      fontWeight: FontWeight.w500,
-    ),
+    labelStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500),
     sectionTitleStyle: const TextStyle(
       fontSize: 16,
       fontWeight: FontWeight.bold,
@@ -63,18 +55,13 @@ class DefaultFormStyle {
     fieldPadding: const EdgeInsets.only(bottom: 12),
     fieldDecoration: (field) => InputDecoration(
       labelText: field.label ?? field.fieldname,
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(4),
-      ),
+      border: OutlineInputBorder(borderRadius: BorderRadius.circular(4)),
       contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
     ),
   );
 
   static FrappeFormStyle get material => FrappeFormStyle(
-    labelStyle: const TextStyle(
-      fontSize: 14,
-      fontWeight: FontWeight.w500,
-    ),
+    labelStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
     sectionTitleStyle: const TextStyle(
       fontSize: 20,
       fontWeight: FontWeight.bold,

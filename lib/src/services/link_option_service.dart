@@ -18,7 +18,8 @@ class LinkOptionService {
   }
 
   void _putCache(String key, List<LinkOptionEntity> options) {
-    if (_memoryCache.length >= _kLinkOptionCacheMaxEntries && !_memoryCache.containsKey(key)) {
+    if (_memoryCache.length >= _kLinkOptionCacheMaxEntries &&
+        !_memoryCache.containsKey(key)) {
       if (_cacheKeys.isNotEmpty) {
         final evict = _cacheKeys.removeAt(0);
         _memoryCache.remove(evict);
@@ -44,7 +45,7 @@ class LinkOptionService {
       documents = await _client.doctype.list(
         doctype,
         filters: filters,
-        limit_page_length: 1000,
+        limitPageLength: 1000,
       );
     } catch (_) {
       return [];
@@ -59,20 +60,28 @@ class LinkOptionService {
       final name = docMap['name'] as String? ?? '';
       if (name.isEmpty) continue;
       String? label;
-      for (final k in ['title', 'full_name', 'customer_name', 'supplier_name', 'label']) {
+      for (final k in [
+        'title',
+        'full_name',
+        'customer_name',
+        'supplier_name',
+        'label',
+      ]) {
         if (docMap.containsKey(k) && docMap[k] != null) {
           label = docMap[k].toString();
           break;
         }
       }
       label ??= name;
-      linkOptions.add(LinkOptionEntity(
-        doctype: doctype,
-        name: name,
-        label: label,
-        dataJson: jsonEncode(docMap),
-        lastUpdated: now,
-      ));
+      linkOptions.add(
+        LinkOptionEntity(
+          doctype: doctype,
+          name: name,
+          label: label,
+          dataJson: jsonEncode(docMap),
+          lastUpdated: now,
+        ),
+      );
     }
 
     _putCache(key, linkOptions);
@@ -85,7 +94,9 @@ class LinkOptionService {
     if (linkFiltersJson == null || linkFiltersJson.isEmpty) return [];
     try {
       final decoded = jsonDecode(linkFiltersJson) as dynamic;
-      final filters = decoded is List ? List<dynamic>.from(decoded) : <dynamic>[];
+      final filters = decoded is List
+          ? List<dynamic>.from(decoded)
+          : <dynamic>[];
       final names = <String>[];
       for (final filter in filters) {
         if (filter is! List || filter.length < 4) continue;
@@ -113,7 +124,9 @@ class LinkOptionService {
     if (linkFiltersJson == null || linkFiltersJson.isEmpty) return null;
     try {
       final decoded = jsonDecode(linkFiltersJson) as dynamic;
-      final filters = decoded is List ? List<dynamic>.from(decoded) : <dynamic>[];
+      final filters = decoded is List
+          ? List<dynamic>.from(decoded)
+          : <dynamic>[];
       final result = <List<dynamic>>[];
       for (final filter in filters) {
         if (filter is! List || filter.length < 4) continue;

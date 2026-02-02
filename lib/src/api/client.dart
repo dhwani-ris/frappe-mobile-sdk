@@ -39,8 +39,11 @@ class FrappeClient {
     return QueryBuilder(this.doctype, doctype);
   }
 
-  Future<dynamic> call(String method,
-      {Map<String, dynamic>? args, String httpMethod = 'POST'}) {
+  Future<dynamic> call(
+    String method, {
+    Map<String, dynamic>? args,
+    String httpMethod = 'POST',
+  }) {
     return _restHelper.call(method, args: args, httpMethod: httpMethod);
   }
 }

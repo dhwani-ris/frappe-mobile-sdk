@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'package:floor/floor.dart';
 
-/// TypeConverter for Map<String, dynamic> to JSON string
+/// TypeConverter for `Map<String, dynamic>` to JSON string
 class MapTypeConverter extends TypeConverter<Map<String, dynamic>, String> {
   @override
   Map<String, dynamic> decode(String databaseValue) {

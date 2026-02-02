@@ -1,7 +1,7 @@
 import 'package:floor/floor.dart';
 
 /// Entity for storing documents
-/// 
+///
 /// Uses generic storage - no table per Doctype
 /// All documents stored in single table with JSON data
 @Entity(tableName: 'documents')

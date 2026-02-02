@@ -1,5 +1,5 @@
 /// Frappe Mobile SDK - Production-ready Flutter package for Frappe
-/// 
+///
 /// This package provides:
 /// - Direct Frappe API access (Auth, CRUD, file upload)
 /// - Dynamic form rendering using Frappe metadata
@@ -26,10 +26,17 @@ export 'src/api/client.dart' show FrappeClient;
 export 'src/api/doctype_service.dart' show DoctypeService;
 export 'src/api/document_service.dart' show DocumentService;
 export 'src/api/attachment_service.dart' show AttachmentService;
-export 'src/api/exceptions.dart' show FrappeException, AuthException, ApiException, NetworkException, ValidationException;
+export 'src/api/exceptions.dart'
+    show
+        FrappeException,
+        AuthException,
+        ApiException,
+        NetworkException,
+        ValidationException;
 export 'src/api/frappe_document.dart' show FrappeDocument;
 export 'src/api/query_builder.dart' show QueryBuilder;
-export 'src/api/oauth2_helper.dart' show OAuth2Helper, OAuth2TokenResponse, PkcePair;
+export 'src/api/oauth2_helper.dart'
+    show OAuth2Helper, OAuth2TokenResponse, PkcePair;
 
 // SDK Initialization (Easy Setup)
 export 'src/sdk/frappe_sdk.dart';

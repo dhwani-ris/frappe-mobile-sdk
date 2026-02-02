@@ -3,7 +3,9 @@ import '../entities/link_option_entity.dart';
 
 @dao
 abstract class LinkOptionDao {
-  @Query('SELECT * FROM link_options WHERE doctype = :doctype ORDER BY lastUpdated DESC')
+  @Query(
+    'SELECT * FROM link_options WHERE doctype = :doctype ORDER BY lastUpdated DESC',
+  )
   Future<List<LinkOptionEntity>> findByDoctype(String doctype);
 
   @Query('SELECT * FROM link_options')

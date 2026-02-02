@@ -82,7 +82,9 @@ class AuthService {
     final expiresAtStr = await _storage.read(key: _keyOAuthExpiresAt);
 
     if (accessToken != null && accessToken.isNotEmpty) {
-      final expiresAt = expiresAtStr != null ? int.tryParse(expiresAtStr) : null;
+      final expiresAt = expiresAtStr != null
+          ? int.tryParse(expiresAtStr)
+          : null;
       final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
       if (expiresAt == null || expiresAt > now + 60) {
         _client!.rest.setBearerToken(accessToken);
@@ -208,10 +210,7 @@ class AuthService {
       state: state ?? DateTime.now().millisecondsSinceEpoch.toString(),
       codeChallenge: pkce.codeChallenge,
     );
-    return {
-      'authorize_url': url,
-      'code_verifier': pkce.codeVerifier,
-    };
+    return {'authorize_url': url, 'code_verifier': pkce.codeVerifier};
   }
 
   /// Logout and optionally clear all local database data.

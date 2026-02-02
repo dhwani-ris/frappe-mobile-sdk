@@ -25,7 +25,9 @@ class CheckField extends BaseField {
         initialValue = value == '1' || value.toLowerCase() == 'true';
       }
     } else if (field.defaultValue != null) {
-      initialValue = field.defaultValue == '1' || field.defaultValue!.toLowerCase() == 'true';
+      initialValue =
+          field.defaultValue == '1' ||
+          field.defaultValue!.toLowerCase() == 'true';
     }
 
     return FormBuilderSwitch(
