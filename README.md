@@ -216,6 +216,7 @@ You can also create fully custom styles using `FrappeFormStyle`.
 - **[SETUP.md](SETUP.md)** - Detailed setup instructions
 - **[CUSTOMIZATION.md](CUSTOMIZATION.md)** - UI customization guide
 - **[TESTING.md](TESTING.md)** - Testing strategies
+- **[.github/PRE_COMMIT.md](.github/PRE_COMMIT.md)** - Pre-commit hooks & CI for contributors
 
 ## 🏗️ Architecture
 
@@ -250,6 +251,22 @@ You can also create fully custom styles using `FrappeFormStyle`.
 2. **Form Renderer** - Use `FrappeFormRenderer` for dynamic forms
 3. **Hybrid Approach** - Mix API calls with form renderer
 4. **Offline-First** - Use `OfflineRepository` + `SyncService`
+
+## 🤝 Contributing
+
+Before committing, run pre-commit checks. See **[.github/PRE_COMMIT.md](.github/PRE_COMMIT.md)** for setup.
+
+```bash
+# Flutter pre-commit (recommended)
+dart run flutter_pre_commit
+
+# Or pre-commit framework
+pre-commit run --all-files
+```
+
+**GitHub Actions** run automatically on every **push** and **pull request** to `main`, `master`, and `develop`:
+- **CI** – `flutter analyze`, `dart format`, `flutter test`
+- **Semantic commits** – validates Conventional Commits format
 
 ## 📄 License
 
