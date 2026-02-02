@@ -6,7 +6,7 @@ repos:
     hooks:
       - id: dart-format
         name: dart format
-        entry: dart format --set-exit-if-changed
+        entry: dart format .
         language: system
         types: [dart]
 

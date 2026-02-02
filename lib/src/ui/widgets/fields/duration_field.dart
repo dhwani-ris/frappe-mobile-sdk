@@ -20,7 +20,7 @@ class DurationField extends BaseField {
     final hours = seconds ~/ 3600;
     final minutes = (seconds % 3600) ~/ 60;
     final secs = seconds % 60;
-    
+
     if (hours > 0) {
       return '${hours.toString().padLeft(2, '0')}:${minutes.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}';
     }
@@ -29,11 +29,11 @@ class DurationField extends BaseField {
 
   int? _parseDuration(String? value) {
     if (value == null || value.isEmpty) return null;
-    
+
     // Try parsing as integer (seconds)
     final intValue = int.tryParse(value);
     if (intValue != null) return intValue;
-    
+
     // Try parsing HH:MM:SS format
     final parts = value.split(':');
     if (parts.length == 3) {
@@ -50,7 +50,7 @@ class DurationField extends BaseField {
         return minutes * 60 + seconds;
       }
     }
-    
+
     return null;
   }
 
@@ -68,16 +68,20 @@ class DurationField extends BaseField {
     return FormBuilderTextField(
       key: ValueKey('${field.fieldname}_${initialSeconds ?? ''}'),
       name: field.fieldname ?? '',
-      initialValue: initialSeconds != null ? _formatDuration(initialSeconds) : null,
+      initialValue: initialSeconds != null
+          ? _formatDuration(initialSeconds)
+          : null,
       enabled: enabled && !field.readOnly,
       keyboardType: TextInputType.number,
-      decoration: style?.decoration ?? InputDecoration(
-        hintText: field.placeholder ?? 'HH:MM:SS or seconds',
-        border: const OutlineInputBorder(),
-        filled: field.readOnly,
-        fillColor: field.readOnly ? Colors.grey[200] : null,
-        helperText: 'Format: HH:MM:SS or seconds',
-      ),
+      decoration:
+          style?.decoration ??
+          InputDecoration(
+            hintText: field.placeholder ?? 'HH:MM:SS or seconds',
+            border: const OutlineInputBorder(),
+            filled: field.readOnly,
+            fillColor: field.readOnly ? Colors.grey[200] : null,
+            helperText: 'Format: HH:MM:SS or seconds',
+          ),
       validator: field.reqd
           ? (value) {
               if (value == null || value.isEmpty) {
@@ -89,7 +93,9 @@ class DurationField extends BaseField {
               return null;
             }
           : (value) {
-              if (value != null && value.isNotEmpty && _parseDuration(value) == null) {
+              if (value != null &&
+                  value.isNotEmpty &&
+                  _parseDuration(value) == null) {
                 return 'Invalid duration format';
               }
               return null;

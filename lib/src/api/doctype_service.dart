@@ -26,19 +26,19 @@ class DoctypeService {
     String doctype, {
     List<String>? fields,
     List<List<dynamic>>? filters,
-    int limit_start = 0,
-    int limit_page_length = 20,
-    String? order_by,
+    int limitStart = 0,
+    int limitPageLength = 20,
+    String? orderBy,
   }) async {
     final methodParams = <String, dynamic>{
       'doctype': doctype,
-      'limit_start': limit_start,
-      'limit_page_length': limit_page_length,
+      'limit_start': limitStart,
+      'limit_page_length': limitPageLength,
     };
 
     if (fields != null) methodParams['fields'] = jsonEncode(fields);
     if (filters != null) methodParams['filters'] = jsonEncode(filters);
-    if (order_by != null) methodParams['order_by'] = order_by;
+    if (orderBy != null) methodParams['order_by'] = orderBy;
 
     final response = await _restHelper.get(
       '/api/method/frappe.client.get_list',

@@ -12,7 +12,7 @@ class FrappeException implements Exception {
 }
 
 class AuthException extends FrappeException {
-  AuthException(String message, [int? statusCode]) : super(message, statusCode);
+  AuthException(super.message, [super.statusCode]);
 
   @override
   String toString() => 'AuthException: $message (Status: $statusCode)';
@@ -20,14 +20,15 @@ class AuthException extends FrappeException {
 
 class ApiException extends FrappeException {
   final dynamic details;
-  ApiException(String message, [int? statusCode, this.details]) : super(message, statusCode);
+  ApiException(super.message, [super.statusCode, this.details]);
 
   @override
-  String toString() => 'ApiException: $message (Status: $statusCode) Details: $details';
+  String toString() =>
+      'ApiException: $message (Status: $statusCode) Details: $details';
 }
 
 class NetworkException extends FrappeException {
-  NetworkException(String message, [int? statusCode]) : super(message, statusCode);
+  NetworkException(super.message, [super.statusCode]);
 
   @override
   String toString() => 'NetworkException: $message';

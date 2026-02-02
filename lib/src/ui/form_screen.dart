@@ -18,6 +18,7 @@ class FormScreen extends StatefulWidget {
   final OfflineRepository repository;
   final SyncService? syncService;
   final LinkOptionService? linkOptionService;
+
   /// When set, save/delete go to server first; local repo is updated after success.
   final FrappeClient? api;
   final Function()? onSaveSuccess;
@@ -47,7 +48,9 @@ class _FormScreenState extends State<FormScreen> {
     for (final f in widget.meta.fields) {
       final name = f.fieldname;
       if (f.allowMultiple && name != null && payload[name] is List) {
-        payload[name] = (payload[name] as List).map((e) => e.toString()).join(',');
+        payload[name] = (payload[name] as List)
+            .map((e) => e.toString())
+            .join(',');
       }
     }
 
@@ -64,9 +67,11 @@ class _FormScreenState extends State<FormScreen> {
             widget.meta.name,
             payload,
           );
-          final serverName = result['name']?.toString() ?? result['docname']?.toString();
+          final serverName =
+              result['name']?.toString() ?? result['docname']?.toString();
           if (serverName != null) {
-            final merged = Map<String, dynamic>.from(payload)..['name'] = serverName;
+            final merged = Map<String, dynamic>.from(payload)
+              ..['name'] = serverName;
             await widget.repository.saveServerDocument(
               doctype: widget.meta.name,
               serverId: serverName,
@@ -117,14 +122,18 @@ class _FormScreenState extends State<FormScreen> {
         final isOnline = await widget.syncService!.isOnline();
         if (isOnline) {
           try {
-            final syncResult = await widget.syncService!.pushSync(doctype: widget.meta.name);
+            final syncResult = await widget.syncService!.pushSync(
+              doctype: widget.meta.name,
+            );
             if (mounted) {
               if (syncResult.errors.isNotEmpty) {
                 _showSyncErrorDialog(syncResult.errors);
               } else if (syncResult.failed > 0) {
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
-                    content: Text('Saved locally. ${syncResult.failed} update(s) failed to sync.'),
+                    content: Text(
+                      'Saved locally. ${syncResult.failed} update(s) failed to sync.',
+                    ),
                     backgroundColor: Colors.orange,
                     action: SnackBarAction(
                       label: 'Details',
@@ -136,7 +145,9 @@ class _FormScreenState extends State<FormScreen> {
               } else if (syncResult.success > 0) {
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
-                    content: Text('Saved and synced (${syncResult.success} document(s))'),
+                    content: Text(
+                      'Saved and synced (${syncResult.success} document(s))',
+                    ),
                     backgroundColor: Colors.green,
                   ),
                 );
@@ -378,7 +389,7 @@ class _FormScreenState extends State<FormScreen> {
             ),
           Expanded(
             child: FrappeFormBuilder(
-              key: widget.document != null 
+              key: widget.document != null
                   ? ValueKey('form_${widget.document!.localId}')
                   : const ValueKey('form_new'),
               meta: widget.meta,
@@ -389,7 +400,8 @@ class _FormScreenState extends State<FormScreen> {
               uploadFile: widget.api != null
                   ? (file) async {
                       final res = await widget.api!.attachment.uploadFile(file);
-                      return res['file_url'] as String? ?? res['file_name'] as String?;
+                      return res['file_url'] as String? ??
+                          res['file_name'] as String?;
                     }
                   : null,
               fileUrlBase: widget.api?.baseUrl,

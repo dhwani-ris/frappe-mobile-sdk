@@ -37,23 +37,26 @@ class LinkField extends BaseField {
           validInitialValue = null;
         }
       }
-      
+
       return FormBuilderDropdown<String>(
-        key: ValueKey('${field.fieldname}_${validInitialValue ?? ''}_${options!.length}'),
+        key: ValueKey(
+          '${field.fieldname}_${validInitialValue ?? ''}_${options!.length}',
+        ),
         name: field.fieldname ?? '',
         initialValue: validInitialValue,
         enabled: enabled && !field.readOnly,
-        decoration: style?.decoration ?? InputDecoration(
-          hintText: field.placeholder ?? 'Select ${field.displayLabel}',
-          border: const OutlineInputBorder(),
-          filled: field.readOnly,
-          fillColor: field.readOnly ? Colors.grey[200] : null,
-        ),
+        decoration:
+            style?.decoration ??
+            InputDecoration(
+              hintText: field.placeholder ?? 'Select ${field.displayLabel}',
+              border: const OutlineInputBorder(),
+              filled: field.readOnly,
+              fillColor: field.readOnly ? Colors.grey[200] : null,
+            ),
         items: options!
-            .map((option) => DropdownMenuItem(
-                  value: option,
-                  child: Text(option),
-                ))
+            .map(
+              (option) => DropdownMenuItem(value: option, child: Text(option)),
+            )
             .toList(),
         validator: field.reqd
             ? (value) {
@@ -68,7 +71,9 @@ class LinkField extends BaseField {
     }
 
     // If field.options contains a DocType name, fetch from service
-    if (field.options != null && field.options!.isNotEmpty && linkOptionService != null) {
+    if (field.options != null &&
+        field.options!.isNotEmpty &&
+        linkOptionService != null) {
       return _LinkFieldDropdown(
         field: field,
         value: value,
@@ -158,7 +163,9 @@ class _LinkFieldDropdownState extends State<_LinkFieldDropdown> {
       widget.linkFilters,
       widget.formData,
     );
-    final dependentNames = LinkOptionService.getDependentFieldNames(widget.linkFilters);
+    final dependentNames = LinkOptionService.getDependentFieldNames(
+      widget.linkFilters,
+    );
     if (widget.linkFilters != null &&
         widget.linkFilters!.isNotEmpty &&
         filters == null &&
@@ -189,7 +196,7 @@ class _LinkFieldDropdownState extends State<_LinkFieldDropdown> {
       });
     }
   }
-  
+
   @override
   void didUpdateWidget(_LinkFieldDropdown oldWidget) {
     super.didUpdateWidget(oldWidget);
@@ -206,7 +213,7 @@ class _LinkFieldDropdownState extends State<_LinkFieldDropdown> {
         }
       }
     }
-    
+
     if (oldWidget.linkFilters != widget.linkFilters || formDataChanged) {
       _loadOptions();
     }
@@ -220,15 +227,17 @@ class _LinkFieldDropdownState extends State<_LinkFieldDropdown> {
         name: widget.field.fieldname ?? '',
         initialValue: _kBlankValue,
         enabled: false,
-        decoration: widget.style?.decoration ?? InputDecoration(
-          hintText: 'Loading...',
-          border: const OutlineInputBorder(),
-          suffixIcon: const SizedBox(
-            width: 20,
-            height: 20,
-            child: CircularProgressIndicator(strokeWidth: 2),
-          ),
-        ),
+        decoration:
+            widget.style?.decoration ??
+            const InputDecoration(
+              hintText: 'Loading...',
+              border: OutlineInputBorder(),
+              suffixIcon: SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            ),
         items: [
           DropdownMenuItem<String>(
             value: _kBlankValue,
@@ -258,31 +267,37 @@ class _LinkFieldDropdownState extends State<_LinkFieldDropdown> {
         name: widget.field.fieldname ?? '',
         initialValue: _kBlankValue,
         enabled: !isWaiting && (widget.enabled && !widget.field.readOnly),
-        decoration: widget.style?.decoration ?? InputDecoration(
-          hintText: hint,
-          border: const OutlineInputBorder(),
-          suffixIcon: isWaiting
-              ? null
-              : IconButton(
-                  icon: const Icon(Icons.refresh),
-                  onPressed: _loadOptions,
-                  tooltip: 'Refresh options',
-                ),
-        ),
+        decoration:
+            widget.style?.decoration ??
+            InputDecoration(
+              hintText: hint,
+              border: const OutlineInputBorder(),
+              suffixIcon: isWaiting
+                  ? null
+                  : IconButton(
+                      icon: const Icon(Icons.refresh),
+                      onPressed: _loadOptions,
+                      tooltip: 'Refresh options',
+                    ),
+            ),
         items: [
           DropdownMenuItem<String>(
             value: _kBlankValue,
             child: Text(hint, style: TextStyle(color: Colors.grey[600])),
           ),
         ],
-        onChanged: isWaiting ? null : (v) => widget.onChanged?.call(v == _kBlankValue ? null : v),
+        onChanged: isWaiting
+            ? null
+            : (v) => widget.onChanged?.call(v == _kBlankValue ? null : v),
       );
     }
 
     // Validate initialValue is in options list
     final initialValueStr = widget.value?.toString();
     String? validInitialValue;
-    if (initialValueStr != null && initialValueStr.isNotEmpty && _options.isNotEmpty) {
+    if (initialValueStr != null &&
+        initialValueStr.isNotEmpty &&
+        _options.isNotEmpty) {
       // Try to find matching option by name first
       try {
         final matchingOption = _options.firstWhere(
@@ -303,46 +318,55 @@ class _LinkFieldDropdownState extends State<_LinkFieldDropdown> {
       }
     }
 
-    final placeholder = widget.field.placeholder ?? 'Select ${widget.field.displayLabel}';
+    final placeholder =
+        widget.field.placeholder ?? 'Select ${widget.field.displayLabel}';
     final allItems = <DropdownMenuItem<String>>[
       DropdownMenuItem<String>(
         value: _kBlankValue,
         child: Text(placeholder, style: TextStyle(color: Colors.grey[600])),
       ),
-      ..._options.map((option) => DropdownMenuItem<String>(
-            value: option.name,
-            child: Text(option.label ?? option.name),
-          )),
+      ..._options.map(
+        (option) => DropdownMenuItem<String>(
+          value: option.name,
+          child: Text(option.label ?? option.name),
+        ),
+      ),
     ];
     final initialVal = validInitialValue ?? _kBlankValue;
 
     return FormBuilderDropdown<String>(
-      key: ValueKey('${widget.field.fieldname}_${initialVal}_${_options.length}'),
+      key: ValueKey(
+        '${widget.field.fieldname}_${initialVal}_${_options.length}',
+      ),
       name: widget.field.fieldname ?? '',
       initialValue: initialVal,
       enabled: widget.enabled && !widget.field.readOnly,
-      decoration: widget.style?.decoration ?? InputDecoration(
-        hintText: placeholder,
-        border: const OutlineInputBorder(),
-        filled: widget.field.readOnly,
-        fillColor: widget.field.readOnly ? Colors.grey[200] : null,
-        suffixIcon: IconButton(
-          icon: const Icon(Icons.refresh),
-          onPressed: _loadOptions,
-          tooltip: 'Refresh options',
-        ),
-      ),
+      decoration:
+          widget.style?.decoration ??
+          InputDecoration(
+            hintText: placeholder,
+            border: const OutlineInputBorder(),
+            filled: widget.field.readOnly,
+            fillColor: widget.field.readOnly ? Colors.grey[200] : null,
+            suffixIcon: IconButton(
+              icon: const Icon(Icons.refresh),
+              onPressed: _loadOptions,
+              tooltip: 'Refresh options',
+            ),
+          ),
       items: allItems,
       validator: widget.field.reqd
           ? (value) {
-              if (value == null || value.toString().isEmpty || value == _kBlankValue) {
+              if (value == null ||
+                  value.toString().isEmpty ||
+                  value == _kBlankValue) {
                 return '${widget.field.displayLabel} is required';
               }
               return null;
             }
           : null,
-      onChanged: (val) => widget.onChanged?.call(val == _kBlankValue ? null : val),
+      onChanged: (val) =>
+          widget.onChanged?.call(val == _kBlankValue ? null : val),
     );
   }
 }
-

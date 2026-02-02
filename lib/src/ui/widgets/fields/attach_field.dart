@@ -25,7 +25,7 @@ class AttachField extends BaseField {
   @override
   Widget buildField(BuildContext context) {
     String? filePath = value?.toString();
-    
+
     return FormBuilderField<String>(
       key: ValueKey('${field.fieldname}_$filePath'),
       name: field.fieldname ?? '',
@@ -46,10 +46,7 @@ class AttachField extends BaseField {
             if (field.label != null)
               Padding(
                 padding: const EdgeInsets.only(bottom: 8.0),
-                child: Text(
-                  field.label!,
-                  style: style?.labelStyle,
-                ),
+                child: Text(field.label!, style: style?.labelStyle),
               ),
             OutlinedButton.icon(
               onPressed: enabled && !field.readOnly
@@ -75,7 +72,9 @@ class AttachField extends BaseField {
                     }
                   : null,
               icon: const Icon(Icons.attach_file),
-              label: Text(filePath != null ? _getFileName(filePath) : 'Select file'),
+              label: Text(
+                filePath != null ? _getFileName(filePath) : 'Select file',
+              ),
             ),
             if (filePath != null && filePath.isNotEmpty)
               Padding(
@@ -100,7 +99,7 @@ class AttachField extends BaseField {
       },
     );
   }
-  
+
   String _getFileName(String path) {
     return path.split('/').last;
   }

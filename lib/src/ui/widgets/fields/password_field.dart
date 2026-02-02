@@ -24,13 +24,15 @@ class PasswordField extends BaseField {
       initialValue: value?.toString() ?? field.defaultValue ?? '',
       enabled: enabled && !field.readOnly,
       obscureText: true,
-      decoration: style?.decoration ?? InputDecoration(
-        hintText: field.placeholder ?? 'Enter password',
-        border: const OutlineInputBorder(),
-        filled: field.readOnly,
-        fillColor: field.readOnly ? Colors.grey[200] : null,
-        suffixIcon: const Icon(Icons.lock),
-      ),
+      decoration:
+          style?.decoration ??
+          InputDecoration(
+            hintText: field.placeholder ?? 'Enter password',
+            border: const OutlineInputBorder(),
+            filled: field.readOnly,
+            fillColor: field.readOnly ? Colors.grey[200] : null,
+            suffixIcon: const Icon(Icons.lock),
+          ),
       validator: field.reqd
           ? (value) {
               if (value == null || value.isEmpty) {

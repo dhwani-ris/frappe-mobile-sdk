@@ -59,9 +59,10 @@ class _SyncStatusScreenState extends State<SyncStatusScreen> {
 
     try {
       final result = await widget.syncService.pushSync();
-      
+
       setState(() {
-        _syncStatus = 'Sync completed: ${result.success} succeeded, ${result.failed} failed';
+        _syncStatus =
+            'Sync completed: ${result.success} succeeded, ${result.failed} failed';
         _isSyncing = false;
       });
 
@@ -86,7 +87,7 @@ class _SyncStatusScreenState extends State<SyncStatusScreen> {
         _syncStatus = 'Sync failed: $e';
         _isSyncing = false;
       });
-      
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -108,9 +109,10 @@ class _SyncStatusScreenState extends State<SyncStatusScreen> {
 
     try {
       final result = await widget.syncService.pushSync(doctype: doctype);
-      
+
       setState(() {
-        _syncStatus = 'Sync completed: ${result.success} succeeded, ${result.failed} failed';
+        _syncStatus =
+            'Sync completed: ${result.success} succeeded, ${result.failed} failed';
         _isSyncing = false;
       });
 
@@ -135,7 +137,7 @@ class _SyncStatusScreenState extends State<SyncStatusScreen> {
         _syncStatus = 'Sync failed: $e';
         _isSyncing = false;
       });
-      
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -248,7 +250,9 @@ class _SyncStatusScreenState extends State<SyncStatusScreen> {
                       _syncStatus!,
                       style: TextStyle(
                         color: _isSyncing ? Colors.blue[900] : Colors.grey[900],
-                        fontWeight: _isSyncing ? FontWeight.bold : FontWeight.normal,
+                        fontWeight: _isSyncing
+                            ? FontWeight.bold
+                            : FontWeight.normal,
                       ),
                     ),
                   ),
@@ -277,104 +281,109 @@ class _SyncStatusScreenState extends State<SyncStatusScreen> {
             child: _isLoading
                 ? const Center(child: CircularProgressIndicator())
                 : _dirtyDocuments.isEmpty
-                    ? Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            const Icon(Icons.check_circle, size: 64, color: Colors.green),
-                            const SizedBox(height: 16),
-                            const Text(
-                              'All documents synced',
-                              style: TextStyle(
-                                fontSize: 18,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                            Text(
-                              'No pending changes',
-                              style: TextStyle(color: Colors.grey[600]),
-                            ),
-                          ],
+                ? Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Icon(
+                          Icons.check_circle,
+                          size: 64,
+                          color: Colors.green,
                         ),
-                      )
-                    : ListView.builder(
-                        itemCount: _dirtyDocuments.length,
-                        itemBuilder: (context, index) {
-                          final doc = _dirtyDocuments[index];
-                          
-                          // Group by doctype
-                          final isFirstOfDoctype = index == 0 ||
-                              _dirtyDocuments[index - 1].doctype != doc.doctype;
-                          
-                          return Column(
-                            children: [
-                              if (isFirstOfDoctype)
-                                Container(
-                                  width: double.infinity,
-                                  padding: const EdgeInsets.all(12),
-                                  color: Colors.blue[50],
-                                  child: Row(
-                                    children: [
-                                      const Icon(Icons.folder, color: Colors.blue),
-                                      const SizedBox(width: 8),
-                                      Text(
-                                        doc.doctype,
-                                        style: const TextStyle(
-                                          fontWeight: FontWeight.bold,
-                                          fontSize: 16,
-                                        ),
-                                      ),
-                                      const Spacer(),
-                                      TextButton.icon(
-                                        onPressed: _isSyncing
-                                            ? null
-                                            : () => _syncDoctype(doc.doctype),
-                                        icon: const Icon(Icons.sync, size: 18),
-                                        label: const Text('Sync'),
-                                      ),
-                                    ],
+                        const SizedBox(height: 16),
+                        const Text(
+                          'All documents synced',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          'No pending changes',
+                          style: TextStyle(color: Colors.grey[600]),
+                        ),
+                      ],
+                    ),
+                  )
+                : ListView.builder(
+                    itemCount: _dirtyDocuments.length,
+                    itemBuilder: (context, index) {
+                      final doc = _dirtyDocuments[index];
+
+                      // Group by doctype
+                      final isFirstOfDoctype =
+                          index == 0 ||
+                          _dirtyDocuments[index - 1].doctype != doc.doctype;
+
+                      return Column(
+                        children: [
+                          if (isFirstOfDoctype)
+                            Container(
+                              width: double.infinity,
+                              padding: const EdgeInsets.all(12),
+                              color: Colors.blue[50],
+                              child: Row(
+                                children: [
+                                  const Icon(Icons.folder, color: Colors.blue),
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    doc.doctype,
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 16,
+                                    ),
                                   ),
-                                ),
-                              ListTile(
-                                leading: Icon(
-                                  doc.status == 'deleted'
-                                      ? Icons.delete
-                                      : doc.serverId == null
-                                          ? Icons.add_circle
-                                          : Icons.edit,
-                                  color: doc.status == 'deleted'
-                                      ? Colors.red
-                                      : doc.serverId == null
-                                          ? Colors.orange
-                                          : Colors.blue,
-                                ),
-                                title: Text(
-                                  doc.serverId ?? doc.localId,
-                                  style: TextStyle(
-                                    fontWeight: doc.serverId == null
-                                        ? FontWeight.bold
-                                        : FontWeight.normal,
+                                  const Spacer(),
+                                  TextButton.icon(
+                                    onPressed: _isSyncing
+                                        ? null
+                                        : () => _syncDoctype(doc.doctype),
+                                    icon: const Icon(Icons.sync, size: 18),
+                                    label: const Text('Sync'),
                                   ),
-                                ),
-                                subtitle: Text(
-                                  doc.status == 'deleted'
-                                      ? 'Pending deletion'
-                                      : doc.serverId == null
-                                          ? 'New document (not synced)'
-                                          : 'Pending update',
-                                ),
-                                trailing: Icon(
-                                  Icons.cloud_upload,
-                                  color: Colors.orange[300],
-                                  size: 20,
-                                ),
+                                ],
                               ),
-                              const Divider(height: 1),
-                            ],
-                          );
-                        },
-                      ),
+                            ),
+                          ListTile(
+                            leading: Icon(
+                              doc.status == 'deleted'
+                                  ? Icons.delete
+                                  : doc.serverId == null
+                                  ? Icons.add_circle
+                                  : Icons.edit,
+                              color: doc.status == 'deleted'
+                                  ? Colors.red
+                                  : doc.serverId == null
+                                  ? Colors.orange
+                                  : Colors.blue,
+                            ),
+                            title: Text(
+                              doc.serverId ?? doc.localId,
+                              style: TextStyle(
+                                fontWeight: doc.serverId == null
+                                    ? FontWeight.bold
+                                    : FontWeight.normal,
+                              ),
+                            ),
+                            subtitle: Text(
+                              doc.status == 'deleted'
+                                  ? 'Pending deletion'
+                                  : doc.serverId == null
+                                  ? 'New document (not synced)'
+                                  : 'Pending update',
+                            ),
+                            trailing: Icon(
+                              Icons.cloud_upload,
+                              color: Colors.orange[300],
+                              size: 20,
+                            ),
+                          ),
+                          const Divider(height: 1),
+                        ],
+                      );
+                    },
+                  ),
           ),
         ],
       ),

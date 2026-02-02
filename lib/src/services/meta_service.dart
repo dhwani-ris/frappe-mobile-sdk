@@ -21,7 +21,8 @@ class MetaService {
     if (_metaCache.containsKey(doctype)) {
       _metaCacheOrder.remove(doctype);
     } else {
-      while (_metaCache.length >= _kMetaCacheMaxSize && _metaCacheOrder.isNotEmpty) {
+      while (_metaCache.length >= _kMetaCacheMaxSize &&
+          _metaCacheOrder.isNotEmpty) {
         final evict = _metaCacheOrder.removeAt(0);
         _metaCache.remove(evict);
       }
@@ -77,7 +78,10 @@ class MetaService {
 
   /// Get metadata for a DocType. Loads only when required; uses bounded cache.
   /// Call [clearDocTypeCache] when leaving the screen to free memory.
-  Future<DocTypeMeta> getMeta(String doctype, {bool forceRefresh = false}) async {
+  Future<DocTypeMeta> getMeta(
+    String doctype, {
+    bool forceRefresh = false,
+  }) async {
     if (!forceRefresh && _metaCache.containsKey(doctype)) {
       _metaCacheOrder.remove(doctype);
       _metaCacheOrder.add(doctype);

@@ -44,13 +44,15 @@ class TimeField extends BaseField {
       enabled: enabled && !field.readOnly,
       inputType: InputType.time,
       format: DateFormat('HH:mm:ss'),
-      decoration: style?.decoration ?? InputDecoration(
-        hintText: field.placeholder ?? 'Select time',
-        border: const OutlineInputBorder(),
-        filled: field.readOnly,
-        fillColor: field.readOnly ? Colors.grey[200] : null,
-        suffixIcon: const Icon(Icons.access_time),
-      ),
+      decoration:
+          style?.decoration ??
+          InputDecoration(
+            hintText: field.placeholder ?? 'Select time',
+            border: const OutlineInputBorder(),
+            filled: field.readOnly,
+            fillColor: field.readOnly ? Colors.grey[200] : null,
+            suffixIcon: const Icon(Icons.access_time),
+          ),
       validator: field.reqd
           ? (value) {
               if (value == null) {

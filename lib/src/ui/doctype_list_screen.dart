@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import '../models/app_config.dart';
-import '../models/document.dart';
 import '../services/offline_repository.dart';
 
 /// Screen showing list of Doctypes configured in app_config
@@ -54,41 +53,37 @@ class _DoctypeListScreenState extends State<DoctypeListScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Doctypes'),
-      ),
+      appBar: AppBar(title: const Text('Doctypes')),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
           : widget.appConfig.doctypes.isEmpty
-              ? const Center(
-                  child: Text('No doctypes configured'),
-                )
-              : ListView.builder(
-                  itemCount: widget.appConfig.doctypes.length,
-                  itemBuilder: (context, index) {
-                    final doctype = widget.appConfig.doctypes[index];
-                    final count = _documentCounts[doctype] ?? 0;
+          ? const Center(child: Text('No doctypes configured'))
+          : ListView.builder(
+              itemCount: widget.appConfig.doctypes.length,
+              itemBuilder: (context, index) {
+                final doctype = widget.appConfig.doctypes[index];
+                final count = _documentCounts[doctype] ?? 0;
 
-                    return ListTile(
-                      leading: const Icon(Icons.description),
-                      title: Text(doctype),
-                      subtitle: Text('$count document${count != 1 ? 's' : ''}'),
-                      trailing: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          if (widget.onNewDocument != null)
-                            IconButton(
-                              icon: const Icon(Icons.add),
-                              onPressed: () => widget.onNewDocument!(doctype),
-                              tooltip: 'New document',
-                            ),
-                          const Icon(Icons.chevron_right),
-                        ],
-                      ),
-                      onTap: () => widget.onDoctypeSelected(doctype),
-                    );
-                  },
-                ),
+                return ListTile(
+                  leading: const Icon(Icons.description),
+                  title: Text(doctype),
+                  subtitle: Text('$count document${count != 1 ? 's' : ''}'),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (widget.onNewDocument != null)
+                        IconButton(
+                          icon: const Icon(Icons.add),
+                          onPressed: () => widget.onNewDocument!(doctype),
+                          tooltip: 'New document',
+                        ),
+                      const Icon(Icons.chevron_right),
+                    ],
+                  ),
+                  onTap: () => widget.onDoctypeSelected(doctype),
+                );
+              },
+            ),
     );
   }
 }

@@ -7,11 +7,7 @@ class FieldStyle {
   final TextStyle? descriptionStyle;
   final InputDecoration? decoration;
 
-  const FieldStyle({
-    this.labelStyle,
-    this.descriptionStyle,
-    this.decoration,
-  });
+  const FieldStyle({this.labelStyle, this.descriptionStyle, this.decoration});
 }
 
 /// Base class for all Frappe field widgets
@@ -48,18 +44,19 @@ abstract class BaseField extends StatelessWidget {
               children: [
                 Text(
                   field.displayLabel,
-                  style: style?.labelStyle ?? TextStyle(
-                    fontWeight: field.reqd ? FontWeight.bold : FontWeight.normal,
-                    fontSize: 14,
-                  ),
+                  style:
+                      style?.labelStyle ??
+                      TextStyle(
+                        fontWeight: field.reqd
+                            ? FontWeight.bold
+                            : FontWeight.normal,
+                        fontSize: 14,
+                      ),
                 ),
                 if (field.reqd)
                   const Padding(
                     padding: EdgeInsets.only(left: 4.0),
-                    child: Text(
-                      '*',
-                      style: TextStyle(color: Colors.red),
-                    ),
+                    child: Text('*', style: TextStyle(color: Colors.red)),
                   ),
               ],
             ),
@@ -70,10 +67,11 @@ abstract class BaseField extends StatelessWidget {
             padding: const EdgeInsets.only(top: 4.0),
             child: Text(
               field.description!,
-              style: style?.descriptionStyle ?? 
-                  Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: Colors.grey[600],
-                  ),
+              style:
+                  style?.descriptionStyle ??
+                  Theme.of(
+                    context,
+                  ).textTheme.bodySmall?.copyWith(color: Colors.grey[600]),
             ),
           ),
       ],

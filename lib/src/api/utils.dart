@@ -41,11 +41,27 @@ String toUserFriendlyMessage(dynamic error) {
   if (raw.isEmpty) return 'Something went wrong. Please try again.';
 
   final patterns = [
-    RegExp(r'ValidationError:\s*(.+?)(?:\s*Errors:|\s*Traceback|\n|$)', caseSensitive: false, dotAll: true),
-    RegExp(r'frappe\.exceptions\.ValidationError:\s*(.+?)(?:\s*Errors:|\s*Traceback|\n|$)', caseSensitive: false, dotAll: true),
-    RegExp(r'ValidationException:\s*(.+?)(?:\s*Errors:|\s*Traceback|\n|$)', caseSensitive: false, dotAll: true),
+    RegExp(
+      r'ValidationError:\s*(.+?)(?:\s*Errors:|\s*Traceback|\n|$)',
+      caseSensitive: false,
+      dotAll: true,
+    ),
+    RegExp(
+      r'frappe\.exceptions\.ValidationError:\s*(.+?)(?:\s*Errors:|\s*Traceback|\n|$)',
+      caseSensitive: false,
+      dotAll: true,
+    ),
+    RegExp(
+      r'ValidationException:\s*(.+?)(?:\s*Errors:|\s*Traceback|\n|$)',
+      caseSensitive: false,
+      dotAll: true,
+    ),
     RegExp(r'(.+?\s+is\s+required\.?)', caseSensitive: false, dotAll: true),
-    RegExp(r'(.+?)(?:\s*Traceback\s*\(most recent)', caseSensitive: false, dotAll: true),
+    RegExp(
+      r'(.+?)(?:\s*Traceback\s*\(most recent)',
+      caseSensitive: false,
+      dotAll: true,
+    ),
     RegExp(r'^([^\n\r]+)', dotAll: false),
   ];
 

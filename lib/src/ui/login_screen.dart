@@ -25,7 +25,9 @@ class _LoginScreenState extends State<LoginScreen> {
   final _usernameController = TextEditingController();
   final _passwordController = TextEditingController();
   final _oauthClientIdController = TextEditingController();
-  final _oauthRedirectController = TextEditingController(text: 'myapp://oauth/callback');
+  final _oauthRedirectController = TextEditingController(
+    text: 'myapp://oauth/callback',
+  );
   bool _isLoading = false;
   String? _errorMessage;
   bool _showBaseUrl = true;
@@ -57,7 +59,8 @@ class _LoginScreenState extends State<LoginScreen> {
     final redirectUri = _oauthRedirectController.text.trim();
     if (baseUrl.isEmpty || clientId.isEmpty || redirectUri.isEmpty) {
       setState(() {
-        _errorMessage = 'Enter Base URL, OAuth Client ID and Redirect URI for OAuth';
+        _errorMessage =
+            'Enter Base URL, OAuth Client ID and Redirect URI for OAuth';
       });
       return;
     }
@@ -73,7 +76,10 @@ class _LoginScreenState extends State<LoginScreen> {
       final authorizeUrl = map['authorize_url']!;
       _oauthCodeVerifier = map['code_verifier'];
       if (await canLaunchUrl(Uri.parse(authorizeUrl))) {
-        await launchUrl(Uri.parse(authorizeUrl), mode: LaunchMode.externalApplication);
+        await launchUrl(
+          Uri.parse(authorizeUrl),
+          mode: LaunchMode.externalApplication,
+        );
       }
       if (!mounted) return;
       _showOAuthCodeDialog(authorizeUrl);
@@ -104,7 +110,10 @@ class _LoginScreenState extends State<LoginScreen> {
               TextButton.icon(
                 onPressed: () async {
                   if (await canLaunchUrl(Uri.parse(authorizeUrl))) {
-                    await launchUrl(Uri.parse(authorizeUrl), mode: LaunchMode.externalApplication);
+                    await launchUrl(
+                      Uri.parse(authorizeUrl),
+                      mode: LaunchMode.externalApplication,
+                    );
                   }
                 },
                 icon: const Icon(Icons.open_in_browser),
@@ -183,7 +192,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
     try {
       final baseUrl = _baseUrlController.text.trim();
-      
+
       // Initialize if not already done
       if (widget.authService.client == null) {
         widget.authService.initialize(baseUrl);
@@ -210,9 +219,7 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Frappe Login'),
-      ),
+      appBar: AppBar(title: const Text('Frappe Login')),
       body: Center(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(24.0),
@@ -222,19 +229,12 @@ class _LoginScreenState extends State<LoginScreen> {
               mainAxisAlignment: MainAxisAlignment.center,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const Icon(
-                  Icons.login,
-                  size: 80,
-                  color: Colors.blue,
-                ),
+                const Icon(Icons.login, size: 80, color: Colors.blue),
                 const SizedBox(height: 32),
                 const Text(
                   'Login to Frappe',
                   textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.bold,
-                  ),
+                  style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
                 ),
                 const SizedBox(height: 32),
                 if (_showBaseUrl)
@@ -333,9 +333,14 @@ class _LoginScreenState extends State<LoginScreen> {
                 ),
                 const SizedBox(height: 16),
                 OutlinedButton.icon(
-                  onPressed: () => setState(() => _showOAuthSection = !_showOAuthSection),
-                  icon: Icon(_showOAuthSection ? Icons.expand_less : Icons.expand_more),
-                  label: Text(_showOAuthSection ? 'Hide OAuth' : 'Login with OAuth'),
+                  onPressed: () =>
+                      setState(() => _showOAuthSection = !_showOAuthSection),
+                  icon: Icon(
+                    _showOAuthSection ? Icons.expand_less : Icons.expand_more,
+                  ),
+                  label: Text(
+                    _showOAuthSection ? 'Hide OAuth' : 'Login with OAuth',
+                  ),
                 ),
                 if (_showOAuthSection) ...[
                   const SizedBox(height: 16),

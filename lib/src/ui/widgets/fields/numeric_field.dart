@@ -20,19 +20,23 @@ class NumericField extends BaseField {
     final isPercent = field.fieldtype == 'Percent';
 
     return FormBuilderTextField(
-      key: ValueKey('${field.fieldname}_${value?.toString() ?? field.defaultValue ?? ''}'),
+      key: ValueKey(
+        '${field.fieldname}_${value?.toString() ?? field.defaultValue ?? ''}',
+      ),
       name: field.fieldname ?? '',
       initialValue: value?.toString() ?? field.defaultValue ?? '',
       enabled: enabled && !field.readOnly,
       keyboardType: TextInputType.numberWithOptions(decimal: !isInt),
-      decoration: style?.decoration ?? InputDecoration(
-        hintText: field.placeholder,
-        border: const OutlineInputBorder(),
-        filled: field.readOnly,
-        fillColor: field.readOnly ? Colors.grey[200] : null,
-        prefixText: isCurrency ? '₹ ' : null,
-        suffixText: isPercent ? '%' : null,
-      ),
+      decoration:
+          style?.decoration ??
+          InputDecoration(
+            hintText: field.placeholder,
+            border: const OutlineInputBorder(),
+            filled: field.readOnly,
+            fillColor: field.readOnly ? Colors.grey[200] : null,
+            prefixText: isCurrency ? '₹ ' : null,
+            suffixText: isPercent ? '%' : null,
+          ),
       validator: field.reqd
           ? (value) {
               if (value == null || value.toString().isEmpty) {
@@ -49,9 +53,7 @@ class NumericField extends BaseField {
           : null,
       onChanged: (val) {
         if (val != null && val.isNotEmpty) {
-          final numValue = isInt
-              ? int.tryParse(val)
-              : double.tryParse(val);
+          final numValue = isInt ? int.tryParse(val) : double.tryParse(val);
           onChanged?.call(numValue);
         } else {
           onChanged?.call(null);

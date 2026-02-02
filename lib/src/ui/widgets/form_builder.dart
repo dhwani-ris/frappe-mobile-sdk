@@ -14,22 +14,22 @@ import 'default_form_style.dart';
 class FrappeFormStyle {
   /// Custom InputDecoration builder for text fields
   final InputDecoration Function(DocField field)? fieldDecoration;
-  
+
   /// Custom label text style
   final TextStyle? labelStyle;
-  
+
   /// Custom description text style
   final TextStyle? descriptionStyle;
-  
+
   /// Custom section title style
   final TextStyle? sectionTitleStyle;
-  
+
   /// Custom section card margin
   final EdgeInsets? sectionMargin;
-  
+
   /// Custom section card padding
   final EdgeInsets? sectionPadding;
-  
+
   /// Custom field spacing
   final EdgeInsets? fieldPadding;
 
@@ -51,15 +51,16 @@ class FrappeFormBuilder extends StatefulWidget {
   final Function(Map<String, dynamic>)? onSubmit;
   final bool readOnly;
   final LinkOptionService? linkOptionService;
-  
+
   /// Custom field factory (if null, uses default FieldFactory)
   final FieldFactory? customFieldFactory;
-  
+
   /// Custom styling options
   final FrappeFormStyle? style;
 
   /// Upload file to server; when set, Image/Attach fields upload first and store file_url
   final Future<String?> Function(File file)? uploadFile;
+
   /// Base URL for displaying uploaded file URLs (e.g. for image preview)
   final String? fileUrlBase;
 
@@ -84,14 +85,14 @@ class FrappeFormBuilder extends StatefulWidget {
 class _FormTab {
   final DocField tabField;
   final List<_FormSection> sections = [];
-  
+
   _FormTab(this.tabField);
 }
 
 class _FormSection {
   final DocField sectionField;
   final List<_FormColumn> columns = [];
-  
+
   _FormSection(this.sectionField);
 }
 
@@ -99,37 +100,39 @@ class _FormColumn {
   final List<DocField> fields = [];
 }
 
-class _FrappeFormBuilderState extends State<FrappeFormBuilder> with SingleTickerProviderStateMixin {
+class _FrappeFormBuilderState extends State<FrappeFormBuilder>
+    with SingleTickerProviderStateMixin {
   late GlobalKey<FormBuilderState> _formKey;
   late final FieldFactory _fieldFactory;
   final Map<String, dynamic> _formData = {};
   late TabController _tabController;
-  List<_FormTab> _tabs = [];
-  int _currentTabIndex = 0;
+  final List<_FormTab> _tabs = [];
 
   @override
   void initState() {
     super.initState();
     _formKey = GlobalKey<FormBuilderState>();
-    _fieldFactory = widget.customFieldFactory ?? 
+    _fieldFactory =
+        widget.customFieldFactory ??
         FieldFactory(linkOptionService: widget.linkOptionService);
-    
-    if (widget.initialData != null) {
-      _formData.addAll(widget.initialData!);
-    }
-    
+
+    _formData.addAll(widget.initialData ?? {});
+
     for (final field in widget.meta.fields) {
-      if (field.fieldname != null && !field.hidden && !_formData.containsKey(field.fieldname)) {
-        if (field.defaultValue != null) {
-          _formData[field.fieldname!] = field.defaultValue;
-        }
+      if (field.fieldname != null &&
+          !field.hidden &&
+          !_formData.containsKey(field.fieldname)) {
+        _formData[field.fieldname!] ??= field.defaultValue;
       }
     }
-    
+
     _buildFormStructure();
-    _tabController = TabController(length: _tabs.isEmpty ? 1 : _tabs.length, vsync: this);
+    _tabController = TabController(
+      length: _tabs.isEmpty ? 1 : _tabs.length,
+      vsync: this,
+    );
   }
-  
+
   void _buildFormStructure() {
     _tabs.clear();
     _FormTab? currentTab;
@@ -142,12 +145,9 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder> with SingleTicker
       switch (field.fieldtype) {
         case FieldTypes.tabBreak:
           if (currentColumn != null) {
-            if (currentSection == null) {
-              currentSection = _FormSection(DocField(
-                fieldtype: 'Section Break',
-                label: '',
-              ));
-            }
+            currentSection ??= _FormSection(
+              DocField(fieldtype: 'Section Break', label: ''),
+            );
             currentSection.columns.add(currentColumn);
             currentColumn = null;
           }
@@ -165,12 +165,9 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder> with SingleTicker
 
         case FieldTypes.sectionBreak:
           if (currentColumn != null) {
-            if (currentSection == null) {
-              currentSection = _FormSection(DocField(
-                fieldtype: 'Section Break',
-                label: '',
-              ));
-            }
+            currentSection ??= _FormSection(
+              DocField(fieldtype: 'Section Break', label: ''),
+            );
             currentSection.columns.add(currentColumn);
             currentColumn = null;
           }
@@ -183,33 +180,22 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder> with SingleTicker
 
         case FieldTypes.columnBreak:
           if (currentColumn != null) {
-            if (currentSection == null) {
-              currentSection = _FormSection(DocField(
-                fieldtype: 'Section Break',
-                label: '',
-              ));
-            }
+            currentSection ??= _FormSection(
+              DocField(fieldtype: 'Section Break', label: ''),
+            );
             currentSection.columns.add(currentColumn);
           }
           currentColumn = _FormColumn();
           break;
 
         default:
-          if (currentColumn == null) {
-            currentColumn = _FormColumn();
-          }
-          if (currentSection == null) {
-            currentSection = _FormSection(DocField(
-              fieldtype: 'Section Break',
-              label: '',
-            ));
-          }
-          if (currentTab == null) {
-            currentTab = _FormTab(DocField(
-              fieldtype: 'Tab Break',
-              label: 'Details',
-            ));
-          }
+          currentColumn ??= _FormColumn();
+          currentSection ??= _FormSection(
+            DocField(fieldtype: 'Section Break', label: ''),
+          );
+          currentTab ??= _FormTab(
+            DocField(fieldtype: 'Tab Break', label: 'Details'),
+          );
           currentColumn.fields.add(field);
           break;
       }
@@ -217,12 +203,9 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder> with SingleTicker
 
     // Add remaining structure
     if (currentColumn != null) {
-      if (currentSection == null) {
-        currentSection = _FormSection(DocField(
-          fieldtype: 'Section Break',
-          label: '',
-        ));
-      }
+      currentSection ??= _FormSection(
+        DocField(fieldtype: 'Section Break', label: ''),
+      );
       currentSection.columns.add(currentColumn);
     }
     if (currentSection != null && currentTab != null) {
@@ -232,7 +215,7 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder> with SingleTicker
       _tabs.add(currentTab);
     }
   }
-  
+
   bool _shouldShowField(DocField field) {
     if (field.dependsOn == null || field.dependsOn!.isEmpty) {
       return true;
@@ -294,7 +277,8 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder> with SingleTicker
       allowMultiple: field.allowMultiple,
     );
 
-    final initialValue = widget.initialData?[field.fieldname] ?? field.defaultValue;
+    final initialValue =
+        widget.initialData?[field.fieldname] ?? field.defaultValue;
 
     final fieldWidget = _fieldFactory.createField(
       field: fieldWithEffectiveProps,
@@ -313,20 +297,22 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder> with SingleTicker
               _formData[field.fieldname!] = value;
             }
           }
-          
+
           // If value changed, clear dependent link fields that depend on this field
           // This ensures dependent dropdowns reset when parent field changes
           if (oldValue != value && field.fieldname != null) {
             for (final otherField in widget.meta.fields) {
-              if (otherField.fieldtype == 'Link' && 
-                  otherField.linkFilters != null && 
-                  otherField.linkFilters!.contains('eval:doc.${field.fieldname}')) {
+              if (otherField.fieldtype == 'Link' &&
+                  otherField.linkFilters != null &&
+                  otherField.linkFilters!.contains(
+                    'eval:doc.${field.fieldname}',
+                  )) {
                 // Clear the dependent field value
                 _formData.remove(otherField.fieldname);
               }
             }
           }
-          
+
           // Trigger rebuild to update dependent fields
           if (oldValue != value) {
             WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -359,9 +345,9 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder> with SingleTicker
 
   Widget _buildSection(_FormSection section) {
     final formStyle = widget.style ?? DefaultFormStyle.standard;
-    
+
     if (section.columns.isEmpty) return const SizedBox.shrink();
-    
+
     Widget content;
     if (section.columns.length == 1) {
       content = _buildColumn(section.columns.first);
@@ -370,7 +356,7 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder> with SingleTicker
       content = LayoutBuilder(
         builder: (context, constraints) {
           final isWideScreen = constraints.maxWidth > 600;
-          
+
           if (isWideScreen) {
             // Desktop/Tablet: Side by side columns
             return Row(
@@ -400,7 +386,8 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder> with SingleTicker
       );
     }
 
-    if (section.sectionField.label == null || section.sectionField.label!.isEmpty) {
+    if (section.sectionField.label == null ||
+        section.sectionField.label!.isEmpty) {
       return Padding(
         padding: formStyle.sectionPadding ?? const EdgeInsets.all(16.0),
         child: content,
@@ -416,7 +403,8 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder> with SingleTicker
           children: [
             Text(
               section.sectionField.displayLabel,
-              style: formStyle.sectionTitleStyle ?? 
+              style:
+                  formStyle.sectionTitleStyle ??
                   Theme.of(context).textTheme.titleMedium?.copyWith(
                     fontWeight: FontWeight.bold,
                   ),
@@ -434,7 +422,9 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder> with SingleTicker
       padding: const EdgeInsets.all(16.0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: tab.sections.map((section) => _buildSection(section)).toList(),
+        children: tab.sections
+            .map((section) => _buildSection(section))
+            .toList(),
       ),
     );
   }
@@ -451,10 +441,13 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder> with SingleTicker
       }
       _buildFormStructure();
       _tabController.dispose();
-      _tabController = TabController(length: _tabs.isEmpty ? 1 : _tabs.length, vsync: this);
+      _tabController = TabController(
+        length: _tabs.isEmpty ? 1 : _tabs.length,
+        vsync: this,
+      );
     }
   }
-  
+
   @override
   void dispose() {
     _tabController.dispose();
@@ -465,31 +458,34 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder> with SingleTicker
     if (_formKey.currentState?.saveAndValidate() ?? false) {
       // Save all form fields first to ensure FormBuilder captures all values
       _formKey.currentState!.save();
-      
+
       // Get all form values from FormBuilder (includes all fields)
-      final formValues = Map<String, dynamic>.from(_formKey.currentState!.value);
-      
+      final formValues = Map<String, dynamic>.from(
+        _formKey.currentState!.value,
+      );
+
       // Merge with _formData (fields that were changed via onChanged)
       formValues.addAll(_formData);
-      
+
       // Build complete form data with ALL fields from metadata
       // This ensures we save complete data, not just changed fields
       final completeFormData = <String, dynamic>{};
-      
+
       // First, initialize all fields from metadata with their default/initial values
       for (final field in widget.meta.fields) {
         if (field.fieldname != null && !field.hidden) {
           // Priority: formValues > initialData > defaultValue > empty value
-          completeFormData[field.fieldname!] = formValues[field.fieldname] ?? 
-              widget.initialData?[field.fieldname] ?? 
-              field.defaultValue ?? 
+          completeFormData[field.fieldname!] =
+              formValues[field.fieldname] ??
+              widget.initialData?[field.fieldname] ??
+              field.defaultValue ??
               (field.fieldtype == 'Check' ? 0 : '');
         }
       }
-      
+
       // Then override with any form values (user input takes precedence)
       completeFormData.addAll(formValues);
-      
+
       widget.onSubmit?.call(completeFormData);
     }
   }
@@ -507,18 +503,17 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder> with SingleTicker
           if (_tabs.length > 1)
             TabBar(
               controller: _tabController,
-              tabs: _tabs.map((tab) => Tab(text: tab.tabField.displayLabel)).toList(),
-              onTap: (index) {
-                setState(() {
-                  _currentTabIndex = index;
-                });
-              },
+              tabs: _tabs
+                  .map((tab) => Tab(text: tab.tabField.displayLabel))
+                  .toList(),
             ),
           Expanded(
             child: _tabs.length > 1
                 ? TabBarView(
                     controller: _tabController,
-                    children: _tabs.map((tab) => _buildTabContent(tab)).toList(),
+                    children: _tabs
+                        .map((tab) => _buildTabContent(tab))
+                        .toList(),
                   )
                 : _buildTabContent(_tabs.first),
           ),

@@ -50,9 +50,9 @@ class QueryBuilder {
       doctype,
       fields: _fields.isEmpty ? ['*'] : _fields,
       filters: _filters,
-      limit_start: _limitStart,
-      limit_page_length: _limitPageLength,
-      order_by: _orderBy,
+      limitStart: _limitStart,
+      limitPageLength: _limitPageLength,
+      orderBy: _orderBy,
     );
   }
 

@@ -22,18 +22,16 @@ class DocTypeMeta {
 
   factory DocTypeMeta.fromJson(Map<String, dynamic> json) {
     final fieldsJson = json['fields'] as List<dynamic>? ?? [];
-    final fields = fieldsJson
-        .map((field) {
-          try {
-            return DocField.fromJson(field as Map<String, dynamic>);
-          } catch (e) {
-            return DocField(
-              fieldname: field['fieldname'] as String?,
-              fieldtype: field['fieldtype'] as String? ?? 'Data',
-            );
-          }
-        })
-        .toList();
+    final fields = fieldsJson.map((field) {
+      try {
+        return DocField.fromJson(field as Map<String, dynamic>);
+      } catch (e) {
+        return DocField(
+          fieldname: field['fieldname'] as String?,
+          fieldtype: field['fieldtype'] as String? ?? 'Data',
+        );
+      }
+    }).toList();
 
     // Handle isTable - can be int (0/1) or bool
     bool isTableValue = false;
@@ -79,7 +77,9 @@ class DocTypeMeta {
   /// Get fields that should be shown in list view
   List<DocField> get listViewFields {
     return fields
-        .where((f) => f.inListView && f.fieldname != null && f.fieldname!.isNotEmpty)
+        .where(
+          (f) => f.inListView && f.fieldname != null && f.fieldname!.isNotEmpty,
+        )
         .toList()
       ..sort((a, b) => (a.idx ?? 0).compareTo(b.idx ?? 0));
   }

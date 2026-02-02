@@ -31,8 +31,18 @@ class PhoneField extends BaseField {
 
   static final List<CountryCode> _countryCodes = [
     CountryCode(name: 'India', code: 'IN', dialCode: '+91', flag: '🇮🇳'),
-    CountryCode(name: 'United States', code: 'US', dialCode: '+1', flag: '🇺🇸'),
-    CountryCode(name: 'United Kingdom', code: 'GB', dialCode: '+44', flag: '🇬🇧'),
+    CountryCode(
+      name: 'United States',
+      code: 'US',
+      dialCode: '+1',
+      flag: '🇺🇸',
+    ),
+    CountryCode(
+      name: 'United Kingdom',
+      code: 'GB',
+      dialCode: '+44',
+      flag: '🇬🇧',
+    ),
     CountryCode(name: 'Canada', code: 'CA', dialCode: '+1', flag: '🇨🇦'),
     CountryCode(name: 'Australia', code: 'AU', dialCode: '+61', flag: '🇦🇺'),
     CountryCode(name: 'Germany', code: 'DE', dialCode: '+49', flag: '🇩🇪'),
@@ -52,7 +62,12 @@ class PhoneField extends BaseField {
     CountryCode(name: 'Finland', code: 'FI', dialCode: '+358', flag: '🇫🇮'),
     CountryCode(name: 'Poland', code: 'PL', dialCode: '+48', flag: '🇵🇱'),
     CountryCode(name: 'Turkey', code: 'TR', dialCode: '+90', flag: '🇹🇷'),
-    CountryCode(name: 'Saudi Arabia', code: 'SA', dialCode: '+966', flag: '🇸🇦'),
+    CountryCode(
+      name: 'Saudi Arabia',
+      code: 'SA',
+      dialCode: '+966',
+      flag: '🇸🇦',
+    ),
     CountryCode(name: 'UAE', code: 'AE', dialCode: '+971', flag: '🇦🇪'),
     CountryCode(name: 'Singapore', code: 'SG', dialCode: '+65', flag: '🇸🇬'),
     CountryCode(name: 'Malaysia', code: 'MY', dialCode: '+60', flag: '🇲🇾'),
@@ -64,7 +79,12 @@ class PhoneField extends BaseField {
     CountryCode(name: 'Pakistan', code: 'PK', dialCode: '+92', flag: '🇵🇰'),
     CountryCode(name: 'Sri Lanka', code: 'LK', dialCode: '+94', flag: '🇱🇰'),
     CountryCode(name: 'Nepal', code: 'NP', dialCode: '+977', flag: '🇳🇵'),
-    CountryCode(name: 'South Africa', code: 'ZA', dialCode: '+27', flag: '🇿🇦'),
+    CountryCode(
+      name: 'South Africa',
+      code: 'ZA',
+      dialCode: '+27',
+      flag: '🇿🇦',
+    ),
     CountryCode(name: 'Egypt', code: 'EG', dialCode: '+20', flag: '🇪🇬'),
     CountryCode(name: 'Nigeria', code: 'NG', dialCode: '+234', flag: '🇳🇬'),
     CountryCode(name: 'Kenya', code: 'KE', dialCode: '+254', flag: '🇰🇪'),
@@ -95,7 +115,10 @@ class PhoneField extends BaseField {
   }
 
   /// Extract phone number without country code
-  static String _extractPhoneNumber(String? phoneValue, CountryCode countryCode) {
+  static String _extractPhoneNumber(
+    String? phoneValue,
+    CountryCode countryCode,
+  ) {
     if (phoneValue == null || phoneValue.isEmpty) {
       return '';
     }
@@ -171,7 +194,10 @@ class _PhoneFieldWidgetState extends State<_PhoneFieldWidget> {
         oldWidget.selectedCountry != widget.selectedCountry ||
         oldWidget.phoneNumber != widget.phoneNumber) {
       final newCountry = PhoneField._extractCountryCode(widget.initialValue);
-      final newPhone = PhoneField._extractPhoneNumber(widget.initialValue, newCountry!);
+      final newPhone = PhoneField._extractPhoneNumber(
+        widget.initialValue,
+        newCountry!,
+      );
       setState(() {
         _selectedCountry = newCountry;
         _phoneNumber = newPhone;
@@ -227,7 +253,10 @@ class _PhoneFieldWidgetState extends State<_PhoneFieldWidget> {
                         const SizedBox(width: 6),
                         Text(
                           country.dialCode,
-                          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+                          style: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w500,
+                          ),
                         ),
                       ],
                     ),
@@ -236,7 +265,8 @@ class _PhoneFieldWidgetState extends State<_PhoneFieldWidget> {
               }).toList(),
               onChanged: widget.enabled
                   ? (CountryCode? newCountry) {
-                      if (newCountry != null && newCountry != _selectedCountry) {
+                      if (newCountry != null &&
+                          newCountry != _selectedCountry) {
                         setState(() {
                           _selectedCountry = newCountry;
                         });
@@ -251,18 +281,26 @@ class _PhoneFieldWidgetState extends State<_PhoneFieldWidget> {
         // Phone number input
         Expanded(
           child: FormBuilderTextField(
-            key: ValueKey('${widget.field.fieldname}_phone_${_phoneNumber}_${_selectedCountry.dialCode}'),
+            key: ValueKey(
+              '${widget.field.fieldname}_phone_${_phoneNumber}_${_selectedCountry.dialCode}',
+            ),
             name: widget.field.fieldname ?? '',
-            initialValue: _phoneNumber, // Only show phone number, not country code
+            initialValue:
+                _phoneNumber, // Only show phone number, not country code
             enabled: widget.enabled,
             keyboardType: TextInputType.phone,
-            decoration: widget.style?.decoration ?? InputDecoration(
-              hintText: widget.field.placeholder ?? 'Enter phone number',
-              border: const OutlineInputBorder(),
-              filled: widget.field.readOnly,
-              fillColor: widget.field.readOnly ? Colors.grey[200] : null,
-              contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-            ),
+            decoration:
+                widget.style?.decoration ??
+                InputDecoration(
+                  hintText: widget.field.placeholder ?? 'Enter phone number',
+                  border: const OutlineInputBorder(),
+                  filled: widget.field.readOnly,
+                  fillColor: widget.field.readOnly ? Colors.grey[200] : null,
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 16,
+                  ),
+                ),
             maxLength: (widget.field.length != null && widget.field.length! > 0)
                 ? widget.field.length
                 : null,
@@ -280,7 +318,10 @@ class _PhoneFieldWidgetState extends State<_PhoneFieldWidget> {
                   }
                 : (value) {
                     if (value != null && value.isNotEmpty) {
-                      final cleaned = value.replaceAll(RegExp(r'[\s\-\(\)]'), '');
+                      final cleaned = value.replaceAll(
+                        RegExp(r'[\s\-\(\)]'),
+                        '',
+                      );
                       if (!RegExp(r'^[0-9]{7,15}$').hasMatch(cleaned)) {
                         return 'Please enter a valid phone number';
                       }

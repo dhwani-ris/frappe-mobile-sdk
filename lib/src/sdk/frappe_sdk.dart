@@ -13,7 +13,7 @@ import '../services/link_option_service.dart';
 class FrappeSDK {
   final String baseUrl;
   final List<String> doctypes;
-  
+
   FrappeClient? _client;
   AppDatabase? _database;
   AuthService? _authService;
@@ -21,28 +21,25 @@ class FrappeSDK {
   SyncService? _syncService;
   OfflineRepository? _repository;
   LinkOptionService? _linkOptionService;
-  
+
   bool _initialized = false;
 
-  FrappeSDK({
-    required this.baseUrl,
-    required this.doctypes,
-  });
+  FrappeSDK({required this.baseUrl, required this.doctypes});
 
   /// Initialize SDK (call this first)
   Future<void> initialize() async {
     if (_initialized) return;
-    
+
     _database = await AppDatabase.getInstance();
     _client = FrappeClient(baseUrl);
     _authService = AuthService();
     _authService!.initialize(baseUrl);
-    
+
     _repository = OfflineRepository(_database!);
     _metaService = MetaService(_client!, _database!);
     _syncService = SyncService(_client!, _repository!, _database!);
     _linkOptionService = LinkOptionService(_client!);
-    
+
     _initialized = true;
   }
 
@@ -98,7 +95,7 @@ class FrappeSDK {
   }
 
   /// Get Frappe API client (for direct API calls)
-  /// 
+  ///
   /// Example:
   /// ```dart
   /// final client = sdk.api;

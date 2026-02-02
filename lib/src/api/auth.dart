@@ -27,7 +27,7 @@ class AuthService {
   final SessionStorage _sessionStorage;
 
   AuthService(this._restHelper, {SessionStorage? sessionStorage})
-      : _sessionStorage = sessionStorage ?? InMemorySessionStorage();
+    : _sessionStorage = sessionStorage ?? InMemorySessionStorage();
 
   Future<void> initialize() async {
     final sid = await _sessionStorage.getSession();

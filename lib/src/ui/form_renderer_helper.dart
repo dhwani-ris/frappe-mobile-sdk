@@ -12,13 +12,10 @@ class FrappeFormRenderer {
   final FrappeSDK sdk;
   final FrappeFormStyle? style;
 
-  FrappeFormRenderer({
-    required this.sdk,
-    this.style,
-  });
+  FrappeFormRenderer({required this.sdk, this.style});
 
   /// Render a form widget for a doctype
-  /// 
+  ///
   /// Example:
   /// ```dart
   /// final renderer = FrappeFormRenderer(sdk: sdk);
@@ -31,7 +28,7 @@ class FrappeFormRenderer {
     bool readOnly = false,
   }) async {
     final meta = await sdk.meta.getMeta(doctype);
-    
+
     return FrappeFormBuilder(
       meta: meta,
       initialData: initialData,
@@ -43,7 +40,7 @@ class FrappeFormRenderer {
   }
 
   /// Navigate to a form screen
-  /// 
+  ///
   /// Example:
   /// ```dart
   /// await renderer.navigateToForm(context, 'Customer');
@@ -55,16 +52,16 @@ class FrappeFormRenderer {
     Function()? onSaveSuccess,
   }) async {
     final meta = await sdk.meta.getMeta(doctype);
-    
+
     final document = initialData != null && initialData['name'] != null
         ? await sdk.repository.getDocumentByServerId(
             initialData['name'],
             doctype,
           )
         : null;
-    
+
     if (!context.mounted) return;
-    
+
     Navigator.push(
       context,
       MaterialPageRoute(

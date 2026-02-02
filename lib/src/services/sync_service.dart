@@ -7,7 +7,7 @@ import 'offline_repository.dart';
 class SyncService {
   final FrappeClient _client;
   final OfflineRepository _repository;
-  final AppDatabase _database;
+  final AppDatabase _database; // ignore: unused_field
   bool _isSyncing = false;
 
   SyncService(this._client, this._repository, this._database);
@@ -48,7 +48,10 @@ class SyncService {
           if (doc.status == 'deleted') {
             if (doc.serverId != null) {
               try {
-                await _client.document.deleteDocument(doc.doctype, doc.serverId!);
+                await _client.document.deleteDocument(
+                  doc.doctype,
+                  doc.serverId!,
+                );
               } catch (e) {
                 rethrow;
               }
@@ -61,17 +64,16 @@ class SyncService {
                 doc.doctype,
                 doc.data,
               );
-              
-              if (result is Map) {
-                final serverId = result['name'] as String? ?? result['docname'] as String?;
-                if (serverId != null) {
-                  final updated = doc.copyWith(
-                    serverId: serverId,
-                    status: 'clean',
-                    modified: DateTime.now().millisecondsSinceEpoch,
-                  );
-                  await _repository.updateDocument(updated);
-                }
+
+              final serverId =
+                  result['name'] as String? ?? result['docname'] as String?;
+              if (serverId != null) {
+                final updated = doc.copyWith(
+                  serverId: serverId,
+                  status: 'clean',
+                  modified: DateTime.now().millisecondsSinceEpoch,
+                );
+                await _repository.updateDocument(updated);
               }
             } catch (e) {
               rethrow;
@@ -87,7 +89,7 @@ class SyncService {
             } catch (e) {
               rethrow;
             }
-            
+
             final updated = doc.markClean();
             await _repository.updateDocument(updated);
             success++;
@@ -95,17 +97,19 @@ class SyncService {
         } catch (e) {
           final errorMsg = e.toString();
           failed++;
-          
+
           // Track error details
-          final operation = doc.status == 'deleted' 
-              ? 'delete' 
+          final operation = doc.status == 'deleted'
+              ? 'delete'
               : (doc.serverId == null ? 'create' : 'update');
-          errors.add(SyncError(
-            documentId: doc.serverId ?? doc.localId,
-            doctype: doc.doctype,
-            operation: operation,
-            errorMessage: errorMsg,
-          ));
+          errors.add(
+            SyncError(
+              documentId: doc.serverId ?? doc.localId,
+              doctype: doc.doctype,
+              operation: operation,
+              errorMessage: errorMsg,
+            ),
+          );
         }
       }
 
@@ -116,10 +120,7 @@ class SyncService {
   }
 
   /// Pull updates from server
-  Future<SyncResult> pullSync({
-    required String doctype,
-    int? since,
-  }) async {
+  Future<SyncResult> pullSync({required String doctype, int? since}) async {
     if (_isSyncing) {
       return SyncResult(0, 0, 0, 'Sync already in progress', errors: []);
     }
@@ -147,14 +148,15 @@ class SyncService {
         doctype,
         filters: filters,
         fields: ['*'],
-        limit_page_length: 1000,
+        limitPageLength: 1000,
       );
 
       total = result.length;
 
       for (final docData in result) {
         try {
-          final serverId = docData['name'] as String? ?? docData['docname'] as String?;
+          final serverId =
+              docData['name'] as String? ?? docData['docname'] as String?;
           if (serverId == null) continue;
 
           await _repository.saveServerDocument(
@@ -166,14 +168,19 @@ class SyncService {
         } catch (e) {
           final errorMsg = e.toString();
           failed++;
-          
-          final docId = docData['name'] as String? ?? docData['docname'] as String? ?? 'unknown';
-          errors.add(SyncError(
-            documentId: docId,
-            doctype: doctype,
-            operation: 'pull',
-            errorMessage: errorMsg,
-          ));
+
+          final docId =
+              docData['name'] as String? ??
+              docData['docname'] as String? ??
+              'unknown';
+          errors.add(
+            SyncError(
+              documentId: docId,
+              doctype: doctype,
+              operation: 'pull',
+              errorMessage: errorMsg,
+            ),
+          );
         }
       }
 
@@ -201,7 +208,9 @@ class SyncService {
       final localDocs = await _repository.getDocumentsByDoctype(doctype);
       int? lastModified;
       if (localDocs.isNotEmpty) {
-        lastModified = localDocs.map((d) => d.modified).reduce((a, b) => a > b ? a : b);
+        lastModified = localDocs
+            .map((d) => d.modified)
+            .reduce((a, b) => a > b ? a : b);
       }
 
       final pullResult = await pullSync(doctype: doctype, since: lastModified);
@@ -247,8 +256,13 @@ class SyncResult {
   final String? error;
   final List<SyncError> errors;
 
-  SyncResult(this.success, this.failed, this.total, this.error, {List<SyncError>? errors})
-      : errors = errors ?? [];
+  SyncResult(
+    this.success,
+    this.failed,
+    this.total,
+    this.error, {
+    List<SyncError>? errors,
+  }) : errors = errors ?? [];
 }
 
 /// Individual sync error details

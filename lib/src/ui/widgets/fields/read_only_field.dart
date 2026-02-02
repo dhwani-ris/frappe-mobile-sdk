@@ -19,20 +19,22 @@ class ReadOnlyField extends BaseField {
   @override
   Widget buildField(BuildContext context) {
     final displayValue = value?.toString() ?? field.defaultValue ?? '';
-    
+
     return FormBuilderTextField(
       key: ValueKey('${field.fieldname}_$displayValue'),
       name: field.fieldname ?? '',
       initialValue: displayValue,
       enabled: false,
       readOnly: true,
-      decoration: style?.decoration ?? InputDecoration(
-        hintText: field.placeholder,
-        border: const OutlineInputBorder(),
-        filled: true,
-        fillColor: Colors.grey[200],
-        helperText: field.description,
-      ),
+      decoration:
+          style?.decoration ??
+          InputDecoration(
+            hintText: field.placeholder,
+            border: const OutlineInputBorder(),
+            filled: true,
+            fillColor: Colors.grey[200],
+            helperText: field.description,
+          ),
     );
   }
 }
