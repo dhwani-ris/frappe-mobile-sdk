@@ -6,8 +6,8 @@ on:
   pull_request:
     types: [opened, synchronize]
     branches: [main, master, develop]
-  push:
-    branches: [main, master, develop]
+  # push:
+  #   branches: [main, master, develop]
 
 jobs:
   validate-commits:
