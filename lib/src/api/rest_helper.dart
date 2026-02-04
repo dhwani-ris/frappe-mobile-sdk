@@ -65,8 +65,14 @@ class RestHelper {
       headers['Authorization'] = 'token $_apiKey:$_apiSecret';
     }
 
+    // Debug logging for Auth diagnosis
+    if (debugAuth) {
+      print('[RestHelper] Headers for request: $headers');
+    }
     return headers;
   }
+
+  static bool debugAuth = true;
 
   /// Performs a GET request.
   Future<dynamic> get(
