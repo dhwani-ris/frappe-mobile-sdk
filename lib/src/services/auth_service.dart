@@ -2,6 +2,8 @@ import '../api/client.dart';
 import '../api/oauth2_helper.dart';
 import '../database/app_database.dart';
 import '../database/entities/auth_token_entity.dart';
+import '../database/entities/doctype_meta_entity.dart';
+import '../models/mobile_form_name.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 /// Handles Frappe authentication via credentials, API key, or OAuth 2.0.
@@ -72,6 +74,8 @@ class AuthService {
       final refreshToken = response['refresh_token'] as String?;
       final user = response['user'] as String?;
       final fullName = response['full_name'] as String?;
+      final mobileFormNamesJson =
+          response['mobile_form_names'] as List<dynamic>?;
 
       if (accessToken == null || accessToken.isEmpty) {
         throw Exception('Login response missing access_token');
@@ -97,6 +101,61 @@ class AuthService {
         await _database!.authTokenDao.updateToken(tokenEntity);
       } else {
         await _database!.authTokenDao.insertToken(tokenEntity);
+      }
+
+      // Store mobile form names (doctypes) from login response in doctype_meta table
+      if (mobileFormNamesJson != null && mobileFormNamesJson.isNotEmpty) {
+        final mobileFormNames = mobileFormNamesJson
+            .map(
+              (json) => MobileFormName.fromJson(json as Map<String, dynamic>),
+            )
+            .toList();
+
+        // Update mobile form doctypes (sync will happen later via checkAndSyncDoctypes)
+        // First, mark all existing mobile forms as false
+        final allMetas = await _database!.doctypeMetaDao.findAll();
+        for (final meta in allMetas) {
+          if (meta.isMobileForm) {
+            final updatedMeta = DoctypeMetaEntity(
+              doctype: meta.doctype,
+              modified: meta.modified,
+              serverModifiedAt: meta.serverModifiedAt,
+              isMobileForm: false,
+              metaJson: meta.metaJson,
+            );
+            await _database!.doctypeMetaDao.updateDoctypeMeta(updatedMeta);
+          }
+        }
+
+        // Now update/create entries for mobile forms from login response
+        for (final mfn in mobileFormNames) {
+          final doctype = mfn.mobileDoctype;
+          final existing = await _database!.doctypeMetaDao.findByDoctype(
+            doctype,
+          );
+
+          if (existing != null) {
+            // Update existing entry with mobile form info
+            final updatedMeta = DoctypeMetaEntity(
+              doctype: doctype,
+              modified: existing.modified,
+              serverModifiedAt: mfn.doctypeMetaModifiedAt,
+              isMobileForm: true,
+              metaJson: existing.metaJson,
+            );
+            await _database!.doctypeMetaDao.updateDoctypeMeta(updatedMeta);
+          } else {
+            // Create new entry with mobile form info (metaJson will be empty until fetched)
+            final newMeta = DoctypeMetaEntity(
+              doctype: doctype,
+              modified: null,
+              serverModifiedAt: mfn.doctypeMetaModifiedAt,
+              isMobileForm: true,
+              metaJson: '{}', // Empty until metadata is fetched
+            );
+            await _database!.doctypeMetaDao.insertDoctypeMeta(newMeta);
+          }
+        }
       }
 
       // Set bearer token for API calls

@@ -13,6 +13,7 @@ export 'src/models/app_config.dart';
 export 'src/models/doc_type_meta.dart';
 export 'src/models/doc_field.dart';
 export 'src/models/document.dart';
+export 'src/models/mobile_form_name.dart';
 
 // Database
 export 'src/database/app_database.dart';
