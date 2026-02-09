@@ -36,7 +36,7 @@ class TimeField extends BaseField {
     }
 
     return FormBuilderDateTimePicker(
-      key: ValueKey('${field.fieldname}_${initialTime?.format(context) ?? ''}'),
+      key: ValueKey('time_${field.fieldname}'),
       name: field.fieldname ?? '',
       initialValue: initialTime != null
           ? DateTime(2000, 1, 1, initialTime.hour, initialTime.minute)

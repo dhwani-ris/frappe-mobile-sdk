@@ -5,6 +5,7 @@ import '../database/entities/auth_token_entity.dart';
 import '../database/entities/doctype_meta_entity.dart';
 import '../models/mobile_form_name.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:uuid/uuid.dart';
 
 /// Handles Frappe authentication via credentials, API key, or OAuth 2.0.
 ///
@@ -19,8 +20,10 @@ class AuthService {
   static const String _keyOAuthExpiresAt = 'frappe_oauth_expires_at';
   static const String _keyOAuthClientId = 'frappe_oauth_client_id';
   static const String _keyOAuthClientSecret = 'frappe_oauth_client_secret';
+  static const String _keyMobileUuid = 'frappe_mobile_uuid';
 
   final FlutterSecureStorage _storage = const FlutterSecureStorage();
+  static const Uuid _uuid = Uuid();
   FrappeClient? _client;
   bool _isAuthenticated = false;
   AppDatabase? _database;
@@ -37,6 +40,17 @@ class AuthService {
   /// Returns the stored base URL, or null if not set.
   Future<String?> getBaseUrl() async {
     return _storage.read(key: _keyBaseUrl);
+  }
+
+  /// Returns a stable UUID for this device/install. Creates and stores one if missing.
+  /// Use when creating documents from mobile so server can store mobile_uuid.
+  Future<String> getOrCreateMobileUuid() async {
+    var value = await _storage.read(key: _keyMobileUuid);
+    if (value == null || value.isEmpty) {
+      value = _uuid.v4();
+      await _storage.write(key: _keyMobileUuid, value: value);
+    }
+    return value;
   }
 
   /// The Frappe API client. Null until [initialize] is called.

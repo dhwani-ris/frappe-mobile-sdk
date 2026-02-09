@@ -76,7 +76,7 @@ class ImageField extends BaseField {
     String? imagePath = value?.toString();
 
     return FormBuilderField<String>(
-      key: ValueKey('${field.fieldname}_$imagePath'),
+      key: ValueKey('image_${field.fieldname}'),
       name: field.fieldname ?? '',
       initialValue: imagePath,
       enabled: enabled && !field.readOnly,

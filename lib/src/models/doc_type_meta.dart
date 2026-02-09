@@ -12,12 +12,27 @@ class DocTypeMeta {
   final bool isTable;
   final Map<String, dynamic>? metaData;
 
+  /// Field to show as main title in list view (from Frappe title_field)
+  @JsonKey(name: 'title_field')
+  final String? titleField;
+
+  /// Default sort field for list view (from Frappe sort_field)
+  @JsonKey(name: 'sort_field')
+  final String? sortField;
+
+  /// Default sort order: 'asc' or 'desc' (from Frappe sort_order)
+  @JsonKey(name: 'sort_order')
+  final String? sortOrder;
+
   DocTypeMeta({
     required this.name,
     this.label,
     required this.fields,
     this.isTable = false,
     this.metaData,
+    this.titleField,
+    this.sortField,
+    this.sortOrder,
   });
 
   factory DocTypeMeta.fromJson(Map<String, dynamic> json) {
@@ -49,12 +64,21 @@ class DocTypeMeta {
       }
     }
 
+    final titleField = json['title_field'] as String?;
+    final sortField = json['sort_field'] as String?;
+    final sortOrder = json['sort_order'] as String?;
+
     return DocTypeMeta(
       name: json['name'] as String? ?? json['doctype'] as String? ?? '',
       label: json['label'] as String?,
       fields: fields,
       isTable: isTableValue,
       metaData: json,
+      titleField: titleField?.isNotEmpty == true ? titleField : null,
+      sortField: sortField?.isNotEmpty == true ? sortField : null,
+      sortOrder: sortOrder?.toLowerCase() == 'desc'
+          ? 'desc'
+          : (sortOrder?.isNotEmpty == true ? 'asc' : null),
     );
   }
 

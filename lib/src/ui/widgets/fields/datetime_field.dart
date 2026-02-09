@@ -29,9 +29,7 @@ class DatetimeField extends BaseField {
     }
 
     return FormBuilderDateTimePicker(
-      key: ValueKey(
-        '${field.fieldname}_${initialDateTime?.toIso8601String() ?? ''}',
-      ),
+      key: ValueKey('datetime_${field.fieldname}'),
       name: field.fieldname ?? '',
       initialValue: initialDateTime,
       enabled: enabled && !field.readOnly,

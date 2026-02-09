@@ -257,6 +257,7 @@ class _HomeScreenState extends State<HomeScreen> {
           _authService!.client!,
           _repository!,
           _database!,
+          getMobileUuid: () => _authService!.getOrCreateMobileUuid(),
         );
         _linkOptionService = LinkOptionService(_authService!.client!);
       } else {
@@ -381,12 +382,13 @@ class _HomeScreenState extends State<HomeScreen> {
                   builder: (context) => DocumentListScreen(
                     doctype: doctype,
                     meta: meta,
-                    documents: docs,
                     repository: _repository!,
                     syncService: _syncService!,
                     metaService: _metaService!,
                     linkOptionService: _linkOptionService,
                     api: _authService?.client,
+                    getMobileUuid: () => _authService!.getOrCreateMobileUuid(),
+                    initialDocuments: docs,
                   ),
                 ),
               );
@@ -434,8 +436,10 @@ class _HomeScreenState extends State<HomeScreen> {
                     repository: _repository!,
                     syncService: _syncService!,
                     linkOptionService: _linkOptionService,
+                    metaService: _metaService,
                     api: _authService?.client,
                     onSaveSuccess: () => Navigator.pop(ctx),
+                    getMobileUuid: () => _authService!.getOrCreateMobileUuid(),
                   ),
                 ),
               );
@@ -456,256 +460,6 @@ class _HomeScreenState extends State<HomeScreen> {
             }
           }
         },
-      ),
-    );
-  }
-}
-
-class DocumentListScreen extends StatefulWidget {
-  final String doctype;
-  final DocTypeMeta meta;
-  final List<Document> documents;
-  final OfflineRepository repository;
-  final SyncService syncService;
-  final MetaService metaService;
-  final LinkOptionService? linkOptionService;
-  final FrappeClient? api;
-
-  const DocumentListScreen({
-    super.key,
-    required this.doctype,
-    required this.meta,
-    required this.documents,
-    required this.repository,
-    required this.syncService,
-    required this.metaService,
-    this.linkOptionService,
-    this.api,
-  });
-
-  @override
-  State<DocumentListScreen> createState() => _DocumentListScreenState();
-}
-
-class _DocumentListScreenState extends State<DocumentListScreen> {
-  List<Document> _documents = [];
-  final bool _isLoading = false;
-  bool _isSyncing = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _documents = widget.documents;
-    // Pull documents from server on first load
-    _pullDocuments();
-  }
-
-  Future<void> _pullDocuments() async {
-    if (_isSyncing) return;
-
-    setState(() {
-      _isSyncing = true;
-    });
-
-    try {
-      final isOnline = await widget.syncService.isOnline();
-      if (isOnline) {
-        await widget.syncService.pullSync(doctype: widget.doctype);
-      }
-
-      final docs = await widget.repository.getDocumentsByDoctype(
-        widget.doctype,
-      );
-      setState(() {
-        _documents = docs;
-      });
-    } catch (e) {
-      final docs = await widget.repository.getDocumentsByDoctype(
-        widget.doctype,
-      );
-      setState(() {
-        _documents = docs;
-      });
-    } finally {
-      setState(() {
-        _isSyncing = false;
-      });
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(widget.meta.label ?? widget.doctype),
-        actions: [
-          if (_isSyncing)
-            const Padding(
-              padding: EdgeInsets.all(16.0),
-              child: SizedBox(
-                width: 20,
-                height: 20,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              ),
-            )
-          else
-            IconButton(
-              icon: const Icon(Icons.refresh),
-              onPressed: _pullDocuments,
-              tooltip: 'Refresh',
-            ),
-        ],
-      ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : _documents.isEmpty
-          ? Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const Icon(Icons.inbox, size: 64, color: Colors.grey),
-                  const SizedBox(height: 16),
-                  const Text('No documents found'),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Pull down to refresh or create a new document',
-                    style: Theme.of(context).textTheme.bodySmall,
-                    textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: 16),
-                  ElevatedButton.icon(
-                    onPressed: _pullDocuments,
-                    icon: const Icon(Icons.refresh),
-                    label: const Text('Refresh from Server'),
-                  ),
-                  const SizedBox(height: 16),
-                  ElevatedButton.icon(
-                    onPressed: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (context) => FormScreen(
-                            meta: widget.meta,
-                            repository: widget.repository,
-                            syncService: widget.syncService,
-                            api: widget.api,
-                            onSaveSuccess: () {
-                              Navigator.pop(context);
-                              _pullDocuments();
-                            },
-                          ),
-                        ),
-                      );
-                    },
-                    icon: const Icon(Icons.add),
-                    label: const Text('Create New'),
-                  ),
-                ],
-              ),
-            )
-          : RefreshIndicator(
-              onRefresh: _pullDocuments,
-              child: ListView.builder(
-                itemCount: _documents.length,
-                itemBuilder: (context, index) {
-                  final doc = _documents[index];
-
-                  // Try to get display text from listViewFields first
-                  String displayText = '';
-                  final listFields = widget.meta.listViewFields;
-                  if (listFields.isNotEmpty) {
-                    displayText = listFields
-                        .map((f) => doc.data[f.fieldname]?.toString() ?? '')
-                        .where((s) => s.isNotEmpty)
-                        .join(' - ');
-                  }
-
-                  // Fallback to common title fields if listViewFields is empty
-                  if (displayText.isEmpty) {
-                    // Try common title field names
-                    for (final fieldName in [
-                      'name',
-                      'title',
-                      'full_name',
-                      'customer_name',
-                      'supplier_name',
-                      'item_name',
-                      'item_code',
-                    ]) {
-                      if (doc.data.containsKey(fieldName) &&
-                          doc.data[fieldName] != null) {
-                        displayText = doc.data[fieldName].toString();
-                        break;
-                      }
-                    }
-                  }
-
-                  // Final fallback to serverId or localId
-                  if (displayText.isEmpty) {
-                    displayText = doc.serverId ?? doc.localId;
-                  }
-
-                  return ListTile(
-                    title: Text(displayText.isEmpty ? 'Untitled' : displayText),
-                    subtitle: Text(
-                      doc.serverId != null
-                          ? 'ID: ${doc.serverId}'
-                          : 'Local (not synced)',
-                    ),
-                    trailing: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        if (doc.status == 'dirty')
-                          const Icon(
-                            Icons.cloud_upload,
-                            color: Colors.orange,
-                            size: 20,
-                          ),
-                        const Icon(Icons.chevron_right),
-                      ],
-                    ),
-                    onTap: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (context) => FormScreen(
-                            meta: widget.meta,
-                            document: doc,
-                            repository: widget.repository,
-                            syncService: widget.syncService,
-                            linkOptionService: widget.linkOptionService,
-                            api: widget.api,
-                            onSaveSuccess: () {
-                              Navigator.pop(context);
-                              _pullDocuments();
-                            },
-                          ),
-                        ),
-                      );
-                    },
-                  );
-                },
-              ),
-            ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () {
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (context) => FormScreen(
-                meta: widget.meta,
-                repository: widget.repository,
-                syncService: widget.syncService,
-                api: widget.api,
-                onSaveSuccess: () {
-                  Navigator.pop(context);
-                  _pullDocuments();
-                },
-              ),
-            ),
-          );
-        },
-        child: const Icon(Icons.add),
       ),
     );
   }

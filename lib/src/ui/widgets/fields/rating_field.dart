@@ -39,7 +39,7 @@ class RatingField extends BaseField {
     }
 
     return FormBuilderField<int>(
-      key: ValueKey('${field.fieldname}_${initialRating ?? ''}'),
+      key: ValueKey('rating_${field.fieldname}'),
       name: field.fieldname ?? '',
       initialValue: initialRating,
       enabled: enabled && !field.readOnly,

@@ -66,7 +66,7 @@ class DurationField extends BaseField {
     }
 
     return FormBuilderTextField(
-      key: ValueKey('${field.fieldname}_${initialSeconds ?? ''}'),
+      key: ValueKey('duration_${field.fieldname}'),
       name: field.fieldname ?? '',
       initialValue: initialSeconds != null
           ? _formatDuration(initialSeconds)

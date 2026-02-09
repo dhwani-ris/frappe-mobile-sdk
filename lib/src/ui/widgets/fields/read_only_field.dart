@@ -21,7 +21,7 @@ class ReadOnlyField extends BaseField {
     final displayValue = value?.toString() ?? field.defaultValue ?? '';
 
     return FormBuilderTextField(
-      key: ValueKey('${field.fieldname}_$displayValue'),
+      key: ValueKey('readonly_${field.fieldname}'),
       name: field.fieldname ?? '',
       initialValue: displayValue,
       enabled: false,
