@@ -2,6 +2,8 @@
 import 'package:flutter/material.dart';
 import 'package:frappe_mobile_sdk/frappe_mobile_sdk.dart';
 
+import 'config/app_config.dart' as config;
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   runApp(const MyApp());
@@ -18,7 +20,10 @@ class MyApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
         useMaterial3: true,
       ),
-      home: const HomeScreen(),
+      home: FrappeAppGuard(
+        baseUrl: config.AppConstants.baseUrl,
+        child: const HomeScreen(),
+      ),
     );
   }
 }
@@ -61,26 +66,17 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _initialize() async {
     try {
-      // Initialize database
-      _database = await AppDatabase.getInstance();
-
-      // Load app config
-      // TODO: Replace with your Frappe server URL and doctypes
-      // _appConfig = AppConfig(
-      //   baseUrl: 'https://stgbsebeam.dhwaniris.in/',
-      //   doctypes: ['Procurement','Farmer Registration','Land Record','Farmer Scheduling','Farmer Scheduling history'], // Configure your doctypes
-      // );
       _appConfig = AppConfig(
-        baseUrl: 'https://stgbsebeam.dhwaniris.in/',
-        doctypes: ['Farmer Registration'],
-        loginConfig: const LoginConfig(
+        baseUrl: config.AppConstants.baseUrl,
+        doctypes: config.AppConstants.doctypes,
+        loginConfig: LoginConfig(
           enablePasswordLogin: true,
           enableOAuth: true,
-          oauthClientId: 'p97ndoqlk8',
-          oauthClientSecret: '2010aad104', // From Frappe OAuth Client
-          // Redirect URI in Frappe: frappemobilesdk://oauth/callback
+          oauthClientId: config.AppConstants.oauthClientId,
+          oauthClientSecret: config.AppConstants.oauthClientSecret,
         ),
       );
+      _database = await AppDatabase.getInstance();
 
       // Initialize auth service
       _authService = AuthService();
