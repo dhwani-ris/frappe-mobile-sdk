@@ -81,7 +81,7 @@ class _HomeScreenState extends State<HomeScreen> {
       // Initialize auth service
       _authService = AuthService();
       if (_appConfig != null) {
-        _authService!.initialize(_appConfig!.baseUrl);
+        _authService!.initialize(_appConfig!.baseUrl, database: _database);
       }
 
       // Don't initialize services yet - wait for login
@@ -234,6 +234,7 @@ class _HomeScreenState extends State<HomeScreen> {
         appConfig: _appConfig,
         initialBaseUrl: _appConfig?.baseUrl,
         onLoginSuccess: _handleLoginSuccess,
+        database: _database,
       );
     }
 
