@@ -22,11 +22,13 @@ class PhoneField extends BaseField {
     return s.replaceAll(RegExp(r'[^\d]'), '');
   }
 
-  /// From full value (e.g. +919876543210) get number part without country code
+  /// From full value (e.g. +919876543210) get number part without country code.
+  /// If stored is only "91" or "+91", returns '' so field is empty.
   static String numberFromStored(String? stored) {
     if (stored == null || stored.isEmpty) return '';
     final digits = _digitsOnly(stored);
     const codeDigits = '91';
+    if (digits == codeDigits || digits.isEmpty) return '';
     if (digits.startsWith(codeDigits) && digits.length > 2) {
       return digits.substring(codeDigits.length);
     }

@@ -64,6 +64,9 @@ class FrappeFormBuilder extends StatefulWidget {
   /// Base URL for displaying uploaded file URLs (e.g. for image preview)
   final String? fileUrlBase;
 
+  /// Auth headers for loading private file URLs (e.g. [FrappeClient.requestHeaders])
+  final Map<String, String>? imageHeaders;
+
   /// Fetches a linked document by doctype and name (for fetch_from).
   /// Try local repository first, then server. Return null if not found.
   final Future<Map<String, dynamic>?> Function(
@@ -89,6 +92,7 @@ class FrappeFormBuilder extends StatefulWidget {
     this.style,
     this.uploadFile,
     this.fileUrlBase,
+    this.imageHeaders,
     this.fetchLinkedDocument,
     this.getMeta,
     this.registerSubmit,
@@ -364,6 +368,7 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
       value: initialValue,
       uploadFile: widget.uploadFile,
       fileUrlBase: widget.fileUrlBase,
+      imageHeaders: widget.imageHeaders,
       getMeta: widget.getMeta,
       childTableFormBuilder: widget.getMeta != null
           ? (childMeta, initialData, onSubmit) => FrappeFormBuilder(
@@ -371,6 +376,8 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
               initialData: initialData,
               onSubmit: onSubmit,
               getMeta: widget.getMeta,
+              fileUrlBase: widget.fileUrlBase,
+              imageHeaders: widget.imageHeaders,
               fetchLinkedDocument: widget.fetchLinkedDocument,
             )
           : null,

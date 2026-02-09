@@ -68,6 +68,10 @@ class RestHelper {
     return headers;
   }
 
+  /// Auth headers for use with Image.network etc. when loading private files.
+  Map<String, String> get requestHeaders =>
+      Map<String, String>.from(_getHeaders());
+
   /// Performs a GET request.
   Future<dynamic> get(
     String endpoint, {

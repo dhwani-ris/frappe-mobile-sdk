@@ -68,7 +68,7 @@ class _HomeScreenState extends State<HomeScreen> {
     try {
       _appConfig = AppConfig(
         baseUrl: config.AppConstants.baseUrl,
-        doctypes: config.AppConstants.doctypes,
+        doctypes: const [],
         loginConfig: LoginConfig(
           enablePasswordLogin: true,
           enableOAuth: true,
@@ -337,128 +337,139 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ],
       ),
-      body: DoctypeListScreen(
-        appConfig: _appConfig!,
-        repository: _repository!,
-        onDoctypeSelected: (doctype) async {
-          // Navigate to document list for this doctype
-          if (_repository == null ||
-              _metaService == null ||
-              _syncService == null) {
-            return;
-          }
+      body: FutureBuilder<List<String>>(
+        future:
+            _metaService?.getMobileFormDoctypeNames() ??
+            Future.value(<String>[]),
+        builder: (context, snapshot) {
+          final doctypes = snapshot.data ?? [];
+          return DoctypeListScreen(
+            appConfig: _appConfig!,
+            repository: _repository!,
+            doctypes: doctypes.isNotEmpty ? doctypes : null,
+            onDoctypeSelected: (doctype) async {
+              // Navigate to document list for this doctype
+              if (_repository == null ||
+                  _metaService == null ||
+                  _syncService == null) {
+                return;
+              }
 
-          // Show loading
-          if (mounted) {
-            ScaffoldMessenger.of(
-              context,
-            ).showSnackBar(const SnackBar(content: Text('Loading...')));
-          }
+              // Show loading
+              if (mounted) {
+                ScaffoldMessenger.of(
+                  context,
+                ).showSnackBar(const SnackBar(content: Text('Loading...')));
+              }
 
-          try {
-            final meta = await _metaService!.getMeta(doctype);
+              try {
+                final meta = await _metaService!.getMeta(doctype);
 
-            // Try to pull documents from server first (if online)
-            if (_syncService != null) {
-              final isOnline = await _syncService!.isOnline();
-              if (isOnline) {
-                try {
-                  await _syncService!.pullSync(doctype: doctype);
-                } catch (syncError) {
-                  // Continue even if sync fails - show local data
+                // Try to pull documents from server first (if online)
+                if (_syncService != null) {
+                  final isOnline = await _syncService!.isOnline();
+                  if (isOnline) {
+                    try {
+                      await _syncService!.pullSync(doctype: doctype);
+                    } catch (syncError) {
+                      // Continue even if sync fails - show local data
+                    }
+                  }
+                }
+
+                // Get documents from local database (after sync attempt)
+                final docs = await _repository!.getDocumentsByDoctype(doctype);
+
+                if (mounted) {
+                  final ctx = context;
+                  ScaffoldMessenger.of(ctx).hideCurrentSnackBar();
+                  Navigator.push(
+                    ctx,
+                    MaterialPageRoute(
+                      builder: (context) => DocumentListScreen(
+                        doctype: doctype,
+                        meta: meta,
+                        repository: _repository!,
+                        syncService: _syncService!,
+                        metaService: _metaService!,
+                        linkOptionService: _linkOptionService,
+                        api: _authService?.client,
+                        getMobileUuid: () =>
+                            _authService!.getOrCreateMobileUuid(),
+                        initialDocuments: docs,
+                      ),
+                    ),
+                  );
+                }
+              } catch (e) {
+                if (mounted) {
+                  final ctx = context;
+                  ScaffoldMessenger.of(ctx).hideCurrentSnackBar();
+                  ScaffoldMessenger.of(ctx).showSnackBar(
+                    SnackBar(
+                      content: Text(
+                        'Error: ${e.toString().split(':').last.trim()}',
+                      ),
+                      backgroundColor: Colors.red,
+                      duration: const Duration(seconds: 5),
+                    ),
+                  );
                 }
               }
-            }
+            },
+            onNewDocument: (doctype) async {
+              if (_metaService == null ||
+                  _repository == null ||
+                  _syncService == null) {
+                return;
+              }
 
-            // Get documents from local database (after sync attempt)
-            final docs = await _repository!.getDocumentsByDoctype(doctype);
+              // Show loading
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Loading metadata...')),
+                );
+              }
 
-            if (mounted) {
-              final ctx = context;
-              ScaffoldMessenger.of(ctx).hideCurrentSnackBar();
-              Navigator.push(
-                ctx,
-                MaterialPageRoute(
-                  builder: (context) => DocumentListScreen(
-                    doctype: doctype,
-                    meta: meta,
-                    repository: _repository!,
-                    syncService: _syncService!,
-                    metaService: _metaService!,
-                    linkOptionService: _linkOptionService,
-                    api: _authService?.client,
-                    getMobileUuid: () => _authService!.getOrCreateMobileUuid(),
-                    initialDocuments: docs,
-                  ),
-                ),
-              );
-            }
-          } catch (e) {
-            if (mounted) {
-              final ctx = context;
-              ScaffoldMessenger.of(ctx).hideCurrentSnackBar();
-              ScaffoldMessenger.of(ctx).showSnackBar(
-                SnackBar(
-                  content: Text(
-                    'Error: ${e.toString().split(':').last.trim()}',
-                  ),
-                  backgroundColor: Colors.red,
-                  duration: const Duration(seconds: 5),
-                ),
-              );
-            }
-          }
-        },
-        onNewDocument: (doctype) async {
-          if (_metaService == null ||
-              _repository == null ||
-              _syncService == null) {
-            return;
-          }
-
-          // Show loading
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Loading metadata...')),
-            );
-          }
-
-          try {
-            final meta = await _metaService!.getMeta(doctype);
-            if (mounted) {
-              final ctx = context;
-              ScaffoldMessenger.of(ctx).hideCurrentSnackBar();
-              Navigator.push(
-                ctx,
-                MaterialPageRoute(
-                  builder: (context) => FormScreen(
-                    meta: meta,
-                    repository: _repository!,
-                    syncService: _syncService!,
-                    linkOptionService: _linkOptionService,
-                    metaService: _metaService,
-                    api: _authService?.client,
-                    onSaveSuccess: () => Navigator.pop(ctx),
-                    getMobileUuid: () => _authService!.getOrCreateMobileUuid(),
-                  ),
-                ),
-              );
-            }
-          } catch (e) {
-            if (mounted) {
-              final ctx = context;
-              ScaffoldMessenger.of(ctx).hideCurrentSnackBar();
-              ScaffoldMessenger.of(ctx).showSnackBar(
-                SnackBar(
-                  content: Text(
-                    'Failed to load metadata: ${e.toString().split(':').last.trim()}',
-                  ),
-                  backgroundColor: Colors.red,
-                  duration: const Duration(seconds: 5),
-                ),
-              );
-            }
-          }
+              try {
+                final meta = await _metaService!.getMeta(doctype);
+                if (mounted) {
+                  final ctx = context;
+                  ScaffoldMessenger.of(ctx).hideCurrentSnackBar();
+                  Navigator.push(
+                    ctx,
+                    MaterialPageRoute(
+                      builder: (context) => FormScreen(
+                        meta: meta,
+                        repository: _repository!,
+                        syncService: _syncService!,
+                        linkOptionService: _linkOptionService,
+                        metaService: _metaService,
+                        api: _authService?.client,
+                        onSaveSuccess: () => Navigator.pop(ctx),
+                        getMobileUuid: () =>
+                            _authService!.getOrCreateMobileUuid(),
+                      ),
+                    ),
+                  );
+                }
+              } catch (e) {
+                if (mounted) {
+                  final ctx = context;
+                  ScaffoldMessenger.of(ctx).hideCurrentSnackBar();
+                  ScaffoldMessenger.of(ctx).showSnackBar(
+                    SnackBar(
+                      content: Text(
+                        'Failed to load metadata: ${e.toString().split(':').last.trim()}',
+                      ),
+                      backgroundColor: Colors.red,
+                      duration: const Duration(seconds: 5),
+                    ),
+                  );
+                }
+              }
+            },
+          );
         },
       ),
     );

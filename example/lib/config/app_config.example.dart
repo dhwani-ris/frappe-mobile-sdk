@@ -11,7 +11,4 @@ class AppConstants {
 
   /// OAuth client secret from Frappe OAuth Client settings
   static const String oauthClientSecret = 'your_oauth_client_secret';
-
-  /// List of doctypes to sync
-  static const List<String> doctypes = ['YourDocType'];
 }
