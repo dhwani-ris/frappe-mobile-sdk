@@ -219,6 +219,12 @@ class MetaService {
     }
   }
 
+  /// Returns doctype names marked as mobile form (from login response, stored in doctype_meta).
+  Future<List<String>> getMobileFormDoctypeNames() async {
+    final list = await _database.doctypeMetaDao.findMobileFormDoctypes();
+    return list.map((e) => e.doctype).toList();
+  }
+
   /// Prefetch metadata for all mobile form doctypes into DB.
   Future<void> prefetchMobileFormDoctypes() async {
     try {

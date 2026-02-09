@@ -2,12 +2,16 @@ import 'package:flutter/material.dart';
 import '../models/app_config.dart';
 import '../services/offline_repository.dart';
 
-/// Screen showing list of Doctypes configured in app_config
+/// Screen showing list of Doctypes (from [doctypes] or [appConfig.doctypes]).
+/// When using login response, pass [doctypes] from [MetaService.getMobileFormDoctypeNames()].
 class DoctypeListScreen extends StatefulWidget {
   final AppConfig appConfig;
   final OfflineRepository repository;
   final Function(String doctype) onDoctypeSelected;
   final Function(String doctype)? onNewDocument;
+
+  /// When set, used instead of appConfig.doctypes (e.g. from login / getMobileFormDoctypeNames).
+  final List<String>? doctypes;
 
   const DoctypeListScreen({
     super.key,
@@ -15,6 +19,7 @@ class DoctypeListScreen extends StatefulWidget {
     required this.repository,
     required this.onDoctypeSelected,
     this.onNewDocument,
+    this.doctypes,
   });
 
   @override
@@ -31,13 +36,15 @@ class _DoctypeListScreenState extends State<DoctypeListScreen> {
     _loadDocumentCounts();
   }
 
+  List<String> get _doctypes => widget.doctypes ?? widget.appConfig.doctypes;
+
   Future<void> _loadDocumentCounts() async {
     setState(() {
       _isLoading = true;
     });
 
     try {
-      for (final doctype in widget.appConfig.doctypes) {
+      for (final doctype in _doctypes) {
         final docs = await widget.repository.getDocumentsByDoctype(doctype);
         _documentCounts[doctype] = docs.length;
       }
@@ -52,16 +59,17 @@ class _DoctypeListScreenState extends State<DoctypeListScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final list = _doctypes;
     return Scaffold(
       appBar: AppBar(title: const Text('Doctypes')),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
-          : widget.appConfig.doctypes.isEmpty
+          : list.isEmpty
           ? const Center(child: Text('No doctypes configured'))
           : ListView.builder(
-              itemCount: widget.appConfig.doctypes.length,
+              itemCount: list.length,
               itemBuilder: (context, index) {
-                final doctype = widget.appConfig.doctypes[index];
+                final doctype = list[index];
                 final count = _documentCounts[doctype] ?? 0;
 
                 return ListTile(

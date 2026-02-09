@@ -55,6 +55,7 @@ class FieldFactory {
     FieldStyle? style,
     Future<String?> Function(File file)? uploadFile,
     String? fileUrlBase,
+    Map<String, String>? imageHeaders,
     Future<DocTypeMeta> Function(String doctype)? getMeta,
     ChildTableFormBuilder? childTableFormBuilder,
   }) {
@@ -236,6 +237,7 @@ class FieldFactory {
           style: fieldStyle,
           uploadFile: uploadFile,
           fileUrlBase: fileUrlBase,
+          imageHeaders: imageHeaders,
         );
 
       default:
