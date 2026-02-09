@@ -104,9 +104,12 @@ class _HomeScreenState extends State<HomeScreen> {
           );
           _linkOptionService = LinkOptionService(_authService!.client!);
 
-          // If authenticated, fetch metadata for configured doctypes
-          if (_appConfig != null) {
-            await _loadMetas();
+          // Check and sync doctypes from login response (if available)
+          // This compares timestamps and syncs updated/new doctypes
+          try {
+            await _metaService!.checkAndSyncDoctypes();
+          } catch (_) {
+            // Silently fail - don't block app launch
           }
         }
       }
@@ -122,13 +125,6 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<void> _loadMetas() async {
-    if (_appConfig == null || _metaService == null) return;
-    try {
-      await _metaService!.prefetchToDb(_appConfig!.doctypes);
-    } catch (_) {}
-  }
-
   Future<void> _handleLoginSuccess() async {
     if (_authService == null ||
         _authService!.client == null ||
@@ -136,38 +132,42 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
 
-    _metaService = MetaService(_authService!.client!, _database!);
-    _repository = OfflineRepository(_database!);
-    _syncService = SyncService(_authService!.client!, _repository!, _database!);
-    _linkOptionService = LinkOptionService(_authService!.client!);
+    // Initialize services if not already done
+    _metaService ??= MetaService(_authService!.client!, _database!);
+    _repository ??= OfflineRepository(_database!);
+    _syncService ??= SyncService(
+      _authService!.client!,
+      _repository!,
+      _database!,
+    );
+    _linkOptionService ??= LinkOptionService(_authService!.client!);
+
+    // Check and sync doctypes from login response
+    // This compares timestamps and syncs updated/new doctypes
+    try {
+      await _metaService!.checkAndSyncDoctypes();
+    } catch (_) {
+      // Silently fail - don't block login flow
+    }
 
     setState(() {
       _isAuthenticated = true;
     });
 
-    if (_appConfig != null) {
-      await _loadMetas();
-
-      if (_syncService != null && _appConfig!.doctypes.isNotEmpty) {
-        try {
-          for (final doctype in _appConfig!.doctypes) {
-            try {
-              await _syncService!.syncDoctype(doctype);
-            } catch (e) {
-              // Continue with other doctypes
-            }
-          }
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('Initial sync completed'),
-                duration: Duration(seconds: 2),
-              ),
-            );
-          }
-        } catch (e) {
-          // Ignore sync errors
+    if (_appConfig != null && _syncService != null && _metaService != null) {
+      // Sync mobile form doctypes (from login response)
+      try {
+        await _metaService!.syncAllMobileFormDoctypes();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Initial sync completed'),
+              duration: Duration(seconds: 2),
+            ),
+          );
         }
+      } catch (e) {
+        // Ignore sync errors
       }
     }
   }

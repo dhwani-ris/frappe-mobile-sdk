@@ -12,7 +12,6 @@ import '../services/link_option_service.dart';
 /// Main SDK initialization class for easy setup
 class FrappeSDK {
   final String baseUrl;
-  final List<String> doctypes;
 
   FrappeClient? _client;
   AppDatabase? _database;
@@ -24,7 +23,7 @@ class FrappeSDK {
 
   bool _initialized = false;
 
-  FrappeSDK({required this.baseUrl, required this.doctypes});
+  FrappeSDK({required this.baseUrl});
 
   /// Initialize SDK (call this first)
   Future<void> initialize() async {
@@ -159,18 +158,36 @@ class FrappeSDK {
   /// Check if authenticated
   bool get isAuthenticated => _authService?.isAuthenticated ?? false;
 
-  /// Prefetch metadata for configured doctypes into DB only (no in-memory cache).
+  /// Prefetch metadata for mobile form doctypes into DB only (no in-memory cache).
   /// Use this at app start; meta is loaded into cache only when getMeta(doctype) is used.
   Future<void> loadMetadata() async {
     if (!_initialized) await initialize();
-    await _metaService!.prefetchToDb(doctypes);
+    await _metaService!.prefetchMobileFormDoctypes();
   }
 
-  /// Sync all configured doctypes
+  /// Sync all mobile form doctypes
   Future<void> syncAll() async {
     if (!_initialized) await initialize();
-    for (final doctype in doctypes) {
-      await _syncService!.syncDoctype(doctype);
-    }
+    await _metaService!.syncAllMobileFormDoctypes();
+  }
+
+  /// Check and sync doctypes from login response on app launch.
+  ///
+  /// Compares timestamps from mobile_form_names with stored doctype meta
+  /// and syncs any that have been updated or are new.
+  Future<void> checkAndSyncDoctypes() async {
+    if (!_initialized) await initialize();
+    await _metaService!.checkAndSyncDoctypes();
+  }
+
+  /// Resync mobile configuration from server.
+  ///
+  /// Calls `mobile_auth.configuration` API to fetch updated mobile form list
+  /// and syncs doctype metadata for any doctypes that have been updated or are new.
+  ///
+  /// Throws if not authenticated or API call fails.
+  Future<void> resyncMobileConfiguration() async {
+    if (!_initialized) await initialize();
+    await _metaService!.resyncMobileConfiguration();
   }
 }

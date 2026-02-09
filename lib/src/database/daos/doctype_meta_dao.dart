@@ -12,6 +12,9 @@ abstract class DoctypeMetaDao {
   @Query('SELECT * FROM doctype_meta WHERE doctype IN (:doctypes)')
   Future<List<DoctypeMetaEntity>> findByDoctypes(List<String> doctypes);
 
+  @Query('SELECT * FROM doctype_meta WHERE isMobileForm = 1')
+  Future<List<DoctypeMetaEntity>> findMobileFormDoctypes();
+
   @insert
   Future<void> insertDoctypeMeta(DoctypeMetaEntity meta);
 
