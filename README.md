@@ -4,6 +4,9 @@ Flutter package for Frappe integration with direct API access, dynamic form rend
 
 ## ✨ Features
 
+- ✅ **Stateless Login** - Token-based authentication via `mobile_auth.login` API
+- ✅ **Keep User Logged In** - Tokens persist in database, automatic session restore
+- ✅ **Auto Token Refresh** - Automatic token refresh on expiry (401 errors)
 - ✅ **Frappe API Access** - Auth, CRUD, file upload via `FrappeClient`
 - ✅ **Dynamic Form Renderer** - Auto-generate forms from Frappe metadata
 - ✅ **Offline-First** - Full offline capability with SQLite
@@ -121,11 +124,20 @@ MaterialApp(
 ```dart
 import 'package:frappe_mobile_sdk/frappe_mobile_sdk.dart';
 
-// Initialize client
-final client = FrappeClient('https://your-frappe-site.com');
+// Initialize database (required for stateless login)
+final database = await AppDatabase.getInstance();
 
-// Login
-await client.auth.loginWithCredentials('username', 'password');
+// Initialize client with database
+final client = FrappeClient('https://your-frappe-site.com');
+final authService = AuthService();
+authService.initialize('https://your-frappe-site.com', database: database);
+
+// Login (stateless - tokens stored in database)
+final loginResponse = await authService.login('username', 'password');
+// Returns: { access_token, refresh_token, user, full_name, mobile_form_names }
+
+// Restore session on app launch (keeps user logged in)
+final isAuthenticated = await authService.restoreSession();
 
 // CRUD Operations
 final doc = await client.document.createDocument('Customer', {
@@ -159,14 +171,20 @@ final todos = await client.doc('ToDo')
 ```dart
 import 'package:frappe_mobile_sdk/frappe_mobile_sdk.dart';
 
-// Initialize SDK
+// Initialize SDK (database is created automatically)
 final sdk = FrappeSDK(
   baseUrl: 'https://your-frappe-site.com',
   doctypes: ['Customer', 'Lead', 'Item'],
 );
 
 await sdk.initialize();
-await sdk.login('username', 'password');
+
+// Login (stateless - tokens stored in database automatically)
+final loginResponse = await sdk.login('username', 'password');
+// Returns: { access_token, refresh_token, user, full_name, mobile_form_names }
+
+// User stays logged in automatically - tokens persist in database
+// On app restart, call restoreSession() to restore login state
 
 // Option A: Use Form Renderer Helper
 final renderer = FrappeFormRenderer(
@@ -289,15 +307,97 @@ loginConfig: LoginConfig(
 
 Flow: User taps "Login with OAuth" → browser opens → user authorizes → app reopens automatically with tokens. Tokens are stored in secure storage. On 401, refresh token is used automatically; if refresh fails, user must re-login.
 
-## 📚 API Reference
+## 🔐 Stateless Login & Keep User Logged In
 
-### FrappeClient (Direct API)
+The SDK uses **stateless login** via `mobile_auth.login` API. Tokens are automatically stored in the database and persist across app restarts.
+
+### Login Flow
 
 ```dart
-// Authentication
-client.auth.loginWithCredentials(username, password);
-client.auth.setApiKey(apiKey, apiSecret);
-client.auth.logout();
+// Initialize with database (required)
+final database = await AppDatabase.getInstance();
+final authService = AuthService();
+authService.initialize(baseUrl, database: database);
+
+// Login - tokens stored in database automatically
+final response = await authService.login(username, password);
+// Response includes: access_token, refresh_token, user, full_name, mobile_form_names
+
+// User stays logged in - tokens persist in database
+```
+
+### Restore Session (Keep User Logged In)
+
+```dart
+// On app launch, restore session from database
+final isAuthenticated = await authService.restoreSession();
+
+if (isAuthenticated) {
+  // User is logged in - proceed to main app
+} else {
+  // Show login screen
+}
+```
+
+**How it works:**
+- ✅ **Login**: Tokens stored in database automatically
+- ✅ **App restart**: `restoreSession()` finds tokens → user stays logged in
+- ✅ **Token expiry**: On 401 error, automatically refreshes using `refresh_token`
+- ✅ **Logout**: Clears tokens from database → user must login again
+
+**Priority order** (in `restoreSession()`):
+1. Mobile auth tokens (from database) - **Primary method**
+2. OAuth tokens (from secure storage)
+3. API key (from secure storage)
+
+### Using LoginScreen Widget
+
+The `LoginScreen` widget automatically uses stateless login when database is provided:
+
+```dart
+final database = await AppDatabase.getInstance();
+final authService = AuthService();
+authService.initialize(baseUrl, database: database);
+
+// LoginScreen automatically uses mobile_auth.login
+LoginScreen(
+  authService: authService,
+  database: database, // Required for stateless login
+  appConfig: appConfig,
+  onLoginSuccess: () {
+    // User logged in - tokens stored in database
+    // Navigate to main app
+  },
+)
+```
+
+**Note**: `LoginScreen` requires `database` parameter. Without it, login will fail with an error.
+
+## 📚 API Reference
+
+### AuthService (Stateless Login)
+
+```dart
+// Initialize with database (required for stateless login)
+final database = await AppDatabase.getInstance();
+final authService = AuthService();
+authService.initialize(baseUrl, database: database);
+
+// Login (stateless - uses mobile_auth.login API)
+final response = await authService.login(username, password);
+// Returns: { access_token, refresh_token, user, full_name, mobile_form_names }
+
+// Restore session (keeps user logged in)
+final isAuthenticated = await authService.restoreSession();
+
+// API key login (alternative)
+await authService.loginWithApiKey(apiKey, apiSecret);
+
+// OAuth login
+await authService.loginWithOAuth(...);
+
+// Logout (clears tokens from database)
+await authService.logout();
 
 // Documents
 client.document.createDocument(doctype, data);
@@ -322,8 +422,14 @@ client.doc('ToDo').where('status', 'Open').get();
 
 ```dart
 final sdk = FrappeSDK(baseUrl: '...', doctypes: ['...']);
-await sdk.initialize();
-await sdk.login(username, password);
+await sdk.initialize(); // Database created automatically
+
+// Login (stateless - tokens stored in database)
+final loginResponse = await sdk.login(username, password);
+// Returns: { access_token, refresh_token, user, full_name, mobile_form_names }
+
+// User stays logged in automatically
+// On app restart, call sdk.auth.restoreSession() to restore login state
 
 // Access services
 sdk.api          // FrappeClient

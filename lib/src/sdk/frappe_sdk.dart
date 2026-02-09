@@ -33,7 +33,7 @@ class FrappeSDK {
     _database = await AppDatabase.getInstance();
     _client = FrappeClient(baseUrl);
     _authService = AuthService();
-    _authService!.initialize(baseUrl);
+    _authService!.initialize(baseUrl, database: _database);
 
     _repository = OfflineRepository(_database!);
     _metaService = MetaService(_client!, _database!);
@@ -43,8 +43,8 @@ class FrappeSDK {
     _initialized = true;
   }
 
-  /// Login with username and password
-  Future<bool> login(String username, String password) async {
+  /// Login with username and password (stateless, returns user info)
+  Future<Map<String, dynamic>> login(String username, String password) async {
     if (!_initialized) await initialize();
     return await _authService!.login(username, password);
   }

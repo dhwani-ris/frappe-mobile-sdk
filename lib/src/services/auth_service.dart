@@ -1,6 +1,7 @@
 import '../api/client.dart';
 import '../api/oauth2_helper.dart';
 import '../database/app_database.dart';
+import '../database/entities/auth_token_entity.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 /// Handles Frappe authentication via credentials, API key, or OAuth 2.0.
@@ -20,10 +21,14 @@ class AuthService {
   final FlutterSecureStorage _storage = const FlutterSecureStorage();
   FrappeClient? _client;
   bool _isAuthenticated = false;
+  AppDatabase? _database;
 
   /// Initializes the client with the given [baseUrl].
-  void initialize(String baseUrl) {
-    _client = FrappeClient(baseUrl, onTokenExpired: _tryRefreshOAuthToken);
+  ///
+  /// Optionally provide [database] for stateless login token storage.
+  void initialize(String baseUrl, {AppDatabase? database}) {
+    _client = FrappeClient(baseUrl, onTokenExpired: _tryRefreshMobileAuthToken);
+    _database = database;
     _storage.write(key: _keyBaseUrl, value: baseUrl);
   }
 
@@ -38,19 +43,70 @@ class AuthService {
   /// True if authenticated and client is initialized.
   bool get isAuthenticated => _isAuthenticated && _client != null;
 
-  /// Authenticates with username and password.
+  /// Authenticates with username and password using mobile_auth.login (stateless).
   ///
-  /// Throws if not initialized or credentials are invalid.
-  Future<bool> login(String username, String password) async {
+  /// This is the default login method. Stores access_token and refresh_token in database.
+  /// Returns user info including mobile_form_names.
+  /// Throws if not initialized, database not set, or credentials are invalid.
+  Future<Map<String, dynamic>> login(String username, String password) async {
     if (_client == null) {
       throw Exception('AuthService not initialized. Call initialize() first.');
     }
+    if (_database == null) {
+      throw Exception(
+        'Database not set. Call initialize(baseUrl, database: db) first.',
+      );
+    }
+
     try {
-      await _client!.auth.loginWithCredentials(username, password);
+      final result = await _client!.rest.call(
+        'mobile_auth.login',
+        args: {'username': username, 'password': password},
+      );
+
+      final response = result is Map<String, dynamic>
+          ? (result['message'] is Map ? result['message'] : result)
+          : <String, dynamic>{};
+
+      final accessToken = response['access_token'] as String?;
+      final refreshToken = response['refresh_token'] as String?;
+      final user = response['user'] as String?;
+      final fullName = response['full_name'] as String?;
+
+      if (accessToken == null || accessToken.isEmpty) {
+        throw Exception('Login response missing access_token');
+      }
+      if (refreshToken == null || refreshToken.isEmpty) {
+        throw Exception('Login response missing refresh_token');
+      }
+      if (user == null || user.isEmpty) {
+        throw Exception('Login response missing user');
+      }
+
+      // Store tokens in database
+      final tokenEntity = AuthTokenEntity(
+        accessToken: accessToken,
+        refreshToken: refreshToken,
+        user: user,
+        fullName: fullName,
+        createdAt: DateTime.now().millisecondsSinceEpoch,
+      );
+
+      final existing = await _database!.authTokenDao.getCurrentToken();
+      if (existing != null) {
+        await _database!.authTokenDao.updateToken(tokenEntity);
+      } else {
+        await _database!.authTokenDao.insertToken(tokenEntity);
+      }
+
+      // Set bearer token for API calls
+      _client!.rest.setBearerToken(accessToken);
       _isAuthenticated = true;
-      return true;
+
+      return response;
     } catch (e) {
       _isAuthenticated = false;
+      if (e is Exception) rethrow;
       throw Exception('Login failed: $e');
     }
   }
@@ -76,13 +132,29 @@ class AuthService {
 
   /// Restores session from stored credentials.
   ///
-  /// Tries OAuth tokens first (with refresh if expired), then API key.
+  /// Tries mobile auth tokens (from DB) first, then OAuth tokens, then API key.
   /// Returns true if a valid session was restored.
   Future<bool> restoreSession() async {
     final baseUrl = await getBaseUrl();
     if (baseUrl == null) return false;
 
-    if (_client == null) initialize(baseUrl);
+    if (_client == null) {
+      initialize(baseUrl, database: _database);
+    }
+
+    // Try mobile auth tokens from database first
+    if (_database != null) {
+      try {
+        final token = await _database!.authTokenDao.getCurrentToken();
+        if (token != null && token.accessToken.isNotEmpty) {
+          _client!.rest.setBearerToken(token.accessToken);
+          _isAuthenticated = true;
+          return true;
+        }
+      } catch (_) {
+        // Continue to other auth methods
+      }
+    }
 
     final accessToken = await _storage.read(key: _keyOAuthAccessToken);
     final refreshToken = await _storage.read(key: _keyOAuthRefreshToken);
@@ -223,6 +295,9 @@ class AuthService {
     await _storage.delete(key: _keyApiKey);
     await _storage.delete(key: _keyApiSecret);
     await _clearOAuthTokens();
+    if (_database != null) {
+      await _database!.authTokenDao.deleteAll();
+    }
     if (clearDatabase) {
       await AppDatabase.clearAllData();
     }
@@ -250,6 +325,54 @@ class AuthService {
         value: expiresAt.toString(),
       );
     }
+  }
+
+  Future<bool> _tryRefreshMobileAuthToken() async {
+    // Try mobile auth refresh first
+    if (_database != null) {
+      try {
+        final token = await _database!.authTokenDao.getCurrentToken();
+        if (token != null && token.refreshToken.isNotEmpty) {
+          final baseUrl = await getBaseUrl();
+          if (baseUrl != null) {
+            // Call mobile_auth.refresh_token endpoint
+            try {
+              final result = await _client!.rest.call(
+                'mobile_auth.refresh_token',
+                args: {'refresh_token': token.refreshToken},
+              );
+              final response = result is Map<String, dynamic>
+                  ? (result['message'] is Map ? result['message'] : result)
+                  : <String, dynamic>{};
+              final newAccessToken = response['access_token'] as String?;
+              final newRefreshToken =
+                  response['refresh_token'] as String? ?? token.refreshToken;
+
+              if (newAccessToken != null && newAccessToken.isNotEmpty) {
+                final updatedToken = AuthTokenEntity(
+                  accessToken: newAccessToken,
+                  refreshToken: newRefreshToken,
+                  user: token.user,
+                  fullName: token.fullName,
+                  createdAt: token.createdAt,
+                );
+                await _database!.authTokenDao.updateToken(updatedToken);
+                _client?.rest.setBearerToken(newAccessToken);
+                return true;
+              }
+            } catch (_) {
+              // Refresh failed, clear tokens
+              await _database!.authTokenDao.deleteAll();
+            }
+          }
+        }
+      } catch (_) {
+        // Continue to OAuth refresh
+      }
+    }
+
+    // Fallback to OAuth refresh
+    return await _tryRefreshOAuthToken();
   }
 
   Future<bool> _tryRefreshOAuthToken() async {

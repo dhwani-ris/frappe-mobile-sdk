@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../constants/oauth_constants.dart';
+import '../database/app_database.dart';
 import '../models/app_config.dart';
 import '../services/auth_service.dart';
 
@@ -17,6 +18,7 @@ class LoginScreen extends StatefulWidget {
   final AppConfig? appConfig;
   final String? initialBaseUrl;
   final VoidCallback? onLoginSuccess;
+  final AppDatabase? database;
 
   const LoginScreen({
     super.key,
@@ -24,6 +26,7 @@ class LoginScreen extends StatefulWidget {
     this.appConfig,
     this.initialBaseUrl,
     this.onLoginSuccess,
+    this.database,
   });
 
   @override
@@ -194,13 +197,20 @@ class _LoginScreenState extends State<LoginScreen> {
     try {
       final baseUrl = _baseUrl;
       if (widget.authService.client == null) {
-        widget.authService.initialize(baseUrl);
+        widget.authService.initialize(baseUrl, database: widget.database);
       }
-      final success = await widget.authService.login(
+
+      if (widget.database == null) {
+        throw Exception(
+          'Database not set. LoginScreen requires database for stateless login.',
+        );
+      }
+
+      await widget.authService.login(
         _usernameController.text.trim(),
         _passwordController.text,
       );
-      if (success && mounted) {
+      if (mounted) {
         await Future.delayed(const Duration(milliseconds: 100));
         widget.onLoginSuccess?.call();
       }
