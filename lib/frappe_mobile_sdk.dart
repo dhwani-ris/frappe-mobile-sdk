@@ -55,6 +55,7 @@ export 'src/ui/app_guard.dart';
 export 'src/ui/login_screen.dart';
 export 'src/ui/doctype_list_screen.dart';
 export 'src/ui/form_screen.dart';
+export 'src/ui/document_list_screen.dart';
 export 'src/ui/sync_status_screen.dart';
 export 'src/ui/form_renderer_helper.dart';
 export 'src/ui/widgets/form_builder.dart'; // Exports FrappeFormStyle

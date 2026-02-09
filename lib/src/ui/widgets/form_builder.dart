@@ -64,6 +64,20 @@ class FrappeFormBuilder extends StatefulWidget {
   /// Base URL for displaying uploaded file URLs (e.g. for image preview)
   final String? fileUrlBase;
 
+  /// Fetches a linked document by doctype and name (for fetch_from).
+  /// Try local repository first, then server. Return null if not found.
+  final Future<Map<String, dynamic>?> Function(
+    String linkedDoctype,
+    String docName,
+  )?
+  fetchLinkedDocument;
+
+  /// Resolves child doctype meta for Table fields. Required for child table support.
+  final Future<DocTypeMeta> Function(String doctype)? getMeta;
+
+  /// Called once with the form's submit handler so the parent (e.g. FormScreen) can trigger save from AppBar.
+  final void Function(void Function() submit)? registerSubmit;
+
   const FrappeFormBuilder({
     super.key,
     required this.meta,
@@ -75,6 +89,9 @@ class FrappeFormBuilder extends StatefulWidget {
     this.style,
     this.uploadFile,
     this.fileUrlBase,
+    this.fetchLinkedDocument,
+    this.getMeta,
+    this.registerSubmit,
   });
 
   @override
@@ -239,6 +256,65 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
     return DependsOnEvaluator.evaluate(field.readOnlyDependsOn, _formData);
   }
 
+  /// Handles fetch_from: when a Link field changes, fetch the linked document
+  /// and patch target fields (format: "link_field_name.source_field_name").
+  Future<void> _handleFetchFrom(String changedFieldName, dynamic value) async {
+    if (widget.fetchLinkedDocument == null) return;
+
+    final fieldsToUpdate = <DocField>[];
+    for (final f in widget.meta.fields) {
+      if (f.fetchFrom == null || f.fetchFrom!.isEmpty) continue;
+      final parts = f.fetchFrom!.split('.');
+      if (parts.length != 2) continue;
+      final linkField = parts[0].trim();
+      if (linkField == changedFieldName) {
+        fieldsToUpdate.add(f);
+      }
+    }
+    if (fieldsToUpdate.isEmpty) return;
+
+    DocField? linkFieldMeta;
+    for (final f in widget.meta.fields) {
+      if (f.fieldname == changedFieldName) {
+        linkFieldMeta = f;
+        break;
+      }
+    }
+    if (linkFieldMeta?.options == null) return;
+
+    final linkedDoctype = linkFieldMeta!.options!;
+    final linkedDocName = value.toString().trim();
+
+    try {
+      final linkedData = await widget.fetchLinkedDocument!(
+        linkedDoctype,
+        linkedDocName,
+      );
+      if (linkedData == null || !mounted) return;
+
+      final updates = <String, dynamic>{};
+      for (final targetField in fieldsToUpdate) {
+        final parts = targetField.fetchFrom!.split('.');
+        final sourceFieldName = parts[1].trim();
+        if (linkedData.containsKey(sourceFieldName)) {
+          final val = linkedData[sourceFieldName];
+          if (targetField.fieldname != null) {
+            updates[targetField.fieldname!] = val?.toString();
+          }
+        }
+      }
+      if (updates.isEmpty) return;
+
+      setState(() {
+        _formData.addAll(updates);
+      });
+      _formKey.currentState?.patchValue(updates);
+      if (mounted) setState(() {});
+    } catch (e) {
+      debugPrint('FetchFrom error: $e');
+    }
+  }
+
   Widget _buildFieldWidget(DocField field) {
     if (!_shouldShowField(field)) {
       return const SizedBox.shrink();
@@ -266,6 +342,7 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
       mandatoryDependsOn: field.mandatoryDependsOn,
       readOnlyDependsOn: field.readOnlyDependsOn,
       linkFilters: field.linkFilters,
+      fetchFrom: field.fetchFrom,
       section: field.section,
       defaultValue: field.defaultValue,
       description: field.description,
@@ -278,13 +355,25 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
     );
 
     final initialValue =
-        widget.initialData?[field.fieldname] ?? field.defaultValue;
+        _formData[field.fieldname] ??
+        widget.initialData?[field.fieldname] ??
+        field.defaultValue;
 
     final fieldWidget = _fieldFactory.createField(
       field: fieldWithEffectiveProps,
       value: initialValue,
       uploadFile: widget.uploadFile,
       fileUrlBase: widget.fileUrlBase,
+      getMeta: widget.getMeta,
+      childTableFormBuilder: widget.getMeta != null
+          ? (childMeta, initialData, onSubmit) => FrappeFormBuilder(
+              meta: childMeta,
+              initialData: initialData,
+              onSubmit: onSubmit,
+              getMeta: widget.getMeta,
+              fetchLinkedDocument: widget.fetchLinkedDocument,
+            )
+          : null,
       onChanged: (value) {
         setState(() {
           final oldValue = _formData[field.fieldname];
@@ -299,7 +388,6 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
           }
 
           // If value changed, clear dependent link fields that depend on this field
-          // This ensures dependent dropdowns reset when parent field changes
           if (oldValue != value && field.fieldname != null) {
             for (final otherField in widget.meta.fields) {
               if (otherField.fieldtype == 'Link' &&
@@ -307,18 +395,23 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
                   otherField.linkFilters!.contains(
                     'eval:doc.${field.fieldname}',
                   )) {
-                // Clear the dependent field value
                 _formData.remove(otherField.fieldname);
               }
             }
           }
 
+          // Fetch-from: when a Link (or source field) changes, fetch linked doc and patch form
+          if (oldValue != value &&
+              field.fieldname != null &&
+              value != null &&
+              value.toString().trim().isNotEmpty) {
+            _handleFetchFrom(field.fieldname!, value);
+          }
+
           // Trigger rebuild to update dependent fields
           if (oldValue != value) {
             WidgetsBinding.instance.addPostFrameCallback((_) {
-              if (mounted) {
-                setState(() {});
-              }
+              if (mounted) setState(() {});
             });
           }
         });
@@ -495,6 +588,7 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
     if (_tabs.isEmpty) {
       return const Center(child: Text('No fields to display'));
     }
+    widget.registerSubmit?.call(_handleSubmit);
 
     return FormBuilder(
       key: _formKey,
@@ -517,21 +611,6 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
                   )
                 : _buildTabContent(_tabs.first),
           ),
-          if (!widget.readOnly && widget.onSubmit != null)
-            Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: SizedBox(
-                width: double.infinity,
-                child: ElevatedButton(
-                  onPressed: _handleSubmit,
-                  style: ElevatedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 16),
-                    minimumSize: const Size(double.infinity, 48),
-                  ),
-                  child: const Text('Submit'),
-                ),
-              ),
-            ),
         ],
       ),
     );

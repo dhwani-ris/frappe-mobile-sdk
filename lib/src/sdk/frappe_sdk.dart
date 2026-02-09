@@ -36,7 +36,12 @@ class FrappeSDK {
 
     _repository = OfflineRepository(_database!);
     _metaService = MetaService(_client!, _database!);
-    _syncService = SyncService(_client!, _repository!, _database!);
+    _syncService = SyncService(
+      _client!,
+      _repository!,
+      _database!,
+      getMobileUuid: () => _authService!.getOrCreateMobileUuid(),
+    );
     _linkOptionService = LinkOptionService(_client!);
 
     _initialized = true;
@@ -157,6 +162,12 @@ class FrappeSDK {
 
   /// Check if authenticated
   bool get isAuthenticated => _authService?.isAuthenticated ?? false;
+
+  /// Stable UUID for this device/install. Use when creating docs from mobile so server can set mobile_uuid.
+  Future<String> getMobileUuid() async {
+    if (!_initialized) await initialize();
+    return await _authService!.getOrCreateMobileUuid();
+  }
 
   /// Prefetch metadata for mobile form doctypes into DB only (no in-memory cache).
   /// Use this at app start; meta is loaded into cache only when getMeta(doctype) is used.

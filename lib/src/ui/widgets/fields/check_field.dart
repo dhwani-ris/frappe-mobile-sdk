@@ -31,7 +31,7 @@ class CheckField extends BaseField {
     }
 
     return FormBuilderSwitch(
-      key: ValueKey('${field.fieldname}_$initialValue'),
+      key: ValueKey('check_${field.fieldname}'),
       name: field.fieldname ?? '',
       initialValue: initialValue,
       enabled: enabled && !field.readOnly,

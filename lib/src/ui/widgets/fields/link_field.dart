@@ -39,9 +39,7 @@ class LinkField extends BaseField {
       }
 
       return FormBuilderDropdown<String>(
-        key: ValueKey(
-          '${field.fieldname}_${validInitialValue ?? ''}_${options!.length}',
-        ),
+        key: ValueKey('link_${field.fieldname}_${options!.length}'),
         name: field.fieldname ?? '',
         initialValue: validInitialValue,
         enabled: enabled && !field.readOnly,
@@ -89,6 +87,7 @@ class LinkField extends BaseField {
 
     // Fallback to text field
     return FormBuilderTextField(
+      key: ValueKey('link_text_${field.fieldname}'),
       name: field.fieldname ?? '',
       initialValue: value?.toString() ?? field.defaultValue ?? '',
       enabled: enabled && !field.readOnly,
@@ -336,7 +335,7 @@ class _LinkFieldDropdownState extends State<_LinkFieldDropdown> {
 
     return FormBuilderDropdown<String>(
       key: ValueKey(
-        '${widget.field.fieldname}_${initialVal}_${_options.length}',
+        'link_dropdown_${widget.field.fieldname}_${_options.length}',
       ),
       name: widget.field.fieldname ?? '',
       initialValue: initialVal,

@@ -8,9 +8,15 @@ class SyncService {
   final FrappeClient _client;
   final OfflineRepository _repository;
   final AppDatabase _database; // ignore: unused_field
+  final Future<String?> Function()? _getMobileUuid;
   bool _isSyncing = false;
 
-  SyncService(this._client, this._repository, this._database);
+  SyncService(
+    this._client,
+    this._repository,
+    this._database, {
+    Future<String?> Function()? getMobileUuid,
+  }) : _getMobileUuid = getMobileUuid;
 
   /// Check if device is online
   Future<bool> isOnline() async {
@@ -60,9 +66,16 @@ class SyncService {
             success++;
           } else if (doc.serverId == null) {
             try {
+              final data = Map<String, dynamic>.from(doc.data);
+              if (_getMobileUuid != null) {
+                final uuid = await _getMobileUuid();
+                if (uuid != null && uuid.isNotEmpty) {
+                  data['mobile_uuid'] = uuid;
+                }
+              }
               final result = await _client.document.createDocument(
                 doc.doctype,
-                doc.data,
+                data,
               );
 
               final serverId =
