@@ -49,6 +49,9 @@ dependencies:
   # Deep links for OAuth redirect (auto-capture code)
   app_links: ^7.0.0
 
+  # Package metadata (version, package name) for app status checks
+  package_info_plus: ^9.0.0
+
   # JSON serialization
   json_annotation: ^4.8.1
 
