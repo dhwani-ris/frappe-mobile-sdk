@@ -455,6 +455,7 @@ class _FormScreenState extends State<FormScreen> {
                     }
                   : null,
               fileUrlBase: widget.api?.baseUrl,
+              imageHeaders: widget.api?.requestHeaders,
               fetchLinkedDocument: _fetchLinkedDocument,
               getMeta: widget.metaService != null
                   ? (doctype) => widget.metaService!.getMeta(doctype)

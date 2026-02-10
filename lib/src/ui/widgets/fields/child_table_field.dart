@@ -2,13 +2,15 @@ import 'package:flutter/material.dart';
 import '../../../models/doc_field.dart';
 import '../../../models/doc_type_meta.dart';
 
-/// Builds the form widget for a child table row (add/edit dialog).
+/// Builds the form widget for a child table row (add/edit dialog or bottom sheet).
+/// [registerSubmit] is called with the form's submit handler so the host can show Save/Cancel.
 typedef ChildTableFormBuilder =
     Widget Function(
       DocTypeMeta childMeta,
       Map<String, dynamic>? initialData,
-      void Function(Map<String, dynamic>) onSubmit,
-    );
+      void Function(Map<String, dynamic>) onSubmit, {
+      void Function(void Function() submit)? registerSubmit,
+    });
 
 /// Widget for Table (child table) field type.
 /// Shows a list of rows; Add/Edit open a dialog with the form built by [formBuilder].
@@ -160,32 +162,22 @@ class ChildTableField extends StatelessWidget {
     }
     if (!context.mounted) return;
 
-    await showDialog<void>(
+    await showModalBottomSheet<void>(
       context: context,
-      builder: (ctx) => Dialog(
-        child: Container(
-          width: 500,
-          height: 500,
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            mainAxisSize: MainAxisSize.max,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(
-                'Add ${field.options}',
-                style: Theme.of(ctx).textTheme.titleLarge,
-              ),
-              const SizedBox(height: 16),
-              Expanded(
-                child: formBuilder!(childMeta!, null, (data) {
-                  final newList = List<dynamic>.from(listValue)..add(data);
-                  onChanged!(newList);
-                  Navigator.pop(ctx);
-                }),
-              ),
-            ],
-          ),
-        ),
+      isScrollControlled: true,
+      useSafeArea: true,
+      builder: (ctx) => _ChildTableSheet(
+        title: 'Add ${field.options}',
+        childMeta: childMeta!,
+        initialData: null,
+        isEdit: false,
+        formBuilder: formBuilder!,
+        onSubmit: (data) {
+          final newList = List<dynamic>.from(listValue)..add(data);
+          onChanged!(newList);
+          Navigator.pop(ctx);
+        },
+        onRemove: null,
       ),
     );
   }
@@ -216,33 +208,141 @@ class ChildTableField extends StatelessWidget {
     }
     if (!context.mounted) return;
 
-    await showDialog<void>(
+    await showModalBottomSheet<void>(
       context: context,
-      builder: (ctx) => Dialog(
-        child: Container(
-          width: 500,
-          height: 500,
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            mainAxisSize: MainAxisSize.max,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(
-                'Edit ${field.options}',
-                style: Theme.of(ctx).textTheme.titleLarge,
-              ),
-              const SizedBox(height: 16),
-              Expanded(
-                child: formBuilder!(childMeta!, rowData, (data) {
-                  final newList = List<dynamic>.from(listValue);
-                  newList[index] = data;
-                  onChanged!(newList);
-                  Navigator.pop(ctx);
-                }),
-              ),
-            ],
+      isScrollControlled: true,
+      useSafeArea: true,
+      builder: (ctx) => _ChildTableSheet(
+        title: 'Edit ${field.options}',
+        childMeta: childMeta!,
+        initialData: rowData,
+        isEdit: true,
+        formBuilder: formBuilder!,
+        onSubmit: (data) {
+          final newList = List<dynamic>.from(listValue);
+          newList[index] = data;
+          onChanged!(newList);
+          Navigator.pop(ctx);
+        },
+        onRemove: () {
+          final newList = List<dynamic>.from(listValue);
+          newList.removeAt(index);
+          onChanged!(newList);
+          Navigator.pop(ctx);
+        },
+      ),
+    );
+  }
+}
+
+/// Content for child table add/edit modal bottom sheet with Save, Cancel, Remove.
+class _ChildTableSheet extends StatefulWidget {
+  const _ChildTableSheet({
+    required this.title,
+    required this.childMeta,
+    required this.initialData,
+    required this.isEdit,
+    required this.formBuilder,
+    required this.onSubmit,
+    required this.onRemove,
+  });
+
+  final String title;
+  final DocTypeMeta childMeta;
+  final Map<String, dynamic>? initialData;
+  final bool isEdit;
+  final ChildTableFormBuilder formBuilder;
+  final void Function(Map<String, dynamic>) onSubmit;
+  final void Function()? onRemove;
+
+  @override
+  State<_ChildTableSheet> createState() => _ChildTableSheetState();
+}
+
+class _ChildTableSheetState extends State<_ChildTableSheet> {
+  void Function()? _submitFn;
+
+  @override
+  Widget build(BuildContext context) {
+    final height = MediaQuery.of(context).size.height * 0.85;
+    return SizedBox(
+      height: height,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    widget.title,
+                    style: Theme.of(context).textTheme.titleLarge,
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.close),
+                  onPressed: () => Navigator.pop(context),
+                ),
+              ],
+            ),
           ),
-        ),
+          const Divider(height: 1),
+          Expanded(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(16),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxHeight: MediaQuery.of(context).size.height,
+                ),
+                child: widget.formBuilder(
+                  widget.childMeta,
+                  widget.initialData,
+                  (data) {
+                    widget.onSubmit(data);
+                    Navigator.pop(context);
+                  },
+                  registerSubmit: (fn) {
+                    _submitFn = fn;
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      if (mounted) setState(() {});
+                    });
+                  },
+                ),
+              ),
+            ),
+          ),
+          const Divider(height: 1),
+          SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+              child: Row(
+                children: [
+                  if (widget.isEdit && widget.onRemove != null)
+                    TextButton.icon(
+                      onPressed: () => widget.onRemove!(),
+                      icon: const Icon(Icons.delete_outline, size: 20),
+                      label: const Text('Remove'),
+                      style: TextButton.styleFrom(foregroundColor: Colors.red),
+                    ),
+                  if (widget.isEdit && widget.onRemove != null)
+                    const SizedBox(width: 8),
+                  const Spacer(),
+                  TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text('Cancel'),
+                  ),
+                  const SizedBox(width: 8),
+                  FilledButton.icon(
+                    onPressed: _submitFn != null ? () => _submitFn!() : null,
+                    icon: const Icon(Icons.check, size: 20),
+                    label: const Text('Save'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
