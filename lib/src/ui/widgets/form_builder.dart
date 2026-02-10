@@ -371,15 +371,17 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
       imageHeaders: widget.imageHeaders,
       getMeta: widget.getMeta,
       childTableFormBuilder: widget.getMeta != null
-          ? (childMeta, initialData, onSubmit) => FrappeFormBuilder(
-              meta: childMeta,
-              initialData: initialData,
-              onSubmit: onSubmit,
-              getMeta: widget.getMeta,
-              fileUrlBase: widget.fileUrlBase,
-              imageHeaders: widget.imageHeaders,
-              fetchLinkedDocument: widget.fetchLinkedDocument,
-            )
+          ? (childMeta, initialData, onSubmit, {registerSubmit}) =>
+                FrappeFormBuilder(
+                  meta: childMeta,
+                  initialData: initialData,
+                  onSubmit: onSubmit,
+                  registerSubmit: registerSubmit,
+                  getMeta: widget.getMeta,
+                  fileUrlBase: widget.fileUrlBase,
+                  imageHeaders: widget.imageHeaders,
+                  fetchLinkedDocument: widget.fetchLinkedDocument,
+                )
           : null,
       onChanged: (value) {
         setState(() {
