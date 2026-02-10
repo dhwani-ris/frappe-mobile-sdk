@@ -468,6 +468,7 @@ You can also create fully custom styles using `FrappeFormStyle`.
 
 ## 📖 Documentation
 
+- **[DOCUMENTATION.md](DOCUMENTATION.md)** – **Full package docs**: API calling (FrappeClient, CRUD, QueryBuilder, attachments, custom methods), form rendering (FormScreen, FrappeFormBuilder, DoctypeListScreen, DocumentListScreen, child tables, images), new APIs (requestHeaders, getMobileUuid, getMobileFormDoctypeNames, error helpers), auth, offline/sync, and quick reference.
 - **[SETUP.md](SETUP.md)** - Detailed setup instructions
 - **[CUSTOMIZATION.md](CUSTOMIZATION.md)** - UI customization guide
 - **[TESTING.md](TESTING.md)** - Testing strategies
