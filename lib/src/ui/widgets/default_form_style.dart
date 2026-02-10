@@ -18,7 +18,7 @@ class DefaultFormStyle {
       fontWeight: FontWeight.bold,
       color: Colors.black87,
     ),
-    sectionMargin: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
+    sectionMargin: const EdgeInsets.symmetric(vertical: 6, horizontal: 6),
     sectionPadding: const EdgeInsets.all(16),
     fieldPadding: const EdgeInsets.only(bottom: 16),
     fieldDecoration: (field) => InputDecoration(
@@ -50,7 +50,7 @@ class DefaultFormStyle {
       fontSize: 16,
       fontWeight: FontWeight.bold,
     ),
-    sectionMargin: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
+    sectionMargin: const EdgeInsets.symmetric(vertical: 4, horizontal: 6),
     sectionPadding: const EdgeInsets.all(12),
     fieldPadding: const EdgeInsets.only(bottom: 12),
     fieldDecoration: (field) => InputDecoration(
@@ -66,7 +66,7 @@ class DefaultFormStyle {
       fontSize: 20,
       fontWeight: FontWeight.bold,
     ),
-    sectionMargin: const EdgeInsets.symmetric(vertical: 12, horizontal: 24),
+    sectionMargin: const EdgeInsets.symmetric(vertical: 6, horizontal: 6),
     sectionPadding: const EdgeInsets.all(20),
     fieldPadding: const EdgeInsets.only(bottom: 20),
     fieldDecoration: (field) => InputDecoration(

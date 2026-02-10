@@ -24,6 +24,9 @@ class DocumentListScreen extends StatefulWidget {
   final FrappeClient? api;
   final Future<String?> Function()? getMobileUuid;
 
+  /// Optional: current user's roles for permission evaluation.
+  final List<String>? userRoles;
+
   /// Optional initial documents; if null, list is fetched on load.
   final List<Document>? initialDocuments;
 
@@ -38,6 +41,7 @@ class DocumentListScreen extends StatefulWidget {
     this.api,
     this.getMobileUuid,
     this.initialDocuments,
+    this.userRoles,
   });
 
   @override
@@ -54,6 +58,13 @@ class _DocumentListScreenState extends State<DocumentListScreen> {
   bool _sortAsc = true;
   int _page = 0;
   static const int _pageSize = 20;
+
+  bool get _canCreate =>
+      widget.meta.hasPermission('create', userRoles: widget.userRoles);
+  bool get _canWrite =>
+      widget.meta.hasPermission('write', userRoles: widget.userRoles);
+  bool get _canDelete =>
+      widget.meta.hasPermission('delete', userRoles: widget.userRoles);
 
   @override
   void initState() {
@@ -264,10 +275,12 @@ class _DocumentListScreenState extends State<DocumentListScreen> {
                 ],
               ),
             ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () => _openForm(null),
-        child: const Icon(Icons.add),
-      ),
+      floatingActionButton: _canCreate
+          ? FloatingActionButton(
+              onPressed: () => _openForm(null),
+              child: const Icon(Icons.add),
+            )
+          : null,
     );
   }
 
@@ -394,6 +407,11 @@ class _DocumentListScreenState extends State<DocumentListScreen> {
   }
 
   void _openForm(Document? doc) {
+    final isNew = doc == null;
+    // Guard against navigation when user lacks permissions
+    if (isNew && !_canCreate) return;
+    if (!isNew && !_canWrite) return;
+
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -410,6 +428,10 @@ class _DocumentListScreenState extends State<DocumentListScreen> {
             _pullDocuments();
           },
           getMobileUuid: widget.getMobileUuid,
+          // Permissions
+          readOnly: !isNew && !_canWrite,
+          canSave: isNew ? _canCreate : _canWrite,
+          canDelete: !isNew && _canDelete,
         ),
       ),
     );
