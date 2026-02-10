@@ -39,9 +39,7 @@ class LinkField extends BaseField {
       }
 
       return FormBuilderDropdown<String>(
-        key: ValueKey(
-          '${field.fieldname}_${validInitialValue ?? ''}_${options!.length}',
-        ),
+        key: ValueKey('link_${field.fieldname}_${options!.length}'),
         name: field.fieldname ?? '',
         initialValue: validInitialValue,
         enabled: enabled && !field.readOnly,
@@ -89,6 +87,7 @@ class LinkField extends BaseField {
 
     // Fallback to text field
     return FormBuilderTextField(
+      key: ValueKey('link_text_${field.fieldname}'),
       name: field.fieldname ?? '',
       initialValue: value?.toString() ?? field.defaultValue ?? '',
       enabled: enabled && !field.readOnly,
@@ -200,32 +199,32 @@ class _LinkFieldDropdownState extends State<_LinkFieldDropdown> {
   @override
   void didUpdateWidget(_LinkFieldDropdown oldWidget) {
     super.didUpdateWidget(oldWidget);
-    // Reload options if filters or form data changed
-    // Deep comparison of formData to detect changes in dependent fields
-    bool formDataChanged = false;
-    if (oldWidget.formData.length != widget.formData.length) {
-      formDataChanged = true;
-    } else {
-      for (final key in widget.formData.keys) {
-        if (oldWidget.formData[key] != widget.formData[key]) {
-          formDataChanged = true;
-          break;
-        }
-      }
-    }
-
-    if (oldWidget.linkFilters != widget.linkFilters || formDataChanged) {
+    // Reload options only if linkFilters changed or a *dependent* form field changed
+    if (oldWidget.linkFilters != widget.linkFilters) {
       _loadOptions();
+      return;
+    }
+    final dependentNames = LinkOptionService.getDependentFieldNames(
+      widget.linkFilters,
+    );
+    if (dependentNames.isEmpty) return;
+    for (final key in dependentNames) {
+      if (oldWidget.formData[key] != widget.formData[key]) {
+        _loadOptions();
+        return;
+      }
     }
   }
 
   @override
   Widget build(BuildContext context) {
     if (_isLoading) {
+      final loadingValue = widget.value?.toString();
+      final hasValue = loadingValue != null && loadingValue.isNotEmpty;
       return FormBuilderDropdown<String>(
         key: ValueKey('${widget.field.fieldname}_loading'),
         name: widget.field.fieldname ?? '',
-        initialValue: _kBlankValue,
+        initialValue: hasValue ? loadingValue : _kBlankValue,
         enabled: false,
         decoration:
             widget.style?.decoration ??
@@ -253,6 +252,11 @@ class _LinkFieldDropdownState extends State<_LinkFieldDropdown> {
               ],
             ),
           ),
+          if (hasValue)
+            DropdownMenuItem<String>(
+              value: loadingValue,
+              child: Text(loadingValue),
+            ),
         ],
       );
     }
@@ -292,29 +296,28 @@ class _LinkFieldDropdownState extends State<_LinkFieldDropdown> {
       );
     }
 
-    // Validate initialValue is in options list
+    // Resolve initial value: match from options by name or label; if not in list, keep value so it still displays
     final initialValueStr = widget.value?.toString();
     String? validInitialValue;
-    if (initialValueStr != null &&
-        initialValueStr.isNotEmpty &&
-        _options.isNotEmpty) {
-      // Try to find matching option by name first
-      try {
-        final matchingOption = _options.firstWhere(
-          (opt) => opt.name == initialValueStr,
-        );
-        validInitialValue = matchingOption.name;
-      } catch (e) {
-        // Not found by name, try by label
+    if (initialValueStr != null && initialValueStr.isNotEmpty) {
+      if (_options.isNotEmpty) {
         try {
           final matchingOption = _options.firstWhere(
-            (opt) => opt.label == initialValueStr,
+            (opt) => opt.name == initialValueStr,
           );
           validInitialValue = matchingOption.name;
-        } catch (e2) {
-          // Not found - use null (will show placeholder)
-          validInitialValue = null;
+        } catch (_) {
+          try {
+            final matchingOption = _options.firstWhere(
+              (opt) => opt.label == initialValueStr,
+            );
+            validInitialValue = matchingOption.name;
+          } catch (_) {
+            validInitialValue = null;
+          }
         }
+      } else {
+        validInitialValue = initialValueStr;
       }
     }
 
@@ -325,6 +328,14 @@ class _LinkFieldDropdownState extends State<_LinkFieldDropdown> {
         value: _kBlankValue,
         child: Text(placeholder, style: TextStyle(color: Colors.grey[600])),
       ),
+      // If current value is not in options (e.g. existing doc), add it so selected value shows
+      if (validInitialValue != null &&
+          validInitialValue != _kBlankValue &&
+          !_options.any((opt) => opt.name == validInitialValue))
+        DropdownMenuItem<String>(
+          value: validInitialValue,
+          child: Text(validInitialValue),
+        ),
       ..._options.map(
         (option) => DropdownMenuItem<String>(
           value: option.name,
@@ -336,7 +347,7 @@ class _LinkFieldDropdownState extends State<_LinkFieldDropdown> {
 
     return FormBuilderDropdown<String>(
       key: ValueKey(
-        '${widget.field.fieldname}_${initialVal}_${_options.length}',
+        'link_dropdown_${widget.field.fieldname}_${_options.length}',
       ),
       name: widget.field.fieldname ?? '',
       initialValue: initialVal,

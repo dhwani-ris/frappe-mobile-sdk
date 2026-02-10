@@ -27,7 +27,7 @@ class AttachField extends BaseField {
     String? filePath = value?.toString();
 
     return FormBuilderField<String>(
-      key: ValueKey('${field.fieldname}_$filePath'),
+      key: ValueKey('attach_${field.fieldname}'),
       name: field.fieldname ?? '',
       initialValue: filePath,
       enabled: enabled && !field.readOnly,

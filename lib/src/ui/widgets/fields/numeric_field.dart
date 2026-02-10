@@ -20,9 +20,7 @@ class NumericField extends BaseField {
     final isPercent = field.fieldtype == 'Percent';
 
     return FormBuilderTextField(
-      key: ValueKey(
-        '${field.fieldname}_${value?.toString() ?? field.defaultValue ?? ''}',
-      ),
+      key: ValueKey('numeric_${field.fieldname}'),
       name: field.fieldname ?? '',
       initialValue: value?.toString() ?? field.defaultValue ?? '',
       enabled: enabled && !field.readOnly,

@@ -7,6 +7,7 @@ import '../models/document.dart';
 import '../services/offline_repository.dart';
 import '../services/sync_service.dart';
 import '../services/link_option_service.dart';
+import '../services/meta_service.dart';
 import 'widgets/form_builder.dart';
 import 'sync_status_screen.dart';
 
@@ -18,10 +19,24 @@ class FormScreen extends StatefulWidget {
   final OfflineRepository repository;
   final SyncService? syncService;
   final LinkOptionService? linkOptionService;
+  final MetaService? metaService;
 
   /// When set, save/delete go to server first; local repo is updated after success.
   final FrappeClient? api;
   final Function()? onSaveSuccess;
+
+  /// When set, new documents created from this screen will include mobile_uuid on the server.
+  final Future<String?> Function()? getMobileUuid;
+
+  /// Optional form style (overrides the default style used by FrappeFormBuilder).
+  final FrappeFormStyle? style;
+
+  /// Force read-only mode (no editing, no save/delete).
+  final bool readOnly;
+
+  /// Explicit permission flags for save/delete buttons. If null, defaults to allowed.
+  final bool? canSave;
+  final bool? canDelete;
 
   const FormScreen({
     super.key,
@@ -30,8 +45,14 @@ class FormScreen extends StatefulWidget {
     required this.repository,
     this.syncService,
     this.linkOptionService,
+    this.metaService,
     this.api,
     this.onSaveSuccess,
+    this.getMobileUuid,
+    this.style,
+    this.readOnly = false,
+    this.canSave,
+    this.canDelete,
   });
 
   @override
@@ -41,6 +62,26 @@ class FormScreen extends StatefulWidget {
 class _FormScreenState extends State<FormScreen> {
   bool _isSaving = false;
   String? _errorMessage;
+  void Function()? _triggerSubmit;
+
+  Future<Map<String, dynamic>?> _fetchLinkedDocument(
+    String linkedDoctype,
+    String docName,
+  ) async {
+    try {
+      final doc = await widget.repository.getDocumentByServerId(
+        docName,
+        linkedDoctype,
+      );
+      if (doc != null) return doc.data;
+    } catch (_) {}
+    if (widget.api != null) {
+      try {
+        return await widget.api!.doctype.getByName(linkedDoctype, docName);
+      } catch (_) {}
+    }
+    return null;
+  }
 
   Future<void> _handleSubmit(Map<String, dynamic> formData) async {
     // Normalize multi-select: Frappe expects comma-separated string
@@ -63,6 +104,12 @@ class _FormScreenState extends State<FormScreen> {
       if (widget.api != null) {
         // Server-first: create/update on server, then update local
         if (widget.document == null) {
+          if (widget.getMobileUuid != null) {
+            final uuid = await widget.getMobileUuid!();
+            if (uuid != null && uuid.isNotEmpty) {
+              payload['mobile_uuid'] = uuid;
+            }
+          }
           final result = await widget.api!.document.createDocument(
             widget.meta.name,
             payload,
@@ -105,6 +152,12 @@ class _FormScreenState extends State<FormScreen> {
 
       // Offline / store-then-sync path
       if (widget.document == null) {
+        if (widget.getMobileUuid != null) {
+          final uuid = await widget.getMobileUuid!();
+          if (uuid != null && uuid.isNotEmpty) {
+            payload['mobile_uuid'] = uuid;
+          }
+        }
         await widget.repository.createDocument(
           doctype: widget.meta.name,
           data: payload,
@@ -355,11 +408,29 @@ class _FormScreenState extends State<FormScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final allowSave = (widget.canSave ?? true) && !widget.readOnly;
+    final allowDelete =
+        (widget.canDelete ?? (widget.document != null)) &&
+        !widget.readOnly &&
+        widget.document != null;
+
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.meta.label ?? widget.meta.name),
         actions: [
-          if (widget.document != null)
+          if (allowSave)
+            TextButton.icon(
+              onPressed: _isSaving ? null : () => _triggerSubmit?.call(),
+              icon: _isSaving
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.save),
+              label: const Text('Save'),
+            ),
+          if (allowDelete)
             IconButton(
               icon: const Icon(Icons.delete),
               onPressed: _isSaving ? null : _handleDelete,
@@ -395,7 +466,7 @@ class _FormScreenState extends State<FormScreen> {
               meta: widget.meta,
               initialData: widget.document?.data,
               onSubmit: _handleSubmit,
-              readOnly: _isSaving,
+              readOnly: _isSaving || widget.readOnly,
               linkOptionService: widget.linkOptionService,
               uploadFile: widget.api != null
                   ? (file) async {
@@ -405,6 +476,13 @@ class _FormScreenState extends State<FormScreen> {
                     }
                   : null,
               fileUrlBase: widget.api?.baseUrl,
+              imageHeaders: widget.api?.requestHeaders,
+              fetchLinkedDocument: _fetchLinkedDocument,
+              getMeta: widget.metaService != null
+                  ? (doctype) => widget.metaService!.getMeta(doctype)
+                  : null,
+              registerSubmit: (trigger) => _triggerSubmit = trigger,
+              style: widget.style,
             ),
           ),
         ],

@@ -40,6 +40,9 @@ class FrappeClient {
   RestHelper get rest => _restHelper;
   String get baseUrl => _restHelper.baseUrl;
 
+  /// Headers to use when loading private files (e.g. image fields).
+  Map<String, String> get requestHeaders => _restHelper.requestHeaders;
+
   QueryBuilder doc(String doctype) {
     return QueryBuilder(this.doctype, doctype);
   }

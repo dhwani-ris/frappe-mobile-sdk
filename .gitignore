@@ -71,6 +71,9 @@ example/windows/
 .env
 .env.local
 
+# App config (contains sensitive data)
+example/lib/config/app_config.dart
+
 # Coverage
 coverage/
 *.lcov

@@ -12,7 +12,6 @@ import '../services/link_option_service.dart';
 /// Main SDK initialization class for easy setup
 class FrappeSDK {
   final String baseUrl;
-  final List<String> doctypes;
 
   FrappeClient? _client;
   AppDatabase? _database;
@@ -24,27 +23,46 @@ class FrappeSDK {
 
   bool _initialized = false;
 
-  FrappeSDK({required this.baseUrl, required this.doctypes});
+  FrappeSDK({required this.baseUrl});
 
-  /// Initialize SDK (call this first)
-  Future<void> initialize() async {
+  /// Initialize SDK (call this first).
+  ///
+  /// [autoRestoreAndSync] (optional, default `false`):
+  /// - tries to restore session (mobile_auth / OAuth / API key)
+  /// - if successful, runs an initial metadata + data sync for mobile doctypes
+  Future<void> initialize([bool autoRestoreAndSync = false]) async {
     if (_initialized) return;
 
     _database = await AppDatabase.getInstance();
-    _client = FrappeClient(baseUrl);
     _authService = AuthService();
-    _authService!.initialize(baseUrl);
+    _authService!.initialize(baseUrl, database: _database);
+
+    // Use the same authenticated client instance everywhere so that
+    // meta/sync/link-options calls always carry the Bearer token / API key.
+    _client = _authService!.client;
 
     _repository = OfflineRepository(_database!);
     _metaService = MetaService(_client!, _database!);
-    _syncService = SyncService(_client!, _repository!, _database!);
+    _syncService = SyncService(
+      _client!,
+      _repository!,
+      _database!,
+      getMobileUuid: () => _authService!.getOrCreateMobileUuid(),
+    );
     _linkOptionService = LinkOptionService(_client!);
 
     _initialized = true;
+
+    if (autoRestoreAndSync) {
+      final restored = await _authService!.restoreSession();
+      if (restored) {
+        await _initialMetaAndDataSync();
+      }
+    }
   }
 
-  /// Login with username and password
-  Future<bool> login(String username, String password) async {
+  /// Login with username and password (stateless, returns user info)
+  Future<Map<String, dynamic>> login(String username, String password) async {
     if (!_initialized) await initialize();
     return await _authService!.login(username, password);
   }
@@ -159,18 +177,80 @@ class FrappeSDK {
   /// Check if authenticated
   bool get isAuthenticated => _authService?.isAuthenticated ?? false;
 
-  /// Prefetch metadata for configured doctypes into DB only (no in-memory cache).
+  /// Roles for the currently authenticated user (if provided by backend).
+  List<String> get roles => _authService?.roles ?? const [];
+
+  /// Stable UUID for this device/install. Use when creating docs from mobile so server can set mobile_uuid.
+  Future<String> getMobileUuid() async {
+    if (!_initialized) await initialize();
+    return await _authService!.getOrCreateMobileUuid();
+  }
+
+  /// Prefetch metadata for mobile form doctypes into DB only (no in-memory cache).
   /// Use this at app start; meta is loaded into cache only when getMeta(doctype) is used.
   Future<void> loadMetadata() async {
     if (!_initialized) await initialize();
-    await _metaService!.prefetchToDb(doctypes);
+    await _metaService!.prefetchMobileFormDoctypes();
   }
 
-  /// Sync all configured doctypes
+  /// Sync all mobile form doctypes
   Future<void> syncAll() async {
     if (!_initialized) await initialize();
-    for (final doctype in doctypes) {
-      await _syncService!.syncDoctype(doctype);
+    await _metaService!.syncAllMobileFormDoctypes();
+  }
+
+  /// Check and sync doctypes from login response on app launch.
+  ///
+  /// Compares timestamps from mobile_form_names with stored doctype meta
+  /// and syncs any that have been updated or are new.
+  Future<void> checkAndSyncDoctypes() async {
+    if (!_initialized) await initialize();
+    await _metaService!.checkAndSyncDoctypes();
+  }
+
+  /// Resync mobile configuration from server.
+  ///
+  /// Calls `mobile_auth.configuration` API to fetch updated mobile form list
+  /// and syncs doctype metadata for any doctypes that have been updated or are new.
+  ///
+  /// Throws if not authenticated or API call fails.
+  Future<void> resyncMobileConfiguration() async {
+    if (!_initialized) await initialize();
+    await _metaService!.resyncMobileConfiguration();
+  }
+
+  /// Internal: initial metadata + data sync for mobile doctypes.
+  ///
+  /// 1) Sync doctypes from login mobile_form_names (checkAndSyncDoctypes)
+  /// 2) Resync configuration from server (mobile_auth.configuration)
+  /// 3) Pull records for all mobile doctypes into the offline DB
+  Future<void> _initialMetaAndDataSync() async {
+    if (_metaService == null || _syncService == null) return;
+
+    try {
+      await _metaService!.checkAndSyncDoctypes();
+    } catch (_) {
+      // ignore
+    }
+
+    try {
+      await _metaService!.resyncMobileConfiguration();
+    } catch (_) {
+      // ignore
+    }
+
+    try {
+      final doctypes = await _metaService!.getMobileFormDoctypeNames();
+      for (final doctype in doctypes) {
+        try {
+          await _syncService!.pullSync(doctype: doctype);
+        } catch (_) {
+          // continue with other doctypes
+          continue;
+        }
+      }
+    } catch (_) {
+      // ignore data sync errors
     }
   }
 }

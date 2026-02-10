@@ -19,7 +19,7 @@ class PasswordField extends BaseField {
   @override
   Widget buildField(BuildContext context) {
     return FormBuilderTextField(
-      key: ValueKey('${field.fieldname}_${value ?? ''}'),
+      key: ValueKey('password_${field.fieldname}'),
       name: field.fieldname ?? '',
       initialValue: value?.toString() ?? field.defaultValue ?? '',
       enabled: enabled && !field.readOnly,
