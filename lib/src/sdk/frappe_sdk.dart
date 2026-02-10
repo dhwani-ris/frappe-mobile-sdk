@@ -177,6 +177,9 @@ class FrappeSDK {
   /// Check if authenticated
   bool get isAuthenticated => _authService?.isAuthenticated ?? false;
 
+  /// Roles for the currently authenticated user (if provided by backend).
+  List<String> get roles => _authService?.roles ?? const [];
+
   /// Stable UUID for this device/install. Use when creating docs from mobile so server can set mobile_uuid.
   Future<String> getMobileUuid() async {
     if (!_initialized) await initialize();

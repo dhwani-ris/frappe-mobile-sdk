@@ -84,6 +84,46 @@ class DocTypeMeta {
 
   Map<String, dynamic> toJson() => _$DocTypeMetaToJson(this);
 
+  /// Returns true if current user (by [userRoles]) is allowed [action] at permlevel 0.
+  ///
+  /// [action] is one of: 'read', 'create', 'write', 'delete', 'submit'.
+  bool hasPermission(String action, {List<String>? userRoles}) {
+    final meta = metaData;
+    if (meta == null) {
+      return true;
+    }
+
+    final perms =
+        meta['permissions'] as List<dynamic>? ??
+        meta['__permissions'] as List<dynamic>? ??
+        const [];
+    if (perms.isEmpty) {
+      return true;
+    }
+
+    for (final raw in perms) {
+      if (raw is! Map<String, dynamic>) continue;
+      // Only consider permlevel 0 for now (main document permissions)
+      final permLevel = raw['permlevel'] ?? raw['perm_level'] ?? 0;
+      if (permLevel is num && permLevel != 0) continue;
+
+      final flag = raw[action];
+      final allowed = flag == 1 || flag == true;
+      if (!allowed) continue;
+
+      final role = raw['role']?.toString();
+      if (userRoles == null || userRoles.isEmpty) {
+        // No user roles provided - treat as allowed when any row grants permission
+        return true;
+      }
+      if (role == null || role.isEmpty || userRoles.contains(role)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
   /// Get field by fieldname
   DocField? getField(String fieldname) {
     try {

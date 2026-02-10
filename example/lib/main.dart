@@ -401,6 +401,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         getMobileUuid: () =>
                             _authService!.getOrCreateMobileUuid(),
                         initialDocuments: docs,
+                        userRoles: _authService?.roles,
                       ),
                     ),
                   );
@@ -453,6 +454,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         onSaveSuccess: () => Navigator.pop(ctx),
                         getMobileUuid: () =>
                             _authService!.getOrCreateMobileUuid(),
+                        // style: DefaultFormStyle.material,
                       ),
                     ),
                   );

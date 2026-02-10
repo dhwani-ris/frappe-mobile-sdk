@@ -27,6 +27,7 @@ class AuthService {
   FrappeClient? _client;
   bool _isAuthenticated = false;
   AppDatabase? _database;
+  List<String> _roles = [];
 
   /// Initializes the client with the given [baseUrl].
   ///
@@ -59,6 +60,9 @@ class AuthService {
   /// True if authenticated and client is initialized.
   bool get isAuthenticated => _isAuthenticated && _client != null;
 
+  /// Roles for the currently authenticated user (if provided by backend).
+  List<String> get roles => List.unmodifiable(_roles);
+
   /// Authenticates with username and password using mobile_auth.login (stateless).
   ///
   /// This is the default login method. Stores access_token and refresh_token in database.
@@ -90,6 +94,14 @@ class AuthService {
       final fullName = response['full_name'] as String?;
       final mobileFormNamesJson =
           response['mobile_form_names'] as List<dynamic>?;
+
+      final rolesJson = response['roles'] as List<dynamic>?;
+      _roles =
+          rolesJson
+              ?.map((r) => r.toString())
+              .where((r) => r.isNotEmpty)
+              .toList() ??
+          <String>[];
 
       if (accessToken == null || accessToken.isEmpty) {
         throw Exception('Login response missing access_token');
@@ -365,6 +377,7 @@ class AuthService {
     } catch (_) {}
     _client?.rest.setBearerToken(null);
     _isAuthenticated = false;
+    _roles = [];
     await _storage.delete(key: _keyApiKey);
     await _storage.delete(key: _keyApiSecret);
     await _clearOAuthTokens();

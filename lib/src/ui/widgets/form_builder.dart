@@ -128,6 +128,7 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
   final Map<String, dynamic> _formData = {};
   late TabController _tabController;
   final List<_FormTab> _tabs = [];
+  final Map<String, int> _fieldTabIndex = {};
 
   @override
   void initState() {
@@ -234,6 +235,22 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
     }
     if (currentTab != null) {
       _tabs.add(currentTab);
+    }
+
+    // Build field -> tab index mapping for focusing invalid fields
+    _fieldTabIndex.clear();
+    for (var tabIndex = 0; tabIndex < _tabs.length; tabIndex++) {
+      final tab = _tabs[tabIndex];
+      for (final section in tab.sections) {
+        for (final column in section.columns) {
+          for (final f in column.fields) {
+            final name = f.fieldname;
+            if (name != null && name.isNotEmpty) {
+              _fieldTabIndex[name] = tabIndex;
+            }
+          }
+        }
+      }
     }
   }
 
@@ -557,39 +574,58 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
   }
 
   void _handleSubmit() {
-    if (_formKey.currentState?.saveAndValidate() ?? false) {
-      // Save all form fields first to ensure FormBuilder captures all values
-      _formKey.currentState!.save();
+    final state = _formKey.currentState;
+    if (state == null) return;
 
-      // Get all form values from FormBuilder (includes all fields)
-      final formValues = Map<String, dynamic>.from(
-        _formKey.currentState!.value,
-      );
-
-      // Merge with _formData (fields that were changed via onChanged)
-      formValues.addAll(_formData);
-
-      // Build complete form data with ALL fields from metadata
-      // This ensures we save complete data, not just changed fields
-      final completeFormData = <String, dynamic>{};
-
-      // First, initialize all fields from metadata with their default/initial values
+    final isValid = state.saveAndValidate();
+    if (!isValid) {
+      // Switch to tab containing the first invalid field so user sees the error.
       for (final field in widget.meta.fields) {
-        if (field.fieldname != null && !field.hidden) {
-          // Priority: formValues > initialData > defaultValue > empty value
-          completeFormData[field.fieldname!] =
-              formValues[field.fieldname] ??
-              widget.initialData?[field.fieldname] ??
-              field.defaultValue ??
-              (field.fieldtype == 'Check' ? 0 : '');
+        final name = field.fieldname;
+        if (name == null || name.isEmpty) continue;
+        final fieldState = state.fields[name];
+        if (fieldState != null && fieldState.hasError) {
+          final tabIndex = _fieldTabIndex[name];
+          if (tabIndex != null && _tabs.length > 1) {
+            setState(() {
+              _tabController.index = tabIndex;
+            });
+          }
+          break;
         }
       }
-
-      // Then override with any form values (user input takes precedence)
-      completeFormData.addAll(formValues);
-
-      widget.onSubmit?.call(completeFormData);
+      return;
     }
+
+    // Save all form fields first to ensure FormBuilder captures all values
+    state.save();
+
+    // Get all form values from FormBuilder (includes all fields)
+    final formValues = Map<String, dynamic>.from(state.value);
+
+    // Merge with _formData (fields that were changed via onChanged)
+    formValues.addAll(_formData);
+
+    // Build complete form data with ALL fields from metadata
+    // This ensures we save complete data, not just changed fields
+    final completeFormData = <String, dynamic>{};
+
+    // First, initialize all fields from metadata with their default/initial values
+    for (final field in widget.meta.fields) {
+      if (field.fieldname != null && !field.hidden) {
+        // Priority: formValues > initialData > defaultValue > empty value
+        completeFormData[field.fieldname!] =
+            formValues[field.fieldname] ??
+            widget.initialData?[field.fieldname] ??
+            field.defaultValue ??
+            (field.fieldtype == 'Check' ? 0 : '');
+      }
+    }
+
+    // Then override with any form values (user input takes precedence)
+    completeFormData.addAll(formValues);
+
+    widget.onSubmit?.call(completeFormData);
   }
 
   @override

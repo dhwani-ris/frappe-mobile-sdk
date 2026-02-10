@@ -28,6 +28,16 @@ class FormScreen extends StatefulWidget {
   /// When set, new documents created from this screen will include mobile_uuid on the server.
   final Future<String?> Function()? getMobileUuid;
 
+  /// Optional form style (overrides the default style used by FrappeFormBuilder).
+  final FrappeFormStyle? style;
+
+  /// Force read-only mode (no editing, no save/delete).
+  final bool readOnly;
+
+  /// Explicit permission flags for save/delete buttons. If null, defaults to allowed.
+  final bool? canSave;
+  final bool? canDelete;
+
   const FormScreen({
     super.key,
     required this.meta,
@@ -39,6 +49,10 @@ class FormScreen extends StatefulWidget {
     this.api,
     this.onSaveSuccess,
     this.getMobileUuid,
+    this.style,
+    this.readOnly = false,
+    this.canSave,
+    this.canDelete,
   });
 
   @override
@@ -394,22 +408,29 @@ class _FormScreenState extends State<FormScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final allowSave = (widget.canSave ?? true) && !widget.readOnly;
+    final allowDelete =
+        (widget.canDelete ?? (widget.document != null)) &&
+        !widget.readOnly &&
+        widget.document != null;
+
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.meta.label ?? widget.meta.name),
         actions: [
-          TextButton.icon(
-            onPressed: _isSaving ? null : () => _triggerSubmit?.call(),
-            icon: _isSaving
-                ? const SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.save),
-            label: const Text('Save'),
-          ),
-          if (widget.document != null)
+          if (allowSave)
+            TextButton.icon(
+              onPressed: _isSaving ? null : () => _triggerSubmit?.call(),
+              icon: _isSaving
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.save),
+              label: const Text('Save'),
+            ),
+          if (allowDelete)
             IconButton(
               icon: const Icon(Icons.delete),
               onPressed: _isSaving ? null : _handleDelete,
@@ -445,7 +466,7 @@ class _FormScreenState extends State<FormScreen> {
               meta: widget.meta,
               initialData: widget.document?.data,
               onSubmit: _handleSubmit,
-              readOnly: _isSaving,
+              readOnly: _isSaving || widget.readOnly,
               linkOptionService: widget.linkOptionService,
               uploadFile: widget.api != null
                   ? (file) async {
@@ -461,6 +482,7 @@ class _FormScreenState extends State<FormScreen> {
                   ? (doctype) => widget.metaService!.getMeta(doctype)
                   : null,
               registerSubmit: (trigger) => _triggerSubmit = trigger,
+              style: widget.style,
             ),
           ),
         ],
