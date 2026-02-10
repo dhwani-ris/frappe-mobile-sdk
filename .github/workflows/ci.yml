@@ -19,6 +19,12 @@ jobs:
           channel: "stable"
           cache: true
 
+      - name: Prepare example app config
+        run: |
+          if [ -f "example/lib/config/app_config.example.dart" ]; then
+            cp example/lib/config/app_config.example.dart example/lib/config/app_config.dart
+          fi
+
       - name: Get dependencies
         run: flutter pub get
 
