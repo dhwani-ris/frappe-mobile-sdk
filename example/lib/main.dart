@@ -76,43 +76,18 @@ class _HomeScreenState extends State<HomeScreen> {
           oauthClientSecret: config.AppConstants.oauthClientSecret,
         ),
       );
-      _database = await AppDatabase.getInstance();
 
-      // Initialize auth service
-      _authService = AuthService();
-      if (_appConfig != null) {
-        _authService!.initialize(_appConfig!.baseUrl, database: _database);
-      }
+      // Initialize SDK and auto-restore session + initial meta/data sync
+      final sdk = FrappeSDK(baseUrl: _appConfig!.baseUrl);
+      await sdk.initialize(true);
 
-      // Don't initialize services yet - wait for login
-      // Services will be initialized after successful login
-
-      // Try to restore session
-      if (_authService != null) {
-        _isAuthenticated = await _authService!.restoreSession();
-
-        // Only initialize services and fetch metadata if session restored successfully
-        if (_isAuthenticated &&
-            _authService!.client != null &&
-            _database != null) {
-          _metaService = MetaService(_authService!.client!, _database!);
-          _repository = OfflineRepository(_database!);
-          _syncService = SyncService(
-            _authService!.client!,
-            _repository!,
-            _database!,
-          );
-          _linkOptionService = LinkOptionService(_authService!.client!);
-
-          // Check and sync doctypes from login response (if available)
-          // This compares timestamps and syncs updated/new doctypes
-          try {
-            await _metaService!.checkAndSyncDoctypes();
-          } catch (_) {
-            // Silently fail - don't block app launch
-          }
-        }
-      }
+      _database = sdk.database;
+      _authService = sdk.auth;
+      _metaService = sdk.meta;
+      _repository = sdk.repository;
+      _syncService = sdk.sync;
+      _linkOptionService = sdk.linkOptions;
+      _isAuthenticated = sdk.isAuthenticated;
 
       setState(() {
         _isInitialized = true;
@@ -122,6 +97,46 @@ class _HomeScreenState extends State<HomeScreen> {
         _isInitialized = true;
         _errorMessage = e.toString();
       });
+    }
+  }
+
+  /// Perform initial metadata and data sync for mobile forms.
+  ///
+  /// 1. Sync doctypes from login response (checkAndSyncDoctypes).
+  /// 2. Resync configuration from server (mobile_auth.configuration).
+  /// 3. Pull data for all mobile form doctypes so list counts are up to date.
+  Future<void> _initialMetaAndDataSync() async {
+    if (_metaService == null || _syncService == null) {
+      return;
+    }
+
+    // Step 1: sync doctypes from stored mobile_form_names
+    try {
+      await _metaService!.checkAndSyncDoctypes();
+    } catch (_) {
+      // Ignore, configuration step may still refresh things
+    }
+
+    // Step 2: resync configuration from server
+    try {
+      await _metaService!.resyncMobileConfiguration();
+    } catch (_) {
+      // If this fails, we still keep the previous configuration
+    }
+
+    // Step 3: pull data for all mobile form doctypes
+    try {
+      final doctypes = await _metaService!.getMobileFormDoctypeNames();
+      for (final doctype in doctypes) {
+        try {
+          await _syncService!.pullSync(doctype: doctype);
+        } catch (_) {
+          // Skip failing doctypes, continue with others
+          continue;
+        }
+      }
+    } catch (_) {
+      // Do not block app if data sync fails
     }
   }
 
@@ -142,32 +157,21 @@ class _HomeScreenState extends State<HomeScreen> {
     );
     _linkOptionService ??= LinkOptionService(_authService!.client!);
 
-    // Check and sync doctypes from login response
-    // This compares timestamps and syncs updated/new doctypes
-    try {
-      await _metaService!.checkAndSyncDoctypes();
-    } catch (_) {
-      // Silently fail - don't block login flow
-    }
+    // Initial metadata + data sync for mobile forms
+    await _initialMetaAndDataSync();
 
     setState(() {
       _isAuthenticated = true;
     });
 
     if (_appConfig != null && _syncService != null && _metaService != null) {
-      // Sync mobile form doctypes (from login response)
-      try {
-        await _metaService!.syncAllMobileFormDoctypes();
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Initial sync completed'),
-              duration: Duration(seconds: 2),
-            ),
-          );
-        }
-      } catch (e) {
-        // Ignore sync errors
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Initial sync completed'),
+            duration: Duration(seconds: 2),
+          ),
+        );
       }
     }
   }

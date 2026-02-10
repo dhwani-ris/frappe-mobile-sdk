@@ -29,18 +29,14 @@ class ImageField extends BaseField {
     this.imageHeaders,
   });
 
-  /// Only Frappe server file paths or full URLs; local paths like /home/..., /Users/... are not server URLs.
+  /// Only Frappe server file paths or full URLs are treated as server URLs.
+  /// Local absolute paths (/storage/..., /data/..., /home/..., etc.) are NOT server URLs.
   bool _isServerUrl(String? path) {
     if (path == null || path.isEmpty) return false;
     final p = path.trim();
     if (p.startsWith('http://') || p.startsWith('https://')) return true;
     if (p.startsWith('/files/') || p.startsWith('/private/files/')) return true;
-    if (p.startsWith('/home/') ||
-        p.startsWith('/Users/') ||
-        p.startsWith('/tmp/')) {
-      return false;
-    }
-    return p.startsWith('/');
+    return false;
   }
 
   /// True if url is absolute (http/https), so Image.network can use it.

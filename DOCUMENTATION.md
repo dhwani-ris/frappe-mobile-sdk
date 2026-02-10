@@ -58,7 +58,11 @@ bench migrate
 import 'package:frappe_mobile_sdk/frappe_mobile_sdk.dart';
 
 final sdk = FrappeSDK(baseUrl: 'https://your-site.com');
+// Basic init (no auto sync, you control when to sync)
 await sdk.initialize();
+
+// Or, automatically restore session + run initial metadata + data sync
+await sdk.initialize(true); // true = autoRestoreAndSync
 ```
 
 After `initialize()`, you can use `sdk.api` (FrappeClient), `sdk.auth`, `sdk.meta`, `sdk.sync`, etc.
