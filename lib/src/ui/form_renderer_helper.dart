@@ -73,6 +73,7 @@ class FrappeFormRenderer {
           linkOptionService: sdk.linkOptions,
           api: sdk.api,
           onSaveSuccess: onSaveSuccess,
+          getMobileUuid: () => sdk.getMobileUuid(),
         ),
       ),
     );

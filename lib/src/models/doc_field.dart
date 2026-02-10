@@ -17,6 +17,7 @@ class DocField {
   final String? mandatoryDependsOn;
   final String? readOnlyDependsOn;
   final String? linkFilters;
+  final String? fetchFrom;
   final String? section;
   final String? defaultValue;
   final String? description;
@@ -39,6 +40,7 @@ class DocField {
     this.mandatoryDependsOn,
     this.readOnlyDependsOn,
     this.linkFilters,
+    this.fetchFrom,
     this.section,
     this.defaultValue,
     this.description,
@@ -93,6 +95,7 @@ class DocField {
       linkFilters: linkFiltersFromJson(
         json['link_filters'] ?? json['linkFilters'],
       ),
+      fetchFrom: json['fetch_from'] as String? ?? json['fetchFrom'] as String?,
       section: json['section'] as String?,
       defaultValue:
           json['default'] as String? ?? json['defaultValue'] as String?,

@@ -9,9 +9,13 @@ import 'base_field.dart';
 
 /// Widget for Image/Attach Image field type.
 /// When [uploadFile] is set, picks upload to server first and store file_url; otherwise stores local path.
+/// For /private/files/ and /files/, uses Frappe download_file API and [imageHeaders] for auth.
 class ImageField extends BaseField {
   final Future<String?> Function(File file)? uploadFile;
   final String? fileUrlBase;
+
+  /// Auth headers (e.g. from [FrappeClient.requestHeaders]) so private file URLs load.
+  final Map<String, String>? imageHeaders;
 
   const ImageField({
     super.key,
@@ -22,32 +26,46 @@ class ImageField extends BaseField {
     super.style,
     this.uploadFile,
     this.fileUrlBase,
+    this.imageHeaders,
   });
 
-  /// Only Frappe server file paths or full URLs; local paths like /home/..., /Users/... are not server URLs.
+  /// Only Frappe server file paths or full URLs are treated as server URLs.
+  /// Local absolute paths (/storage/..., /data/..., /home/..., etc.) are NOT server URLs.
   bool _isServerUrl(String? path) {
     if (path == null || path.isEmpty) return false;
-    if (path.startsWith('http://') || path.startsWith('https://')) return true;
-    // Frappe file_url is typically /files/...; avoid treating local paths as server
-    if (path.startsWith('/files/')) return true;
-    if (path.startsWith('/home/') ||
-        path.startsWith('/Users/') ||
-        path.startsWith('/tmp/')) {
-      return false;
-    }
-    if (path.contains('/Pictures/') || path.contains('/Screenshots/')) {
-      return false;
-    }
-    // Other leading / could be server path
-    return path.startsWith('/');
+    final p = path.trim();
+    if (p.startsWith('http://') || p.startsWith('https://')) return true;
+    if (p.startsWith('/files/') || p.startsWith('/private/files/')) return true;
+    return false;
   }
 
+  /// True if url is absolute (http/https), so Image.network can use it.
+  bool _isFullUrl(String? url) {
+    if (url == null || url.isEmpty) return false;
+    final u = url.trim();
+    return u.startsWith('http://') || u.startsWith('https://');
+  }
+
+  /// Build display URL: full URLs (S3, http(s)) use as-is.
+  /// /private/files/ and /files/ use download_file API so auth works; other / paths get base prepended.
   String? _fullImageUrl(String? path) {
-    if (path == null || path.isEmpty || fileUrlBase == null) return path;
-    if (path.startsWith('http://') || path.startsWith('https://')) return path;
-    if (!_isServerUrl(path)) return path;
-    final base = fileUrlBase!.endsWith('/') ? fileUrlBase! : '${fileUrlBase!}/';
-    return path.startsWith('/') ? '$base${path.substring(1)}' : '$base$path';
+    if (path == null || path.isEmpty) return path;
+    final p = path.trim();
+    if (p.isEmpty) return path;
+    if (p.startsWith('http://') || p.startsWith('https://')) return p;
+    if (!p.startsWith('/') ||
+        fileUrlBase == null ||
+        fileUrlBase!.trim().isEmpty) {
+      return p;
+    }
+    final base = fileUrlBase!.trim();
+    final baseNoSlash = base.endsWith('/')
+        ? base.substring(0, base.length - 1)
+        : base;
+    if (p.startsWith('/private/files/') || p.startsWith('/files/')) {
+      return '$baseNoSlash/api/method/frappe.handler.download_file?file_url=${Uri.encodeComponent(p)}';
+    }
+    return '$baseNoSlash$p';
   }
 
   Future<void> _onImagePicked(
@@ -73,10 +91,11 @@ class ImageField extends BaseField {
 
   @override
   Widget buildField(BuildContext context) {
-    String? imagePath = value?.toString();
+    final raw = value?.toString();
+    final String? imagePath = raw?.trim();
 
     return FormBuilderField<String>(
-      key: ValueKey('${field.fieldname}_$imagePath'),
+      key: ValueKey('image_${field.fieldname}'),
       name: field.fieldname ?? '',
       initialValue: imagePath,
       enabled: enabled && !field.readOnly,
@@ -89,7 +108,8 @@ class ImageField extends BaseField {
             }
           : null,
       builder: (FormFieldState<String> fieldState) {
-        final currentValue = fieldState.value ?? imagePath;
+        final raw = fieldState.value ?? imagePath;
+        final currentValue = raw?.toString().trim();
         final isUrl = _isServerUrl(currentValue);
         final displayUrl = isUrl ? _fullImageUrl(currentValue) : null;
 
@@ -106,12 +126,13 @@ class ImageField extends BaseField {
                 padding: const EdgeInsets.only(bottom: 8.0),
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(8),
-                  child: isUrl && displayUrl != null
+                  child: _isFullUrl(displayUrl)
                       ? Image.network(
-                          displayUrl,
+                          displayUrl!,
                           height: 150,
                           width: double.infinity,
                           fit: BoxFit.cover,
+                          headers: imageHeaders,
                           errorBuilder: (context, error, stackTrace) {
                             return Container(
                               height: 150,
@@ -120,7 +141,8 @@ class ImageField extends BaseField {
                             );
                           },
                         )
-                      : Image.file(
+                      : !isUrl
+                      ? Image.file(
                           File(currentValue),
                           height: 150,
                           width: double.infinity,
@@ -132,6 +154,13 @@ class ImageField extends BaseField {
                               child: const Icon(Icons.broken_image),
                             );
                           },
+                        )
+                      : Container(
+                          height: 150,
+                          color: Colors.grey[300],
+                          child: const Center(
+                            child: Icon(Icons.broken_image, size: 48),
+                          ),
                         ),
                 ),
               ),

@@ -1,6 +1,7 @@
 import 'dart:convert';
 import '../api/client.dart';
 import '../models/doc_type_meta.dart';
+import '../models/mobile_form_name.dart';
 import '../database/app_database.dart';
 import '../database/entities/doctype_meta_entity.dart';
 
@@ -34,12 +35,21 @@ class MetaService {
   /// Fetches from server and saves to DB only (no in-memory cache). Use for prefetch.
   Future<void> fetchAndStoreInDb(String doctype) async {
     final metaData = await _fetchMetaFromServer(doctype);
+    // Preserve existing serverModifiedAt and isMobileForm if exists
+    final existing = await _database.doctypeMetaDao.findByDoctype(doctype);
     final entity = DoctypeMetaEntity(
       doctype: doctype,
       modified: metaData['modified']?.toString(),
+      serverModifiedAt: existing?.serverModifiedAt,
+      isMobileForm: existing?.isMobileForm ?? false,
       metaJson: jsonEncode(metaData),
     );
-    await _database.doctypeMetaDao.insertDoctypeMeta(entity);
+    // Check if exists, update if present, insert if new
+    if (existing != null) {
+      await _database.doctypeMetaDao.updateDoctypeMeta(entity);
+    } else {
+      await _database.doctypeMetaDao.insertDoctypeMeta(entity);
+    }
   }
 
   Future<Map<String, dynamic>> _fetchMetaFromServer(String doctype) async {
@@ -99,12 +109,20 @@ class MetaService {
 
     final metaData = await _fetchMetaFromServer(doctype);
     final meta = DocTypeMeta.fromJson(metaData);
+    // Preserve existing serverModifiedAt and isMobileForm if exists
+    final existing = await _database.doctypeMetaDao.findByDoctype(doctype);
     final entity = DoctypeMetaEntity(
       doctype: doctype,
       modified: metaData['modified']?.toString(),
+      serverModifiedAt: existing?.serverModifiedAt,
+      isMobileForm: existing?.isMobileForm ?? false,
       metaJson: jsonEncode(metaData),
     );
-    await _database.doctypeMetaDao.insertDoctypeMeta(entity);
+    if (existing != null) {
+      await _database.doctypeMetaDao.updateDoctypeMeta(entity);
+    } else {
+      await _database.doctypeMetaDao.insertDoctypeMeta(entity);
+    }
     _putInCache(doctype, meta);
     return meta;
   }
@@ -145,5 +163,270 @@ class MetaService {
   Future<void> deleteMeta(String doctype) async {
     await _database.doctypeMetaDao.deleteByDoctype(doctype);
     clearDocTypeCache(doctype);
+  }
+
+  /// Checks mobile form doctypes and syncs meta if timestamps are newer.
+  ///
+  /// Compares serverModifiedAt from doctype_meta table with stored modified
+  /// timestamps. Syncs any doctypes that have newer timestamps or are missing.
+  /// Only checks doctypes marked as isMobileForm = true.
+  Future<void> checkAndSyncDoctypes() async {
+    try {
+      // Get all mobile form doctypes from doctype_meta table
+      final mobileFormMetas = await _database.doctypeMetaDao
+          .findMobileFormDoctypes();
+
+      if (mobileFormMetas.isEmpty) {
+        return; // No mobile form doctypes to sync
+      }
+
+      final doctypesToSync = <String>[];
+
+      for (final meta in mobileFormMetas) {
+        final serverModifiedAt = meta.serverModifiedAt;
+
+        if (serverModifiedAt == null || serverModifiedAt.isEmpty) {
+          // No timestamp, sync if missing metadata
+          if (meta.metaJson.isEmpty) {
+            doctypesToSync.add(meta.doctype);
+          }
+          continue;
+        }
+
+        // Compare serverModifiedAt with stored modified timestamp
+        final storedModified = meta.modified;
+        if (storedModified == null ||
+            storedModified.isEmpty ||
+            _isTimestampNewer(serverModifiedAt, storedModified)) {
+          doctypesToSync.add(meta.doctype);
+        }
+      }
+
+      // Sync all doctypes that need updating
+      if (doctypesToSync.isNotEmpty) {
+        for (final doctype in doctypesToSync) {
+          try {
+            await fetchAndStoreInDb(doctype);
+          } catch (e) {
+            // Skip failed doctypes, continue with others
+            continue;
+          }
+        }
+      }
+    } catch (e) {
+      // Silently fail - don't block app launch
+      return;
+    }
+  }
+
+  /// Returns doctype names marked as mobile form (from login response, stored in doctype_meta).
+  Future<List<String>> getMobileFormDoctypeNames() async {
+    final list = await _database.doctypeMetaDao.findMobileFormDoctypes();
+    return list.map((e) => e.doctype).toList();
+  }
+
+  /// Prefetch metadata for all mobile form doctypes into DB.
+  Future<void> prefetchMobileFormDoctypes() async {
+    try {
+      final mobileFormMetas = await _database.doctypeMetaDao
+          .findMobileFormDoctypes();
+      final mobileFormDoctypes = mobileFormMetas
+          .map((meta) => meta.doctype)
+          .toList();
+
+      if (mobileFormDoctypes.isNotEmpty) {
+        await prefetchToDb(mobileFormDoctypes);
+      }
+    } catch (e) {
+      // Silently fail
+      return;
+    }
+  }
+
+  /// Sync all mobile form doctypes.
+  Future<void> syncAllMobileFormDoctypes() async {
+    try {
+      final mobileFormMetas = await _database.doctypeMetaDao
+          .findMobileFormDoctypes();
+      final mobileFormDoctypes = mobileFormMetas
+          .map((meta) => meta.doctype)
+          .toList();
+
+      if (mobileFormDoctypes.isNotEmpty) {
+        for (final doctype in mobileFormDoctypes) {
+          try {
+            await fetchAndStoreInDb(doctype);
+          } catch (e) {
+            // Continue with other doctypes
+            continue;
+          }
+        }
+      }
+    } catch (e) {
+      // Silently fail
+      return;
+    }
+  }
+
+  /// Updates mobile form doctypes in database from mobile form names list.
+  ///
+  /// Marks all existing mobile forms as false, then updates/creates entries
+  /// for the provided mobile form names. Returns list of doctypes that need syncing.
+  Future<List<String>> _updateMobileFormDoctypes(
+    List<MobileFormName> mobileFormNames,
+  ) async {
+    // First, mark all existing mobile forms as false
+    final allMetas = await _database.doctypeMetaDao.findAll();
+    for (final meta in allMetas) {
+      if (meta.isMobileForm) {
+        final updatedMeta = DoctypeMetaEntity(
+          doctype: meta.doctype,
+          modified: meta.modified,
+          serverModifiedAt: meta.serverModifiedAt,
+          isMobileForm: false,
+          metaJson: meta.metaJson,
+        );
+        await _database.doctypeMetaDao.updateDoctypeMeta(updatedMeta);
+      }
+    }
+
+    // Now update/create entries for mobile forms
+    final doctypesToSync = <String>[];
+
+    for (final mfn in mobileFormNames) {
+      final doctype = mfn.mobileDoctype;
+      final existing = await _database.doctypeMetaDao.findByDoctype(doctype);
+
+      if (existing != null) {
+        // Check if timestamp is newer
+        final serverModifiedAt = mfn.doctypeMetaModifiedAt;
+        final needsSync =
+            serverModifiedAt != null &&
+            serverModifiedAt.isNotEmpty &&
+            (existing.serverModifiedAt == null ||
+                existing.serverModifiedAt!.isEmpty ||
+                _isTimestampNewer(
+                  serverModifiedAt,
+                  existing.serverModifiedAt!,
+                ));
+
+        // Update existing entry with mobile form info
+        final updatedMeta = DoctypeMetaEntity(
+          doctype: doctype,
+          modified: existing.modified,
+          serverModifiedAt: mfn.doctypeMetaModifiedAt,
+          isMobileForm: true,
+          metaJson: existing.metaJson,
+        );
+        await _database.doctypeMetaDao.updateDoctypeMeta(updatedMeta);
+
+        // Add to sync list if timestamp is newer or metadata is missing
+        if (needsSync ||
+            existing.metaJson.isEmpty ||
+            existing.metaJson == '{}') {
+          doctypesToSync.add(doctype);
+        }
+      } else {
+        // Create new entry with mobile form info (metaJson will be empty until fetched)
+        final newMeta = DoctypeMetaEntity(
+          doctype: doctype,
+          modified: null,
+          serverModifiedAt: mfn.doctypeMetaModifiedAt,
+          isMobileForm: true,
+          metaJson: '{}', // Empty until metadata is fetched
+        );
+        await _database.doctypeMetaDao.insertDoctypeMeta(newMeta);
+        doctypesToSync.add(doctype);
+      }
+    }
+
+    return doctypesToSync;
+  }
+
+  /// Fetches mobile configuration from server and resyncs doctype metadata.
+  ///
+  /// Calls `/api/v2/method/mobile_auth.configuration` to get updated mobile form list
+  /// and syncs doctype metadata for any doctypes that have been updated or are new.
+  ///
+  /// Throws if not authenticated or API call fails.
+  Future<void> resyncMobileConfiguration() async {
+    try {
+      // Call mobile_auth.configuration API on v2 endpoint with auth headers
+      final result = await _client.rest.get(
+        '/api/v2/method/mobile_auth.configuration',
+      );
+
+      // Parse response - response structure: {"data": [...]}
+      final response = result is Map<String, dynamic>
+          ? (result['data'] is List
+                ? result['data']
+                : result['message'] is List
+                ? result['message']
+                : [])
+          : <dynamic>[];
+
+      if (response.isEmpty) {
+        return; // No mobile forms configured
+      }
+
+      // Parse mobile form names
+      final mobileFormNames = (response as List)
+          .map((json) => MobileFormName.fromJson(json as Map<String, dynamic>))
+          .toList();
+
+      if (mobileFormNames.isEmpty) {
+        return;
+      }
+
+      // Update mobile form doctypes and get list of doctypes to sync
+      final doctypesToSync = await _updateMobileFormDoctypes(mobileFormNames);
+
+      // Sync all doctypes that need updating
+      if (doctypesToSync.isNotEmpty) {
+        for (final doctype in doctypesToSync) {
+          try {
+            await fetchAndStoreInDb(doctype);
+          } catch (e) {
+            // Skip failed doctypes, continue with others
+            continue;
+          }
+        }
+      }
+    } catch (e) {
+      // Re-throw to let caller handle errors
+      if (e is Exception) rethrow;
+      throw Exception('Failed to resync mobile configuration: $e');
+    }
+  }
+
+  /// Compares two timestamp strings to check if first is newer than second.
+  ///
+  /// Handles formats like "2026-02-09 17:29:03" or ISO 8601.
+  bool _isTimestampNewer(String timestamp1, String timestamp2) {
+    try {
+      final date1 = _parseTimestamp(timestamp1);
+      final date2 = _parseTimestamp(timestamp2);
+      if (date1 == null || date2 == null) return false;
+      return date1.isAfter(date2);
+    } catch (e) {
+      return false;
+    }
+  }
+
+  DateTime? _parseTimestamp(String timestamp) {
+    try {
+      // Try ISO 8601 format first
+      if (timestamp.contains('T')) {
+        return DateTime.parse(timestamp);
+      }
+      // Try "YYYY-MM-DD HH:MM:SS" format
+      if (timestamp.contains(' ')) {
+        return DateTime.parse(timestamp.replaceAll(' ', 'T'));
+      }
+      // Try just date
+      return DateTime.parse(timestamp);
+    } catch (e) {
+      return null;
+    }
   }
 }

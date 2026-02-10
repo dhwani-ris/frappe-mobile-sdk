@@ -102,9 +102,7 @@ class SelectField extends BaseField {
     }
 
     return FormBuilderDropdown<String>(
-      key: ValueKey(
-        '${field.fieldname}_${validInitialValue ?? ''}_${options.length}',
-      ),
+      key: ValueKey('select_${field.fieldname}_${options.length}'),
       name: field.fieldname ?? '',
       initialValue: validInitialValue,
       enabled: enabled && !field.readOnly,

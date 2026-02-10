@@ -1,7 +1,11 @@
 import '../api/client.dart';
 import '../api/oauth2_helper.dart';
 import '../database/app_database.dart';
+import '../database/entities/auth_token_entity.dart';
+import '../database/entities/doctype_meta_entity.dart';
+import '../models/mobile_form_name.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:uuid/uuid.dart';
 
 /// Handles Frappe authentication via credentials, API key, or OAuth 2.0.
 ///
@@ -16,14 +20,21 @@ class AuthService {
   static const String _keyOAuthExpiresAt = 'frappe_oauth_expires_at';
   static const String _keyOAuthClientId = 'frappe_oauth_client_id';
   static const String _keyOAuthClientSecret = 'frappe_oauth_client_secret';
+  static const String _keyMobileUuid = 'frappe_mobile_uuid';
 
   final FlutterSecureStorage _storage = const FlutterSecureStorage();
+  static const Uuid _uuid = Uuid();
   FrappeClient? _client;
   bool _isAuthenticated = false;
+  AppDatabase? _database;
+  List<String> _roles = [];
 
   /// Initializes the client with the given [baseUrl].
-  void initialize(String baseUrl) {
-    _client = FrappeClient(baseUrl, onTokenExpired: _tryRefreshOAuthToken);
+  ///
+  /// Optionally provide [database] for stateless login token storage.
+  void initialize(String baseUrl, {AppDatabase? database}) {
+    _client = FrappeClient(baseUrl, onTokenExpired: _tryRefreshMobileAuthToken);
+    _database = database;
     _storage.write(key: _keyBaseUrl, value: baseUrl);
   }
 
@@ -32,25 +43,155 @@ class AuthService {
     return _storage.read(key: _keyBaseUrl);
   }
 
+  /// Returns a stable UUID for this device/install. Creates and stores one if missing.
+  /// Use when creating documents from mobile so server can store mobile_uuid.
+  Future<String> getOrCreateMobileUuid() async {
+    var value = await _storage.read(key: _keyMobileUuid);
+    if (value == null || value.isEmpty) {
+      value = _uuid.v4();
+      await _storage.write(key: _keyMobileUuid, value: value);
+    }
+    return value;
+  }
+
   /// The Frappe API client. Null until [initialize] is called.
   FrappeClient? get client => _client;
 
   /// True if authenticated and client is initialized.
   bool get isAuthenticated => _isAuthenticated && _client != null;
 
-  /// Authenticates with username and password.
+  /// Roles for the currently authenticated user (if provided by backend).
+  List<String> get roles => List.unmodifiable(_roles);
+
+  /// Authenticates with username and password using mobile_auth.login (stateless).
   ///
-  /// Throws if not initialized or credentials are invalid.
-  Future<bool> login(String username, String password) async {
+  /// This is the default login method. Stores access_token and refresh_token in database.
+  /// Returns user info including mobile_form_names.
+  /// Throws if not initialized, database not set, or credentials are invalid.
+  Future<Map<String, dynamic>> login(String username, String password) async {
     if (_client == null) {
       throw Exception('AuthService not initialized. Call initialize() first.');
     }
+    if (_database == null) {
+      throw Exception(
+        'Database not set. Call initialize(baseUrl, database: db) first.',
+      );
+    }
+
     try {
-      await _client!.auth.loginWithCredentials(username, password);
+      final result = await _client!.rest.call(
+        'mobile_auth.login',
+        args: {'username': username, 'password': password},
+      );
+
+      final response = result is Map<String, dynamic>
+          ? (result['message'] is Map ? result['message'] : result)
+          : <String, dynamic>{};
+
+      final accessToken = response['access_token'] as String?;
+      final refreshToken = response['refresh_token'] as String?;
+      final user = response['user'] as String?;
+      final fullName = response['full_name'] as String?;
+      final mobileFormNamesJson =
+          response['mobile_form_names'] as List<dynamic>?;
+
+      final rolesJson = response['roles'] as List<dynamic>?;
+      _roles =
+          rolesJson
+              ?.map((r) => r.toString())
+              .where((r) => r.isNotEmpty)
+              .toList() ??
+          <String>[];
+
+      if (accessToken == null || accessToken.isEmpty) {
+        throw Exception('Login response missing access_token');
+      }
+      if (refreshToken == null || refreshToken.isEmpty) {
+        throw Exception('Login response missing refresh_token');
+      }
+      if (user == null || user.isEmpty) {
+        throw Exception('Login response missing user');
+      }
+
+      // Store tokens in database
+      final tokenEntity = AuthTokenEntity(
+        accessToken: accessToken,
+        refreshToken: refreshToken,
+        user: user,
+        fullName: fullName,
+        createdAt: DateTime.now().millisecondsSinceEpoch,
+      );
+
+      final existing = await _database!.authTokenDao.getCurrentToken();
+      if (existing != null) {
+        await _database!.authTokenDao.updateToken(tokenEntity);
+      } else {
+        await _database!.authTokenDao.insertToken(tokenEntity);
+      }
+
+      // Store mobile form names (doctypes) from login response in doctype_meta table
+      if (mobileFormNamesJson != null && mobileFormNamesJson.isNotEmpty) {
+        final mobileFormNames = mobileFormNamesJson
+            .map(
+              (json) => MobileFormName.fromJson(json as Map<String, dynamic>),
+            )
+            .toList();
+
+        // Update mobile form doctypes (sync will happen later via checkAndSyncDoctypes)
+        // First, mark all existing mobile forms as false
+        final allMetas = await _database!.doctypeMetaDao.findAll();
+        for (final meta in allMetas) {
+          if (meta.isMobileForm) {
+            final updatedMeta = DoctypeMetaEntity(
+              doctype: meta.doctype,
+              modified: meta.modified,
+              serverModifiedAt: meta.serverModifiedAt,
+              isMobileForm: false,
+              metaJson: meta.metaJson,
+            );
+            await _database!.doctypeMetaDao.updateDoctypeMeta(updatedMeta);
+          }
+        }
+
+        // Now update/create entries for mobile forms from login response
+        for (final mfn in mobileFormNames) {
+          final doctype = mfn.mobileDoctype;
+          final existing = await _database!.doctypeMetaDao.findByDoctype(
+            doctype,
+          );
+
+          if (existing != null) {
+            // Update existing entry with mobile form info
+            final updatedMeta = DoctypeMetaEntity(
+              doctype: doctype,
+              modified: existing.modified,
+              serverModifiedAt: mfn.doctypeMetaModifiedAt,
+              isMobileForm: true,
+              metaJson: existing.metaJson,
+            );
+            await _database!.doctypeMetaDao.updateDoctypeMeta(updatedMeta);
+          } else {
+            // Create new entry with mobile form info (metaJson will be empty until fetched)
+            final newMeta = DoctypeMetaEntity(
+              doctype: doctype,
+              modified: null,
+              serverModifiedAt: mfn.doctypeMetaModifiedAt,
+              isMobileForm: true,
+              metaJson: '{}', // Empty until metadata is fetched
+            );
+            await _database!.doctypeMetaDao.insertDoctypeMeta(newMeta);
+          }
+        }
+      }
+
+      // Set bearer token for API calls
+      _client!.rest.setBearerToken(accessToken);
       _isAuthenticated = true;
-      return true;
+
+      return response;
     } catch (e) {
       _isAuthenticated = false;
+      if (e is Exception) rethrow;
       throw Exception('Login failed: $e');
     }
   }
@@ -76,13 +217,29 @@ class AuthService {
 
   /// Restores session from stored credentials.
   ///
-  /// Tries OAuth tokens first (with refresh if expired), then API key.
+  /// Tries mobile auth tokens (from DB) first, then OAuth tokens, then API key.
   /// Returns true if a valid session was restored.
   Future<bool> restoreSession() async {
     final baseUrl = await getBaseUrl();
     if (baseUrl == null) return false;
 
-    if (_client == null) initialize(baseUrl);
+    if (_client == null) {
+      initialize(baseUrl, database: _database);
+    }
+
+    // Try mobile auth tokens from database first
+    if (_database != null) {
+      try {
+        final token = await _database!.authTokenDao.getCurrentToken();
+        if (token != null && token.accessToken.isNotEmpty) {
+          _client!.rest.setBearerToken(token.accessToken);
+          _isAuthenticated = true;
+          return true;
+        }
+      } catch (_) {
+        // Continue to other auth methods
+      }
+    }
 
     final accessToken = await _storage.read(key: _keyOAuthAccessToken);
     final refreshToken = await _storage.read(key: _keyOAuthRefreshToken);
@@ -220,9 +377,13 @@ class AuthService {
     } catch (_) {}
     _client?.rest.setBearerToken(null);
     _isAuthenticated = false;
+    _roles = [];
     await _storage.delete(key: _keyApiKey);
     await _storage.delete(key: _keyApiSecret);
     await _clearOAuthTokens();
+    if (_database != null) {
+      await _database!.authTokenDao.deleteAll();
+    }
     if (clearDatabase) {
       await AppDatabase.clearAllData();
     }
@@ -250,6 +411,54 @@ class AuthService {
         value: expiresAt.toString(),
       );
     }
+  }
+
+  Future<bool> _tryRefreshMobileAuthToken() async {
+    // Try mobile auth refresh first
+    if (_database != null) {
+      try {
+        final token = await _database!.authTokenDao.getCurrentToken();
+        if (token != null && token.refreshToken.isNotEmpty) {
+          final baseUrl = await getBaseUrl();
+          if (baseUrl != null) {
+            // Call mobile_auth.refresh_token endpoint
+            try {
+              final result = await _client!.rest.call(
+                'mobile_auth.refresh_token',
+                args: {'refresh_token': token.refreshToken},
+              );
+              final response = result is Map<String, dynamic>
+                  ? (result['message'] is Map ? result['message'] : result)
+                  : <String, dynamic>{};
+              final newAccessToken = response['access_token'] as String?;
+              final newRefreshToken =
+                  response['refresh_token'] as String? ?? token.refreshToken;
+
+              if (newAccessToken != null && newAccessToken.isNotEmpty) {
+                final updatedToken = AuthTokenEntity(
+                  accessToken: newAccessToken,
+                  refreshToken: newRefreshToken,
+                  user: token.user,
+                  fullName: token.fullName,
+                  createdAt: token.createdAt,
+                );
+                await _database!.authTokenDao.updateToken(updatedToken);
+                _client?.rest.setBearerToken(newAccessToken);
+                return true;
+              }
+            } catch (_) {
+              // Refresh failed, clear tokens
+              await _database!.authTokenDao.deleteAll();
+            }
+          }
+        }
+      } catch (_) {
+        // Continue to OAuth refresh
+      }
+    }
+
+    // Fallback to OAuth refresh
+    return await _tryRefreshOAuthToken();
   }
 
   Future<bool> _tryRefreshOAuthToken() async {
