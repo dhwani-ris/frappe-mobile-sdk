@@ -345,14 +345,16 @@ class MetaService {
 
   /// Fetches mobile configuration from server and resyncs doctype metadata.
   ///
-  /// Calls `mobile_auth.configuration` API to get updated mobile form list
+  /// Calls `/api/v2/method/mobile_auth.configuration` to get updated mobile form list
   /// and syncs doctype metadata for any doctypes that have been updated or are new.
   ///
   /// Throws if not authenticated or API call fails.
   Future<void> resyncMobileConfiguration() async {
     try {
-      // Call mobile_auth.configuration API
-      final result = await _client.rest.call('mobile_auth.configuration');
+      // Call mobile_auth.configuration API on v2 endpoint with auth headers
+      final result = await _client.rest.get(
+        '/api/v2/method/mobile_auth.configuration',
+      );
 
       // Parse response - response structure: {"data": [...]}
       final response = result is Map<String, dynamic>

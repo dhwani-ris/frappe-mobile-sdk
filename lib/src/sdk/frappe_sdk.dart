@@ -25,14 +25,21 @@ class FrappeSDK {
 
   FrappeSDK({required this.baseUrl});
 
-  /// Initialize SDK (call this first)
-  Future<void> initialize() async {
+  /// Initialize SDK (call this first).
+  ///
+  /// [autoRestoreAndSync] (optional, default `false`):
+  /// - tries to restore session (mobile_auth / OAuth / API key)
+  /// - if successful, runs an initial metadata + data sync for mobile doctypes
+  Future<void> initialize([bool autoRestoreAndSync = false]) async {
     if (_initialized) return;
 
     _database = await AppDatabase.getInstance();
-    _client = FrappeClient(baseUrl);
     _authService = AuthService();
     _authService!.initialize(baseUrl, database: _database);
+
+    // Use the same authenticated client instance everywhere so that
+    // meta/sync/link-options calls always carry the Bearer token / API key.
+    _client = _authService!.client;
 
     _repository = OfflineRepository(_database!);
     _metaService = MetaService(_client!, _database!);
@@ -45,6 +52,13 @@ class FrappeSDK {
     _linkOptionService = LinkOptionService(_client!);
 
     _initialized = true;
+
+    if (autoRestoreAndSync) {
+      final restored = await _authService!.restoreSession();
+      if (restored) {
+        await _initialMetaAndDataSync();
+      }
+    }
   }
 
   /// Login with username and password (stateless, returns user info)
@@ -200,5 +214,40 @@ class FrappeSDK {
   Future<void> resyncMobileConfiguration() async {
     if (!_initialized) await initialize();
     await _metaService!.resyncMobileConfiguration();
+  }
+
+  /// Internal: initial metadata + data sync for mobile doctypes.
+  ///
+  /// 1) Sync doctypes from login mobile_form_names (checkAndSyncDoctypes)
+  /// 2) Resync configuration from server (mobile_auth.configuration)
+  /// 3) Pull records for all mobile doctypes into the offline DB
+  Future<void> _initialMetaAndDataSync() async {
+    if (_metaService == null || _syncService == null) return;
+
+    try {
+      await _metaService!.checkAndSyncDoctypes();
+    } catch (_) {
+      // ignore
+    }
+
+    try {
+      await _metaService!.resyncMobileConfiguration();
+    } catch (_) {
+      // ignore
+    }
+
+    try {
+      final doctypes = await _metaService!.getMobileFormDoctypeNames();
+      for (final doctype in doctypes) {
+        try {
+          await _syncService!.pullSync(doctype: doctype);
+        } catch (_) {
+          // continue with other doctypes
+          continue;
+        }
+      }
+    } catch (_) {
+      // ignore data sync errors
+    }
   }
 }
