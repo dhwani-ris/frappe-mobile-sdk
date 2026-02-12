@@ -152,13 +152,6 @@ void main() {
 
 ## Common Issues
 
-**Issue**: `build_runner` errors
-```bash
-flutter clean
-flutter pub get
-flutter pub run build_runner clean
-flutter pub run build_runner build --delete-conflicting-outputs
-```
 
 **Issue**: Database errors
 - Delete app and reinstall

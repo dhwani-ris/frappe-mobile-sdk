@@ -1,11 +1,7 @@
-import 'package:floor/floor.dart';
-
 /// Entity for storing DocType metadata
 ///
 /// Uses generic storage - no table per Doctype
-@Entity(tableName: 'doctype_meta')
 class DoctypeMetaEntity {
-  @PrimaryKey()
   final String doctype;
 
   /// Last modified timestamp from server metadata
@@ -28,4 +24,26 @@ class DoctypeMetaEntity {
     this.isMobileForm = false,
     required this.metaJson,
   });
+
+  /// Convert from database map
+  factory DoctypeMetaEntity.fromDb(Map<String, dynamic> map) {
+    return DoctypeMetaEntity(
+      doctype: map['doctype'] as String,
+      modified: map['modified'] as String?,
+      serverModifiedAt: map['serverModifiedAt'] as String?,
+      isMobileForm: (map['isMobileForm'] as int? ?? 0) == 1,
+      metaJson: map['metaJson'] as String,
+    );
+  }
+
+  /// Convert to database map
+  Map<String, dynamic> toDb() {
+    return {
+      'doctype': doctype,
+      'modified': modified,
+      'serverModifiedAt': serverModifiedAt,
+      'isMobileForm': isMobileForm ? 1 : 0,
+      'metaJson': metaJson,
+    };
+  }
 }
