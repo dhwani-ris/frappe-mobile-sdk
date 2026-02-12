@@ -18,8 +18,7 @@ dependencies:
   # Path utilities
   path: ^1.8.3
 
-  # Room-like database (SQLite)
-  floor: ^1.5.0
+  # SQLite database
   sqflite: ^2.3.0
 
   # State Management
@@ -52,9 +51,6 @@ dependencies:
   # Package metadata (version, package name) for app status checks
   package_info_plus: ^9.0.0
 
-  # JSON serialization
-  json_annotation: ^4.8.1
-
   # UUID generation
   uuid: ^4.3.3
 
@@ -72,12 +68,8 @@ dev_dependencies:
   # Pre-commit: format + analyze before commit (run: dart run flutter_pre_commit)
   flutter_pre_commit: ^0.2.4
 
-  # Floor code generator
-  build_runner: ^2.4.8
-  floor_generator: ^1.5.0
-
-  # JSON serialization code generator
-  json_serializable: ^6.7.1
+  # SQLite FFI for testing
+  sqflite_common_ffi: ^2.3.0
 
 flutter:
   uses-material-design: true

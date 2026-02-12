@@ -1,10 +1,6 @@
-import 'package:json_annotation/json_annotation.dart';
 import 'doc_field.dart';
 
-part 'doc_type_meta.g.dart';
-
 /// Represents Frappe DocType metadata
-@JsonSerializable()
 class DocTypeMeta {
   final String name;
   final String? label;
@@ -13,15 +9,12 @@ class DocTypeMeta {
   final Map<String, dynamic>? metaData;
 
   /// Field to show as main title in list view (from Frappe title_field)
-  @JsonKey(name: 'title_field')
   final String? titleField;
 
   /// Default sort field for list view (from Frappe sort_field)
-  @JsonKey(name: 'sort_field')
   final String? sortField;
 
   /// Default sort order: 'asc' or 'desc' (from Frappe sort_order)
-  @JsonKey(name: 'sort_order')
   final String? sortOrder;
 
   DocTypeMeta({
@@ -82,7 +75,18 @@ class DocTypeMeta {
     );
   }
 
-  Map<String, dynamic> toJson() => _$DocTypeMetaToJson(this);
+  Map<String, dynamic> toJson() {
+    return {
+      'name': name,
+      if (label != null) 'label': label,
+      'fields': fields.map((f) => f.toJson()).toList(),
+      'istable': isTable ? 1 : 0,
+      if (metaData != null) ...metaData!,
+      if (titleField != null) 'title_field': titleField,
+      if (sortField != null) 'sort_field': sortField,
+      if (sortOrder != null) 'sort_order': sortOrder,
+    };
+  }
 
   /// Returns true if current user (by [userRoles]) is allowed [action] at permlevel 0.
   ///

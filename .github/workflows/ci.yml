@@ -28,10 +28,7 @@ jobs:
       - name: Get dependencies
         run: flutter pub get
 
-      - name: Generate code
-        run: dart run build_runner build --delete-conflicting-outputs
-
-      - name: Format generated code
+      - name: Format code
         run: dart format .
 
       - name: Analyze

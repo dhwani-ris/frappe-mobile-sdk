@@ -1,11 +1,7 @@
-import 'package:floor/floor.dart';
-
 /// Entity for storing mobile auth tokens (stateless login).
 ///
 /// Stores access_token, refresh_token, user info from mobile_auth.login API.
-@Entity(tableName: 'auth_tokens')
 class AuthTokenEntity {
-  @PrimaryKey()
   final int id; // Always 1, single row for current user
 
   /// Access token for API authentication
@@ -31,4 +27,28 @@ class AuthTokenEntity {
     this.fullName,
     required this.createdAt,
   });
+
+  /// Convert from database map
+  factory AuthTokenEntity.fromDb(Map<String, dynamic> map) {
+    return AuthTokenEntity(
+      id: map['id'] as int,
+      accessToken: map['accessToken'] as String,
+      refreshToken: map['refreshToken'] as String,
+      user: map['user'] as String,
+      fullName: map['fullName'] as String?,
+      createdAt: map['createdAt'] as int,
+    );
+  }
+
+  /// Convert to database map
+  Map<String, dynamic> toDb() {
+    return {
+      'id': id,
+      'accessToken': accessToken,
+      'refreshToken': refreshToken,
+      'user': user,
+      'fullName': fullName,
+      'createdAt': createdAt,
+    };
+  }
 }

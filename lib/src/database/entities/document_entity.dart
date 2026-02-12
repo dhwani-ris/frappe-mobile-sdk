@@ -1,16 +1,11 @@
-import 'package:floor/floor.dart';
-
 /// Entity for storing documents
 ///
 /// Uses generic storage - no table per Doctype
 /// All documents stored in single table with JSON data
-@Entity(tableName: 'documents')
 class DocumentEntity {
-  @PrimaryKey()
   final String localId;
 
   /// DocType name
-  @Index(value: ['doctype'])
   final String doctype;
 
   /// Server document name (null for new documents)
@@ -20,11 +15,9 @@ class DocumentEntity {
   final String dataJson;
 
   /// Sync status: dirty | clean | deleted
-  @Index(value: ['status'])
   final String status;
 
   /// Last modified timestamp (milliseconds since epoch)
-  @Index(value: ['modified'])
   final int modified;
 
   DocumentEntity({
@@ -35,4 +28,28 @@ class DocumentEntity {
     required this.status,
     required this.modified,
   });
+
+  /// Convert from database map
+  factory DocumentEntity.fromDb(Map<String, dynamic> map) {
+    return DocumentEntity(
+      localId: map['localId'] as String,
+      doctype: map['doctype'] as String,
+      serverId: map['serverId'] as String?,
+      dataJson: map['dataJson'] as String,
+      status: map['status'] as String,
+      modified: map['modified'] as int,
+    );
+  }
+
+  /// Convert to database map
+  Map<String, dynamic> toDb() {
+    return {
+      'localId': localId,
+      'doctype': doctype,
+      'serverId': serverId,
+      'dataJson': dataJson,
+      'status': status,
+      'modified': modified,
+    };
+  }
 }

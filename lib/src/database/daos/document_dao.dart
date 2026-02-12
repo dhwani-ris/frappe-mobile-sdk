@@ -1,69 +1,174 @@
-import 'package:floor/floor.dart';
+import 'package:sqflite/sqflite.dart';
 import '../entities/document_entity.dart';
 
-@dao
-abstract class DocumentDao {
-  @Query('SELECT * FROM documents WHERE localId = :localId')
-  Future<DocumentEntity?> findByLocalId(String localId);
+class DocumentDao {
+  final Database _database;
 
-  @Query(
-    'SELECT * FROM documents WHERE serverId = :serverId AND doctype = :doctype',
-  )
-  Future<DocumentEntity?> findByServerId(String serverId, String doctype);
+  DocumentDao(this._database);
 
-  @Query(
-    'SELECT * FROM documents WHERE doctype = :doctype ORDER BY modified DESC',
-  )
-  Future<List<DocumentEntity>> findByDoctype(String doctype);
+  Future<DocumentEntity?> findByLocalId(String localId) async {
+    final maps = await _database.query(
+      'documents',
+      where: 'localId = ?',
+      whereArgs: [localId],
+      limit: 1,
+    );
+    if (maps.isEmpty) return null;
+    return DocumentEntity.fromDb(maps.first);
+  }
 
-  @Query(
-    'SELECT * FROM documents WHERE doctype = :doctype AND status = :status ORDER BY modified DESC',
-  )
+  Future<DocumentEntity?> findByServerId(
+    String serverId,
+    String doctype,
+  ) async {
+    final maps = await _database.query(
+      'documents',
+      where: 'serverId = ? AND doctype = ?',
+      whereArgs: [serverId, doctype],
+      limit: 1,
+    );
+    if (maps.isEmpty) return null;
+    return DocumentEntity.fromDb(maps.first);
+  }
+
+  Future<List<DocumentEntity>> findByDoctype(String doctype) async {
+    final maps = await _database.query(
+      'documents',
+      where: 'doctype = ?',
+      whereArgs: [doctype],
+      orderBy: 'modified DESC',
+    );
+    return maps.map((map) => DocumentEntity.fromDb(map)).toList();
+  }
+
   Future<List<DocumentEntity>> findByDoctypeAndStatus(
     String doctype,
     String status,
-  );
+  ) async {
+    final maps = await _database.query(
+      'documents',
+      where: 'doctype = ? AND status = ?',
+      whereArgs: [doctype, status],
+      orderBy: 'modified DESC',
+    );
+    return maps.map((map) => DocumentEntity.fromDb(map)).toList();
+  }
 
-  @Query('SELECT * FROM documents WHERE status = :status ORDER BY modified ASC')
-  Future<List<DocumentEntity>> findByStatus(String status);
+  Future<List<DocumentEntity>> findByStatus(String status) async {
+    final maps = await _database.query(
+      'documents',
+      where: 'status = ?',
+      whereArgs: [status],
+      orderBy: 'modified ASC',
+    );
+    return maps.map((map) => DocumentEntity.fromDb(map)).toList();
+  }
 
-  @Query(
-    'SELECT * FROM documents WHERE doctype = :doctype AND modified > :since ORDER BY modified DESC',
-  )
-  Future<List<DocumentEntity>> findByDoctypeSince(String doctype, int since);
+  Future<List<DocumentEntity>> findByDoctypeSince(
+    String doctype,
+    int since,
+  ) async {
+    final maps = await _database.query(
+      'documents',
+      where: 'doctype = ? AND modified > ?',
+      whereArgs: [doctype, since],
+      orderBy: 'modified DESC',
+    );
+    return maps.map((map) => DocumentEntity.fromDb(map)).toList();
+  }
 
-  @Query(
-    'SELECT * FROM documents WHERE doctype IN (:doctypes) ORDER BY modified DESC',
-  )
-  Future<List<DocumentEntity>> findByDoctypes(List<String> doctypes);
+  Future<List<DocumentEntity>> findByDoctypes(List<String> doctypes) async {
+    if (doctypes.isEmpty) return [];
+    final placeholders = List.filled(doctypes.length, '?').join(',');
+    final maps = await _database.query(
+      'documents',
+      where: 'doctype IN ($placeholders)',
+      whereArgs: doctypes,
+      orderBy: 'modified DESC',
+    );
+    return maps.map((map) => DocumentEntity.fromDb(map)).toList();
+  }
 
-  @Query('SELECT * FROM documents ORDER BY modified DESC')
-  Future<List<DocumentEntity>> findAll();
+  Future<List<DocumentEntity>> findAll() async {
+    final maps = await _database.query('documents', orderBy: 'modified DESC');
+    return maps.map((map) => DocumentEntity.fromDb(map)).toList();
+  }
 
-  @insert
-  Future<void> insertDocument(DocumentEntity document);
+  Future<void> insertDocument(DocumentEntity document) async {
+    await _database.insert(
+      'documents',
+      document.toDb(),
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
 
-  @insert
-  Future<void> insertDocuments(List<DocumentEntity> documents);
+  Future<void> insertDocuments(List<DocumentEntity> documents) async {
+    if (documents.isEmpty) return;
+    final batch = _database.batch();
+    for (final document in documents) {
+      batch.insert(
+        'documents',
+        document.toDb(),
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+    }
+    await batch.commit(noResult: true);
+  }
 
-  @update
-  Future<void> updateDocument(DocumentEntity document);
+  Future<void> updateDocument(DocumentEntity document) async {
+    await _database.update(
+      'documents',
+      document.toDb(),
+      where: 'localId = ?',
+      whereArgs: [document.localId],
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
 
-  @update
-  Future<void> updateDocuments(List<DocumentEntity> documents);
+  Future<void> updateDocuments(List<DocumentEntity> documents) async {
+    if (documents.isEmpty) return;
+    final batch = _database.batch();
+    for (final document in documents) {
+      batch.update(
+        'documents',
+        document.toDb(),
+        where: 'localId = ?',
+        whereArgs: [document.localId],
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+    }
+    await batch.commit(noResult: true);
+  }
 
-  @delete
-  Future<void> deleteDocument(DocumentEntity document);
+  Future<void> deleteDocument(DocumentEntity document) async {
+    await deleteByLocalId(document.localId);
+  }
 
-  @Query('DELETE FROM documents WHERE localId = :localId')
-  Future<void> deleteByLocalId(String localId);
+  Future<void> deleteByLocalId(String localId) async {
+    await _database.delete(
+      'documents',
+      where: 'localId = ?',
+      whereArgs: [localId],
+    );
+  }
 
-  @Query('DELETE FROM documents WHERE doctype = :doctype')
-  Future<void> deleteByDoctype(String doctype);
+  Future<void> deleteByDoctype(String doctype) async {
+    await _database.delete(
+      'documents',
+      where: 'doctype = ?',
+      whereArgs: [doctype],
+    );
+  }
 
-  @Query('DELETE FROM documents WHERE doctype = :doctype AND status = :status')
-  Future<void> deleteByDoctypeAndStatus(String doctype, String status);
+  Future<void> deleteByDoctypeAndStatus(String doctype, String status) async {
+    await _database.delete(
+      'documents',
+      where: 'doctype = ? AND status = ?',
+      whereArgs: [doctype, status],
+    );
+  }
 
-  @Query('DELETE FROM documents')
-  Future<void> deleteAll();
+  Future<void> deleteAll() async {
+    await _database.delete('documents');
+  }
 }
