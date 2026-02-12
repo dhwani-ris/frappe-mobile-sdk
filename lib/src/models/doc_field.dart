@@ -1,10 +1,6 @@
 import 'dart:convert';
-import 'package:json_annotation/json_annotation.dart';
-
-part 'doc_field.g.dart';
 
 /// Represents a Frappe DocField (field definition in metadata)
-@JsonSerializable()
 class DocField {
   final String? fieldname;
   final String fieldtype;
@@ -119,7 +115,32 @@ class DocField {
     return t == 'tablemultiselect' || t == 'multiselect';
   }
 
-  Map<String, dynamic> toJson() => _$DocFieldToJson(this);
+  Map<String, dynamic> toJson() {
+    return {
+      if (fieldname != null) 'fieldname': fieldname,
+      'fieldtype': fieldtype,
+      if (label != null) 'label': label,
+      'reqd': reqd ? 1 : 0,
+      'read_only': readOnly ? 1 : 0,
+      'hidden': hidden ? 1 : 0,
+      if (options != null) 'options': options,
+      if (dependsOn != null) 'depends_on': dependsOn,
+      if (mandatoryDependsOn != null)
+        'mandatory_depends_on': mandatoryDependsOn,
+      if (readOnlyDependsOn != null) 'read_only_depends_on': readOnlyDependsOn,
+      if (linkFilters != null) 'link_filters': linkFilters,
+      if (fetchFrom != null) 'fetch_from': fetchFrom,
+      if (section != null) 'section': section,
+      if (defaultValue != null) 'default': defaultValue,
+      if (description != null) 'description': description,
+      if (placeholder != null) 'placeholder': placeholder,
+      if (precision != null) 'precision': precision,
+      if (length != null) 'length': length,
+      if (idx != null) 'idx': idx,
+      'in_list_view': inListView ? 1 : 0,
+      'allow_multiple': allowMultiple ? 1 : 0,
+    };
+  }
 
   /// Check if this is a layout field (Section Break, Column Break, Tab Break)
   bool get isLayoutField {

@@ -1,35 +1,91 @@
-import 'package:floor/floor.dart';
+import 'package:sqflite/sqflite.dart';
 import '../entities/doctype_meta_entity.dart';
 
-@dao
-abstract class DoctypeMetaDao {
-  @Query('SELECT * FROM doctype_meta WHERE doctype = :doctype')
-  Future<DoctypeMetaEntity?> findByDoctype(String doctype);
+class DoctypeMetaDao {
+  final Database _database;
 
-  @Query('SELECT * FROM doctype_meta')
-  Future<List<DoctypeMetaEntity>> findAll();
+  DoctypeMetaDao(this._database);
 
-  @Query('SELECT * FROM doctype_meta WHERE doctype IN (:doctypes)')
-  Future<List<DoctypeMetaEntity>> findByDoctypes(List<String> doctypes);
+  Future<DoctypeMetaEntity?> findByDoctype(String doctype) async {
+    final maps = await _database.query(
+      'doctype_meta',
+      where: 'doctype = ?',
+      whereArgs: [doctype],
+      limit: 1,
+    );
+    if (maps.isEmpty) return null;
+    return DoctypeMetaEntity.fromDb(maps.first);
+  }
 
-  @Query('SELECT * FROM doctype_meta WHERE isMobileForm = 1')
-  Future<List<DoctypeMetaEntity>> findMobileFormDoctypes();
+  Future<List<DoctypeMetaEntity>> findAll() async {
+    final maps = await _database.query('doctype_meta');
+    return maps.map((map) => DoctypeMetaEntity.fromDb(map)).toList();
+  }
 
-  @insert
-  Future<void> insertDoctypeMeta(DoctypeMetaEntity meta);
+  Future<List<DoctypeMetaEntity>> findByDoctypes(List<String> doctypes) async {
+    if (doctypes.isEmpty) return [];
+    final placeholders = List.filled(doctypes.length, '?').join(',');
+    final maps = await _database.query(
+      'doctype_meta',
+      where: 'doctype IN ($placeholders)',
+      whereArgs: doctypes,
+    );
+    return maps.map((map) => DoctypeMetaEntity.fromDb(map)).toList();
+  }
 
-  @insert
-  Future<void> insertDoctypeMetas(List<DoctypeMetaEntity> metas);
+  Future<List<DoctypeMetaEntity>> findMobileFormDoctypes() async {
+    final maps = await _database.query(
+      'doctype_meta',
+      where: 'isMobileForm = ?',
+      whereArgs: [1],
+    );
+    return maps.map((map) => DoctypeMetaEntity.fromDb(map)).toList();
+  }
 
-  @update
-  Future<void> updateDoctypeMeta(DoctypeMetaEntity meta);
+  Future<void> insertDoctypeMeta(DoctypeMetaEntity meta) async {
+    await _database.insert(
+      'doctype_meta',
+      meta.toDb(),
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
 
-  @delete
-  Future<void> deleteDoctypeMeta(DoctypeMetaEntity meta);
+  Future<void> insertDoctypeMetas(List<DoctypeMetaEntity> metas) async {
+    if (metas.isEmpty) return;
+    final batch = _database.batch();
+    for (final meta in metas) {
+      batch.insert(
+        'doctype_meta',
+        meta.toDb(),
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+    }
+    await batch.commit(noResult: true);
+  }
 
-  @Query('DELETE FROM doctype_meta WHERE doctype = :doctype')
-  Future<void> deleteByDoctype(String doctype);
+  Future<void> updateDoctypeMeta(DoctypeMetaEntity meta) async {
+    await _database.update(
+      'doctype_meta',
+      meta.toDb(),
+      where: 'doctype = ?',
+      whereArgs: [meta.doctype],
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
 
-  @Query('DELETE FROM doctype_meta')
-  Future<void> deleteAll();
+  Future<void> deleteDoctypeMeta(DoctypeMetaEntity meta) async {
+    await deleteByDoctype(meta.doctype);
+  }
+
+  Future<void> deleteByDoctype(String doctype) async {
+    await _database.delete(
+      'doctype_meta',
+      where: 'doctype = ?',
+      whereArgs: [doctype],
+    );
+  }
+
+  Future<void> deleteAll() async {
+    await _database.delete('doctype_meta');
+  }
 }

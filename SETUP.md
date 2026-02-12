@@ -7,19 +7,7 @@ cd frappe_mobile_sdk
 flutter pub get
 ```
 
-## 2. Generate Code
-
-Run build_runner to generate Floor database code and JSON serialization:
-
-```bash
-flutter pub run build_runner build --delete-conflicting-outputs
-```
-
-This will generate:
-- `lib/src/database/app_database.g.dart` - Floor database code
-- `lib/src/models/*.g.dart` - JSON serialization code
-
-## 3. Configure App Config
+## 2. Configure App Config
 
 Create an `app_config.json` file in your app:
 
@@ -39,7 +27,7 @@ final appConfig = AppConfig(
 );
 ```
 
-## 4. Android Setup
+## 3. Android Setup
 
 Add to `android/app/build.gradle`:
 
@@ -51,7 +39,7 @@ android {
 }
 ```
 
-## 5. iOS Setup
+## 4. iOS Setup
 
 Add to `ios/Podfile`:
 
@@ -59,26 +47,11 @@ Add to `ios/Podfile`:
 platform :ios, '12.0'
 ```
 
-## 6. Usage Example
+## 5. Usage Example
 
 See `example/lib/main.dart` for a complete example.
 
 ## Troubleshooting
-
-### Floor Generation Issues
-
-If you get errors during code generation:
-
-1. Clean build:
-```bash
-flutter clean
-flutter pub get
-flutter pub run build_runner clean
-flutter pub run build_runner build --delete-conflicting-outputs
-```
-
-2. Check that all imports are correct
-3. Ensure all models have proper annotations
 
 ### Database Issues
 
