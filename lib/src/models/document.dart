@@ -1,9 +1,4 @@
-import 'package:json_annotation/json_annotation.dart';
-
-part 'document.g.dart';
-
 /// Represents a Frappe document
-@JsonSerializable()
 class Document {
   /// Local UUID (primary key)
   final String localId;
@@ -32,10 +27,27 @@ class Document {
     required this.modified,
   });
 
-  factory Document.fromJson(Map<String, dynamic> json) =>
-      _$DocumentFromJson(json);
+  factory Document.fromJson(Map<String, dynamic> json) {
+    return Document(
+      localId: json['localId'] as String,
+      doctype: json['doctype'] as String,
+      serverId: json['serverId'] as String?,
+      data: json['data'] as Map<String, dynamic>,
+      status: json['status'] as String? ?? 'clean',
+      modified: json['modified'] as int,
+    );
+  }
 
-  Map<String, dynamic> toJson() => _$DocumentToJson(this);
+  Map<String, dynamic> toJson() {
+    return {
+      'localId': localId,
+      'doctype': doctype,
+      'serverId': serverId,
+      'data': data,
+      'status': status,
+      'modified': modified,
+    };
+  }
 
   /// Create a new document
   factory Document.create({

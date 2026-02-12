@@ -1,9 +1,4 @@
-import 'package:json_annotation/json_annotation.dart';
-
-part 'app_config.g.dart';
-
 /// Login method configuration (password, OAuth, social).
-@JsonSerializable()
 class LoginConfig {
   final bool enablePasswordLogin;
   final bool enableOAuth;
@@ -19,13 +14,28 @@ class LoginConfig {
     this.oauthClientSecret,
   });
 
-  factory LoginConfig.fromJson(Map<String, dynamic> json) =>
-      _$LoginConfigFromJson(json);
-  Map<String, dynamic> toJson() => _$LoginConfigToJson(this);
+  factory LoginConfig.fromJson(Map<String, dynamic> json) {
+    return LoginConfig(
+      enablePasswordLogin: json['enablePasswordLogin'] as bool? ?? true,
+      enableOAuth: json['enableOAuth'] as bool? ?? false,
+      enableSocialLogin: json['enableSocialLogin'] as bool? ?? false,
+      oauthClientId: json['oauthClientId'] as String?,
+      oauthClientSecret: json['oauthClientSecret'] as String?,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'enablePasswordLogin': enablePasswordLogin,
+      'enableOAuth': enableOAuth,
+      'enableSocialLogin': enableSocialLogin,
+      if (oauthClientId != null) 'oauthClientId': oauthClientId,
+      if (oauthClientSecret != null) 'oauthClientSecret': oauthClientSecret,
+    };
+  }
 }
 
 /// Application configuration for Frappe Mobile SDK.
-@JsonSerializable()
 class AppConfig {
   final String baseUrl;
   final List<String> doctypes;
@@ -33,10 +43,27 @@ class AppConfig {
 
   AppConfig({required this.baseUrl, required this.doctypes, this.loginConfig});
 
-  factory AppConfig.fromJson(Map<String, dynamic> json) =>
-      _$AppConfigFromJson(json);
+  factory AppConfig.fromJson(Map<String, dynamic> json) {
+    return AppConfig(
+      baseUrl: json['baseUrl'] as String,
+      doctypes:
+          (json['doctypes'] as List<dynamic>?)
+              ?.map((e) => e as String)
+              .toList() ??
+          [],
+      loginConfig: json['loginConfig'] != null
+          ? LoginConfig.fromJson(json['loginConfig'] as Map<String, dynamic>)
+          : null,
+    );
+  }
 
-  Map<String, dynamic> toJson() => _$AppConfigToJson(this);
+  Map<String, dynamic> toJson() {
+    return {
+      'baseUrl': baseUrl,
+      'doctypes': doctypes,
+      if (loginConfig != null) 'loginConfig': loginConfig!.toJson(),
+    };
+  }
 
   /// Builds [AppConfig] from a JSON map (supports snake_case and camelCase).
   static AppConfig fromJsonFile(Map<String, dynamic> json) {

@@ -5,11 +5,19 @@ import 'package:frappe_mobile_sdk/src/api/client.dart';
 import 'package:frappe_mobile_sdk/src/database/app_database.dart';
 import 'package:frappe_mobile_sdk/src/database/entities/doctype_meta_entity.dart';
 import 'package:frappe_mobile_sdk/src/services/meta_service.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 void main() {
+  // Initialize sqflite for testing
+  setUpAll(() {
+    sqfliteFfiInit();
+    databaseFactory = databaseFactoryFfi;
+  });
+
   group('MetaService.getMobileFormDoctypeNames', () {
     test('returns only doctypes marked as mobile forms', () async {
-      final db = await $FloorAppDatabase.inMemoryDatabaseBuilder().build();
+      // Create in-memory database for testing
+      final db = await AppDatabase.inMemoryDatabase();
       final client = FrappeClient('https://fake.test');
 
       // Insert some fake meta rows
