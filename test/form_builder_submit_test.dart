@@ -1,8 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:frappe_mobile_sdk/frappe_mobile_sdk.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 void main() {
+  // Initialize sqflite for testing
+  setUpAll(() {
+    sqfliteFfiInit();
+    databaseFactory = databaseFactoryFfi;
+  });
+
   testWidgets(
     'FrappeFormBuilder validates required fields and calls onSubmit',
     (WidgetTester tester) async {

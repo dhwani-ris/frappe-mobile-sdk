@@ -5,6 +5,7 @@ import 'daos/doctype_meta_dao.dart';
 import 'daos/document_dao.dart';
 import 'daos/link_option_dao.dart';
 import 'daos/auth_token_dao.dart';
+import 'daos/doctype_permission_dao.dart';
 
 class AppDatabase {
   static const int _version = 1;
@@ -16,12 +17,14 @@ class AppDatabase {
   final DocumentDao documentDao;
   final LinkOptionDao linkOptionDao;
   final AuthTokenDao authTokenDao;
+  final DoctypePermissionDao doctypePermissionDao;
 
   AppDatabase._(Database database)
     : doctypeMetaDao = DoctypeMetaDao(database),
       documentDao = DocumentDao(database),
       linkOptionDao = LinkOptionDao(database),
-      authTokenDao = AuthTokenDao(database);
+      authTokenDao = AuthTokenDao(database),
+      doctypePermissionDao = DoctypePermissionDao(database);
 
   /// Get database name from app name (sanitized for filesystem)
   static Future<String> _getDatabaseName() async {
@@ -34,6 +37,12 @@ class AppDatabase {
           ? packageInfo.appName
           : packageInfo.packageName;
 
+      // If both are empty or invalid, use fallback
+      if (appName.isEmpty || appName.trim().isEmpty) {
+        _databaseName = 'frappe_mobile_sdk.db';
+        return _databaseName!;
+      }
+
       // Sanitize app name for use as filename (remove spaces, special chars)
       final sanitized = appName
           .toLowerCase()
@@ -41,10 +50,16 @@ class AppDatabase {
           .replaceAll(RegExp(r'_+'), '_')
           .replaceAll(RegExp(r'^_|_$'), '');
 
+      // If sanitization resulted in empty string, use fallback
+      if (sanitized.isEmpty) {
+        _databaseName = 'frappe_mobile_sdk.db';
+        return _databaseName!;
+      }
+
       _databaseName = '${sanitized}_frappe.db';
       return _databaseName!;
     } catch (e) {
-      // Fallback to default name if package_info fails
+      // Fallback to default name if package_info fails (e.g., in CI/test environments)
       _databaseName = 'frappe_mobile_sdk.db';
       return _databaseName!;
     }
@@ -156,6 +171,23 @@ class AppDatabase {
         createdAt INTEGER NOT NULL
       )
     ''');
+
+    await _createDoctypePermissionTable(db);
+  }
+
+  static Future<void> _createDoctypePermissionTable(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS doctype_permission (
+        doctype TEXT PRIMARY KEY,
+        read INTEGER NOT NULL DEFAULT 0,
+        write INTEGER NOT NULL DEFAULT 0,
+        create INTEGER NOT NULL DEFAULT 0,
+        delete INTEGER NOT NULL DEFAULT 0,
+        submit INTEGER NOT NULL DEFAULT 0,
+        cancel INTEGER NOT NULL DEFAULT 0,
+        amend INTEGER NOT NULL DEFAULT 0
+      )
+    ''');
   }
 
   /// Get the underlying database instance (for advanced operations if needed)
@@ -175,5 +207,6 @@ class AppDatabase {
     await db.documentDao.deleteAll();
     await db.linkOptionDao.deleteAll();
     await db.authTokenDao.deleteAll();
+    await db.doctypePermissionDao.deleteAll();
   }
 }

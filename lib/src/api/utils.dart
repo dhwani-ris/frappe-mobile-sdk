@@ -37,6 +37,8 @@ String extractErrorMessage(dynamic body) {
 
   if (raw == null && body.containsKey('exception')) {
     raw = body['exception'].toString();
+    // Parse exception to extract meaningful message (similar to toUserFriendlyMessage)
+    raw = _extractExceptionMessage(raw);
   }
   if (raw == null && body.containsKey('message')) {
     raw = body['message'].toString();
@@ -79,6 +81,41 @@ String? _extractServerMessage(dynamic body) {
     } catch (_) {}
   }
   return null;
+}
+
+/// Extract meaningful message from exception string (removes traceback).
+String _extractExceptionMessage(String exception) {
+  // Try to extract just the error message, removing traceback
+  final patterns = [
+    RegExp(
+      r'ValidationError:\s*(.+?)(?:\s*Errors:|\s*Traceback|\n|$)',
+      caseSensitive: false,
+      dotAll: true,
+    ),
+    RegExp(
+      r'frappe\.exceptions\.ValidationError:\s*(.+?)(?:\s*Errors:|\s*Traceback|\n|$)',
+      caseSensitive: false,
+      dotAll: true,
+    ),
+    RegExp(
+      r'(.+?)(?:\s*Traceback\s*\(most recent)',
+      caseSensitive: false,
+      dotAll: true,
+    ),
+    RegExp(r'^([^\n\r]+)', dotAll: false),
+  ];
+
+  for (final re in patterns) {
+    final m = re.firstMatch(exception);
+    if (m != null) {
+      final msg = m.group(1)?.trim() ?? '';
+      if (msg.isNotEmpty && !msg.contains('Traceback')) {
+        return msg;
+      }
+    }
+  }
+
+  return exception;
 }
 
 /// Convert Frappe API error (traceback / exception string) to a short user-friendly message.
