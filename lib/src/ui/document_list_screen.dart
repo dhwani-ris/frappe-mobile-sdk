@@ -31,6 +31,9 @@ class DocumentListScreen extends StatefulWidget {
   /// Optional: when set, create/write/delete are resolved from backend permissions (login / mobile_auth.permissions).
   final PermissionService? permissionService;
 
+  /// If set, doctype label and field labels are translated (e.g. sdk.translations.translate).
+  final String Function(String)? translate;
+
   /// Optional initial documents; if null, list is fetched on load.
   final List<Document>? initialDocuments;
 
@@ -47,6 +50,7 @@ class DocumentListScreen extends StatefulWidget {
     this.initialDocuments,
     this.userRoles,
     this.permissionService,
+    this.translate,
   });
 
   @override
@@ -116,14 +120,17 @@ class _DocumentListScreenState extends State<DocumentListScreen> {
 
   String _getFieldLabel(String fieldname) {
     final field = widget.meta.getField(fieldname);
+    String raw;
     if (field != null && field.label != null && field.label!.isNotEmpty) {
-      return field.label!;
+      raw = field.label!;
+    } else {
+      raw = fieldname
+          .replaceAll('_', ' ')
+          .split(' ')
+          .map((w) => w.isEmpty ? '' : w[0].toUpperCase() + w.substring(1))
+          .join(' ');
     }
-    return fieldname
-        .replaceAll('_', ' ')
-        .split(' ')
-        .map((w) => w.isEmpty ? '' : w[0].toUpperCase() + w.substring(1))
-        .join(' ');
+    return widget.translate != null ? widget.translate!(raw) : raw;
   }
 
   String _docTitle(Document doc) {
@@ -203,7 +210,11 @@ class _DocumentListScreenState extends State<DocumentListScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.meta.label ?? widget.doctype),
+        title: Text(
+          widget.translate != null
+              ? widget.translate!(widget.meta.label ?? widget.doctype)
+              : (widget.meta.label ?? widget.doctype),
+        ),
         actions: [
           PopupMenuButton<String>(
             icon: const Icon(Icons.sort),
@@ -457,10 +468,10 @@ class _DocumentListScreenState extends State<DocumentListScreen> {
             _pullDocuments();
           },
           getMobileUuid: widget.getMobileUuid,
-          // Permissions
           readOnly: !isNew && !_canWrite,
           canSave: isNew ? _canCreate : _canWrite,
           canDelete: !isNew && _canDelete,
+          translate: widget.translate,
         ),
       ),
     );
