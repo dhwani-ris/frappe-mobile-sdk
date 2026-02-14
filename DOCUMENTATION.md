@@ -15,6 +15,7 @@ Complete guide to using the Frappe Mobile SDK for **API access** and **dynamic f
 7. [Offline & sync](#7-offline--sync)
 8. [Error handling](#8-error-handling)
 9. [Quick reference](#9-quick-reference)
+10. [Translations](#10-translations)
 
 ---
 
@@ -581,6 +582,8 @@ try {
 | API client | `sdk.api` (FrappeClient) |
 | Auth | `sdk.auth` (AuthService) |
 | Meta | `sdk.meta` (MetaService) |
+| Permissions | `sdk.permissions` (PermissionService) |
+| Translations | `sdk.translations` (TranslationService) |
 | Sync | `sdk.sync` (SyncService) |
 | Offline | `sdk.repository` (OfflineRepository) |
 | Link options | `sdk.linkOptions` (LinkOptionService) |
@@ -615,6 +618,62 @@ try {
 - **API:** DoctypeService, DocumentService, AttachmentService, QueryBuilder, exceptions, OAuth2Helper
 - **Utils:** extractErrorMessage, toUserFriendlyMessage
 - **UI:** FormScreen, FrappeFormBuilder, DoctypeListScreen, DocumentListScreen, LoginScreen, AppGuard, FrappeFormStyle, DefaultFormStyle
+- **Services:** PermissionService, TranslationService
+
+---
+
+## 10. Translations
+
+The SDK can load translation dictionaries from your Frappe server and use them for doctype labels, field labels, section/tab titles, and validation messages in forms and lists.
+
+### 10.1 When translations are synced
+
+| When | What happens |
+|------|--------------|
+| **App launch with auto restore** | If you call `sdk.initialize(true)` and the user is already logged in (session restore succeeds), the SDK runs an initial sync that includes **one** call to the translations API to load the **English** (`en`) dictionary. No other language is loaded automatically. |
+| **First-time login** | Translations are **not** fetched after `login()`, `loginWithApiKey()`, or `loginWithOAuth()`. |
+| **Other languages** | To load or switch language, the app must call `sdk.translations.loadTranslations(lang)` or `sdk.translations.setLocale(lang)` (e.g. when the user selects a language in settings). |
+
+**Summary:** Translations are synced **only on app launch when the user is already logged in**, and **only for the language `en`**. For any other language or to refresh, the app must call the translation API explicitly.
+
+### 10.2 Server API
+
+The backend must expose an endpoint that returns the translation map for a given language. The SDK calls:
+
+- **URL:** `GET {baseUrl}/api/v2/method/mobile_auth.get_translations?lang={lang}`
+- **Auth:** Same as other mobile APIs (Bearer token or API key).
+- **Response shape:** `{ "data": { "lang": "en", "translations": { "Source string": "Translated string", ... } } }`
+
+The SDK caches the map in memory per language. Lookup is by source string; if no translation exists, the source is returned.
+
+### 10.3 Using translations in the UI
+
+To show translated labels in list and form screens, pass a `translate` callback:
+
+- **DocumentListScreen:** `translate: (s) => sdk.translations.translate(s)` — translates app bar title (doctype label) and sort menu field labels.
+- **FormScreen:** `translate: (s) => sdk.translations.translate(s)` — translates app bar title; when opened from DocumentListScreen, it receives the same callback. Also pass `translate` to FrappeFormBuilder when using it standalone.
+- **FrappeFormBuilder:** Receives `translate` from FormScreen or directly; uses it for field labels, placeholders, descriptions, section titles, and tab labels (and child table forms).
+
+**What gets translated**
+
+| Component | Translated items |
+|-----------|------------------|
+| DocumentListScreen | App bar title (doctype label), sort menu field labels |
+| FormScreen | App bar title (doctype label) |
+| FrappeFormBuilder | Field labels, placeholders, descriptions, section titles, tab labels |
+| BaseField | Label above widget, description, validation message (“X is required”) |
+
+### 10.4 TranslationService API
+
+| Member | Description |
+|--------|-------------|
+| `sdk.translations` | TranslationService (available after `sdk.initialize()`). |
+| `loadTranslations(lang)` | Fetches translations for `lang` from the API and caches them. Returns the map. |
+| `setLocale(lang)` | Sets current language; loads translations for that language if not already cached. |
+| `translate(source, [args])` | Looks up `source` in the current language cache; replaces `{0}`, `{1}`, … with optional `args`. Returns source if no translation. |
+| `call(source, [args])` | Same as `translate` (callable: `sdk.translations('Source')`). |
+| `getCachedTranslations(lang)` | Returns the cached map for `lang` (empty if not loaded). |
+| `currentLang` | Current language code (default `en`). |
 
 ---
 

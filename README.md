@@ -12,6 +12,7 @@ Flutter package for Frappe integration with direct API access, dynamic form rend
 - ✅ **Offline-First** - Full offline capability with SQLite
 - ✅ **Bi-directional Sync** - Push/pull sync with conflict resolution
 - ✅ **Customizable Styling** - Default styles + full customization support
+- ✅ **Translations** - Load Frappe translations by language; map to field labels and doctype labels in forms and lists
 
 ## 📋 Prerequisites
 
@@ -118,6 +119,60 @@ MaterialApp(
   ),
 )
 ```
+
+### Translations
+
+The SDK can load translation dictionaries from your Frappe server and use them for **doctype labels**, **field labels**, **section/tab titles**, and validation messages in forms and lists.
+
+**When translations are synced**
+
+- **Automatically:** Only when you call `sdk.initialize(true)` (auto restore + sync) and the user is already logged in (session restore succeeds). In that case the SDK calls the translations API once and loads the **English** (`en`) dictionary. No other language is loaded automatically.
+- **Manually:** Call `sdk.translations.loadTranslations(lang)` or `sdk.translations.setLocale(lang)` to load or switch language (e.g. after login or when the user changes language in settings).
+
+**Server requirement**
+
+Your backend must expose an API that returns the translation map for a language (e.g. `GET /api/v2/method/mobile_auth.get_translations?lang=en`). Response shape: `{ "data": { "lang": "en", "translations": { "Source string": "Translated string" } } }`.
+
+**Using translations in the UI**
+
+Pass a `translate` callback into the list and form screens so labels use the cached dictionary:
+
+```dart
+// After init, optionally set language (e.g. from user preference or device locale)
+await sdk.translations.setLocale('en');  // or 'hi', 'es', etc.
+
+// When opening DocumentListScreen and FormScreen, pass translate:
+DocumentListScreen(
+  doctype: doctype,
+  meta: meta,
+  repository: repository,
+  syncService: syncService,
+  metaService: metaService,
+  permissionService: sdk.permissions,
+  translate: (s) => sdk.translations.translate(s),
+  // ...
+);
+
+// FormScreen receives translate from DocumentListScreen when opening a document.
+// Or pass it explicitly: FormScreen(..., translate: (s) => sdk.translations.translate(s));
+```
+
+**What gets translated**
+
+- **DocumentListScreen:** App bar title (doctype label), sort menu field labels.
+- **FormScreen:** App bar title (doctype label).
+- **FrappeFormBuilder:** Field labels, placeholders, descriptions, section titles, tab labels (and child table forms).
+- **BaseField:** Label above the widget, description text, and validation message (“X is required”).
+
+**API summary**
+
+| Member | Description |
+|--------|-------------|
+| `sdk.translations` | TranslationService (after `initialize()`). |
+| `loadTranslations(lang)` | Fetches and caches the translation map for `lang`. |
+| `setLocale(lang)` | Sets current language and loads it if not cached. |
+| `translate(source, [args])` | Returns translated string for current language; replaces `{0}`, `{1}` with `args`. |
+| `currentLang` | Current language code (default `en`). |
 
 ### 1. API Usage (No Form Renderer)
 

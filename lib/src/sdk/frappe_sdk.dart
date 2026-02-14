@@ -9,6 +9,7 @@ import '../services/permission_service.dart';
 import '../services/sync_service.dart';
 import '../services/offline_repository.dart';
 import '../services/link_option_service.dart';
+import '../services/translation_service.dart';
 
 /// Main SDK initialization class for easy setup
 class FrappeSDK {
@@ -19,6 +20,7 @@ class FrappeSDK {
   AuthService? _authService;
   MetaService? _metaService;
   PermissionService? _permissionService;
+  TranslationService? _translationService;
   SyncService? _syncService;
   OfflineRepository? _repository;
   LinkOptionService? _linkOptionService;
@@ -46,6 +48,7 @@ class FrappeSDK {
     _repository = OfflineRepository(_database!);
     _metaService = MetaService(_client!, _database!);
     _permissionService = PermissionService(_client!, _database!);
+    _translationService = TranslationService(_client!);
     _syncService = SyncService(
       _client!,
       _repository!,
@@ -161,6 +164,15 @@ class FrappeSDK {
     return _permissionService!;
   }
 
+  /// Get Translation Service (Frappe translations via mobile_auth.get_translations).
+  /// Use [TranslationService.loadTranslations] then [TranslationService.translate] or [TranslationService.call].
+  TranslationService get translations {
+    if (!_initialized) {
+      throw Exception('SDK not initialized. Call initialize() first.');
+    }
+    return _translationService!;
+  }
+
   /// Get Sync Service
   SyncService get sync {
     if (!_initialized) {
@@ -248,6 +260,12 @@ class FrappeSDK {
 
     try {
       await _permissionService?.syncFromApi();
+    } catch (_) {
+      // ignore
+    }
+
+    try {
+      await _translationService?.loadTranslations('en');
     } catch (_) {
       // ignore
     }

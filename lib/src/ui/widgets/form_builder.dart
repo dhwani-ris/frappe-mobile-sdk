@@ -81,6 +81,9 @@ class FrappeFormBuilder extends StatefulWidget {
   /// Called once with the form's submit handler so the parent (e.g. FormScreen) can trigger save from AppBar.
   final void Function(void Function() submit)? registerSubmit;
 
+  /// If set, field labels, section titles and tab labels are passed through this (e.g. sdk.translations.translate).
+  final String Function(String)? translate;
+
   const FrappeFormBuilder({
     super.key,
     required this.meta,
@@ -96,6 +99,7 @@ class FrappeFormBuilder extends StatefulWidget {
     this.fetchLinkedDocument,
     this.getMeta,
     this.registerSubmit,
+    this.translate,
   });
 
   @override
@@ -342,10 +346,24 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
     }
 
     final formStyle = widget.style ?? DefaultFormStyle.standard;
+    var decoration = formStyle.fieldDecoration?.call(field);
+    if (widget.translate != null && decoration != null) {
+      final labelText = widget.translate!(field.label ?? field.fieldname ?? '');
+      decoration = decoration.copyWith(
+        labelText: labelText,
+        hintText: field.placeholder != null
+            ? widget.translate!(field.placeholder!)
+            : decoration.hintText,
+        helperText: field.description != null
+            ? widget.translate!(field.description!)
+            : decoration.helperText,
+      );
+    }
     final fieldStyle = FieldStyle(
       labelStyle: formStyle.labelStyle,
       descriptionStyle: formStyle.descriptionStyle,
-      decoration: formStyle.fieldDecoration?.call(field),
+      decoration: decoration,
+      translate: widget.translate,
     );
 
     final effectiveReqd = _isFieldRequired(field);
@@ -398,6 +416,7 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
                   fileUrlBase: widget.fileUrlBase,
                   imageHeaders: widget.imageHeaders,
                   fetchLinkedDocument: widget.fetchLinkedDocument,
+                  translate: widget.translate,
                 )
           : null,
       onChanged: (value) {
@@ -521,7 +540,9 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              section.sectionField.displayLabel,
+              widget.translate != null
+                  ? widget.translate!(section.sectionField.displayLabel)
+                  : section.sectionField.displayLabel,
               style:
                   formStyle.sectionTitleStyle ??
                   Theme.of(context).textTheme.titleMedium?.copyWith(
@@ -643,7 +664,13 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
             TabBar(
               controller: _tabController,
               tabs: _tabs
-                  .map((tab) => Tab(text: tab.tabField.displayLabel))
+                  .map(
+                    (tab) => Tab(
+                      text: widget.translate != null
+                          ? widget.translate!(tab.tabField.displayLabel)
+                          : tab.tabField.displayLabel,
+                    ),
+                  )
                   .toList(),
             ),
           Expanded(

@@ -23,26 +23,26 @@ class DoctypePermissionEntity {
   factory DoctypePermissionEntity.fromDb(Map<String, dynamic> map) {
     return DoctypePermissionEntity(
       doctype: map['doctype'] as String,
-      read: (map['read'] as int? ?? 0) == 1,
-      write: (map['write'] as int? ?? 0) == 1,
-      create: (map['create'] as int? ?? 0) == 1,
-      delete: (map['delete'] as int? ?? 0) == 1,
-      submit: (map['submit'] as int? ?? 0) == 1,
-      cancel: (map['cancel'] as int? ?? 0) == 1,
-      amend: (map['amend'] as int? ?? 0) == 1,
+      read: (map['can_read'] as int? ?? 0) == 1,
+      write: (map['can_write'] as int? ?? 0) == 1,
+      create: (map['can_create'] as int? ?? 0) == 1,
+      delete: (map['can_delete'] as int? ?? 0) == 1,
+      submit: (map['can_submit'] as int? ?? 0) == 1,
+      cancel: (map['can_cancel'] as int? ?? 0) == 1,
+      amend: (map['can_amend'] as int? ?? 0) == 1,
     );
   }
 
   Map<String, dynamic> toDb() {
     return {
       'doctype': doctype,
-      'read': read ? 1 : 0,
-      'write': write ? 1 : 0,
-      'create': create ? 1 : 0,
-      'delete': delete ? 1 : 0,
-      'submit': submit ? 1 : 0,
-      'cancel': cancel ? 1 : 0,
-      'amend': amend ? 1 : 0,
+      'can_read': read ? 1 : 0,
+      'can_write': write ? 1 : 0,
+      'can_create': create ? 1 : 0,
+      'can_delete': delete ? 1 : 0,
+      'can_submit': submit ? 1 : 0,
+      'can_cancel': cancel ? 1 : 0,
+      'can_amend': amend ? 1 : 0,
     };
   }
 

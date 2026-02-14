@@ -40,6 +40,7 @@ class _HomeScreenState extends State<HomeScreen> {
   AuthService? _authService;
   MetaService? _metaService;
   PermissionService? _permissionService;
+  TranslationService? _translationService;
   OfflineRepository? _repository;
   SyncService? _syncService;
   LinkOptionService? _linkOptionService;
@@ -86,6 +87,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _authService = sdk.auth;
       _metaService = sdk.meta;
       _permissionService = sdk.permissions;
+      _translationService = sdk.translations;
       _repository = sdk.repository;
       _syncService = sdk.sync;
       _linkOptionService = sdk.linkOptions;
@@ -405,6 +407,9 @@ class _HomeScreenState extends State<HomeScreen> {
                         initialDocuments: docs,
                         userRoles: _authService?.roles,
                         permissionService: _permissionService,
+                        translate: _translationService != null
+                            ? (s) => _translationService!.translate(s)
+                            : null,
                       ),
                     ),
                   );

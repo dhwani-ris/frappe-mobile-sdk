@@ -7,7 +7,15 @@ class FieldStyle {
   final TextStyle? descriptionStyle;
   final InputDecoration? decoration;
 
-  const FieldStyle({this.labelStyle, this.descriptionStyle, this.decoration});
+  /// If set, used to translate field label and description (e.g. from Frappe translations).
+  final String Function(String)? translate;
+
+  const FieldStyle({
+    this.labelStyle,
+    this.descriptionStyle,
+    this.decoration,
+    this.translate,
+  });
 }
 
 /// Base class for all Frappe field widgets
@@ -43,7 +51,9 @@ abstract class BaseField extends StatelessWidget {
             child: Row(
               children: [
                 Text(
-                  field.displayLabel,
+                  style?.translate != null
+                      ? style!.translate!(field.displayLabel)
+                      : field.displayLabel,
                   style:
                       style?.labelStyle ??
                       TextStyle(
@@ -66,7 +76,9 @@ abstract class BaseField extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.only(top: 4.0),
             child: Text(
-              field.description!,
+              style?.translate != null
+                  ? style!.translate!(field.description!)
+                  : field.description!,
               style:
                   style?.descriptionStyle ??
                   Theme.of(
@@ -84,7 +96,10 @@ abstract class BaseField extends StatelessWidget {
   /// Validate the field value
   String? validate(dynamic value) {
     if (field.reqd && (value == null || value.toString().isEmpty)) {
-      return '${field.displayLabel} is required';
+      final label = style?.translate != null
+          ? style!.translate!(field.displayLabel)
+          : field.displayLabel;
+      return '$label is required';
     }
     return null;
   }

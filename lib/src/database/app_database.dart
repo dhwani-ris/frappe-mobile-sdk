@@ -179,13 +179,13 @@ class AppDatabase {
     await db.execute('''
       CREATE TABLE IF NOT EXISTS doctype_permission (
         doctype TEXT PRIMARY KEY,
-        read INTEGER NOT NULL DEFAULT 0,
-        write INTEGER NOT NULL DEFAULT 0,
-        create INTEGER NOT NULL DEFAULT 0,
-        delete INTEGER NOT NULL DEFAULT 0,
-        submit INTEGER NOT NULL DEFAULT 0,
-        cancel INTEGER NOT NULL DEFAULT 0,
-        amend INTEGER NOT NULL DEFAULT 0
+        can_read INTEGER NOT NULL DEFAULT 0,
+        can_write INTEGER NOT NULL DEFAULT 0,
+        can_create INTEGER NOT NULL DEFAULT 0,
+        can_delete INTEGER NOT NULL DEFAULT 0,
+        can_submit INTEGER NOT NULL DEFAULT 0,
+        can_cancel INTEGER NOT NULL DEFAULT 0,
+        can_amend INTEGER NOT NULL DEFAULT 0
       )
     ''');
   }

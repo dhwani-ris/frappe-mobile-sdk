@@ -38,6 +38,9 @@ class FormScreen extends StatefulWidget {
   final bool? canSave;
   final bool? canDelete;
 
+  /// If set, doctype label and field labels are translated (e.g. sdk.translations.translate).
+  final String Function(String)? translate;
+
   const FormScreen({
     super.key,
     required this.meta,
@@ -53,6 +56,7 @@ class FormScreen extends StatefulWidget {
     this.readOnly = false,
     this.canSave,
     this.canDelete,
+    this.translate,
   });
 
   @override
@@ -416,7 +420,11 @@ class _FormScreenState extends State<FormScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.meta.label ?? widget.meta.name),
+        title: Text(
+          widget.translate != null
+              ? widget.translate!(widget.meta.label ?? widget.meta.name)
+              : (widget.meta.label ?? widget.meta.name),
+        ),
         actions: [
           if (allowSave)
             TextButton.icon(
@@ -483,6 +491,7 @@ class _FormScreenState extends State<FormScreen> {
                   : null,
               registerSubmit: (trigger) => _triggerSubmit = trigger,
               style: widget.style,
+              translate: widget.translate,
             ),
           ),
         ],
