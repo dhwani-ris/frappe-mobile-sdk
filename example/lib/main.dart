@@ -39,6 +39,7 @@ class _HomeScreenState extends State<HomeScreen> {
   AppDatabase? _database;
   AuthService? _authService;
   MetaService? _metaService;
+  PermissionService? _permissionService;
   OfflineRepository? _repository;
   SyncService? _syncService;
   LinkOptionService? _linkOptionService;
@@ -84,6 +85,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _database = sdk.database;
       _authService = sdk.auth;
       _metaService = sdk.meta;
+      _permissionService = sdk.permissions;
       _repository = sdk.repository;
       _syncService = sdk.sync;
       _linkOptionService = sdk.linkOptions;
@@ -402,6 +404,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             _authService!.getOrCreateMobileUuid(),
                         initialDocuments: docs,
                         userRoles: _authService?.roles,
+                        permissionService: _permissionService,
                       ),
                     ),
                   );

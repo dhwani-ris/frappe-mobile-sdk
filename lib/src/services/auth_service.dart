@@ -95,13 +95,25 @@ class AuthService {
       final mobileFormNamesJson =
           response['mobile_form_names'] as List<dynamic>?;
 
-      final rolesJson = response['roles'] as List<dynamic>?;
-      _roles =
-          rolesJson
-              ?.map((r) => r.toString())
-              .where((r) => r.isNotEmpty)
-              .toList() ??
-          <String>[];
+      // Roles from response['permissions']['roles'] (new) or legacy response['roles']
+      final permissions = response['permissions'] as Map<String, dynamic>?;
+      if (permissions != null) {
+        final rolesJson = permissions['roles'] as List<dynamic>?;
+        _roles =
+            rolesJson
+                ?.map((r) => r.toString())
+                .where((r) => r.isNotEmpty)
+                .toList() ??
+            <String>[];
+      } else {
+        final rolesJson = response['roles'] as List<dynamic>?;
+        _roles =
+            rolesJson
+                ?.map((r) => r.toString())
+                .where((r) => r.isNotEmpty)
+                .toList() ??
+            <String>[];
+      }
 
       if (accessToken == null || accessToken.isEmpty) {
         throw Exception('Login response missing access_token');

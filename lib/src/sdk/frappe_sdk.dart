@@ -5,6 +5,7 @@ import '../api/client.dart';
 import '../database/app_database.dart';
 import '../services/auth_service.dart';
 import '../services/meta_service.dart';
+import '../services/permission_service.dart';
 import '../services/sync_service.dart';
 import '../services/offline_repository.dart';
 import '../services/link_option_service.dart';
@@ -17,6 +18,7 @@ class FrappeSDK {
   AppDatabase? _database;
   AuthService? _authService;
   MetaService? _metaService;
+  PermissionService? _permissionService;
   SyncService? _syncService;
   OfflineRepository? _repository;
   LinkOptionService? _linkOptionService;
@@ -43,6 +45,7 @@ class FrappeSDK {
 
     _repository = OfflineRepository(_database!);
     _metaService = MetaService(_client!, _database!);
+    _permissionService = PermissionService(_client!, _database!);
     _syncService = SyncService(
       _client!,
       _repository!,
@@ -64,13 +67,19 @@ class FrappeSDK {
   /// Login with username and password (stateless, returns user info)
   Future<Map<String, dynamic>> login(String username, String password) async {
     if (!_initialized) await initialize();
-    return await _authService!.login(username, password);
+    final response = await _authService!.login(username, password);
+    await _permissionService!.saveFromLoginResponse(
+      response['permissions'] as Map<String, dynamic>?,
+    );
+    return response;
   }
 
   /// Login with API key
   Future<bool> loginWithApiKey(String apiKey, String apiSecret) async {
     if (!_initialized) await initialize();
-    return await _authService!.loginWithApiKey(apiKey, apiSecret);
+    final ok = await _authService!.loginWithApiKey(apiKey, apiSecret);
+    if (ok) await _permissionService!.syncFromApi();
+    return ok;
   }
 
   /// Prepare OAuth login: returns authorize_url and code_verifier. Open URL in browser/WebView; capture redirect with ?code=... then call loginWithOAuth.
@@ -98,12 +107,14 @@ class FrappeSDK {
     required String redirectUri,
   }) async {
     if (!_initialized) await initialize();
-    return await _authService!.loginWithOAuth(
+    final ok = await _authService!.loginWithOAuth(
       code: code,
       codeVerifier: codeVerifier,
       clientId: clientId,
       redirectUri: redirectUri,
     );
+    if (ok) await _permissionService!.syncFromApi();
+    return ok;
   }
 
   /// Logout and clear all local DB data (default). Set clearDatabase: false to keep DB.
@@ -140,6 +151,14 @@ class FrappeSDK {
       throw Exception('SDK not initialized. Call initialize() first.');
     }
     return _metaService!;
+  }
+
+  /// Get Permission Service (doctype read/write/create/delete from login or mobile_auth.permissions)
+  PermissionService get permissions {
+    if (!_initialized) {
+      throw Exception('SDK not initialized. Call initialize() first.');
+    }
+    return _permissionService!;
   }
 
   /// Get Sync Service
@@ -226,6 +245,12 @@ class FrappeSDK {
   /// 3) Pull records for all mobile doctypes into the offline DB
   Future<void> _initialMetaAndDataSync() async {
     if (_metaService == null || _syncService == null) return;
+
+    try {
+      await _permissionService?.syncFromApi();
+    } catch (_) {
+      // ignore
+    }
 
     try {
       await _metaService!.checkAndSyncDoctypes();
