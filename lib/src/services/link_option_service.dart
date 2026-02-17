@@ -35,7 +35,8 @@ class LinkOptionService {
     bool forceRefresh = false,
     List<List<dynamic>>? filters,
   }) async {
-    final key = _cacheKey(doctype, filters);
+    final normalizedFilters = _normalizeFiltersForDoctype(doctype, filters);
+    final key = _cacheKey(doctype, normalizedFilters);
     if (!forceRefresh && _memoryCache.containsKey(key)) {
       return _memoryCache[key]!;
     }
@@ -44,7 +45,7 @@ class LinkOptionService {
     try {
       documents = await _client.doctype.list(
         doctype,
-        filters: filters,
+        filters: normalizedFilters,
         limitPageLength: 1000,
       );
     } catch (_) {
@@ -86,6 +87,31 @@ class LinkOptionService {
 
     _putCache(key, linkOptions);
     return linkOptions;
+  }
+
+  /// Normalize filter doctype to match the queried doctype.
+  /// Fixes 417 "Field not permitted" when meta uses singular form (e.g. Village)
+  /// but API queries plural (Villages).
+  static List<List<dynamic>>? _normalizeFiltersForDoctype(
+    String doctype,
+    List<List<dynamic>>? filters,
+  ) {
+    if (filters == null || filters.isEmpty) return filters;
+    final result = <List<dynamic>>[];
+    for (final filter in filters) {
+      if (filter is! List || filter.length < 4) continue;
+      final filterDoctype = filter[0]?.toString();
+      if (filterDoctype == null || filterDoctype.isEmpty) {
+        result.add(List<dynamic>.from(filter));
+        continue;
+      }
+      if (filterDoctype != doctype) {
+        result.add([doctype, filter[1], filter[2], filter[3]]);
+      } else {
+        result.add(List<dynamic>.from(filter));
+      }
+    }
+    return result.isEmpty ? null : result;
   }
 
   /// Returns field names that are dependencies in link_filters (eval:doc.xxx).
