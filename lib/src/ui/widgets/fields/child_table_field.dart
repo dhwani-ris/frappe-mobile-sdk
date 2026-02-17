@@ -173,9 +173,9 @@ class ChildTableField extends StatelessWidget {
         isEdit: false,
         formBuilder: formBuilder!,
         onSubmit: (data) {
+          Navigator.pop(ctx);
           final newList = List<dynamic>.from(listValue)..add(data);
           onChanged!(newList);
-          Navigator.pop(ctx);
         },
         onRemove: null,
       ),
@@ -219,16 +219,16 @@ class ChildTableField extends StatelessWidget {
         isEdit: true,
         formBuilder: formBuilder!,
         onSubmit: (data) {
+          Navigator.pop(ctx);
           final newList = List<dynamic>.from(listValue);
           newList[index] = data;
           onChanged!(newList);
-          Navigator.pop(ctx);
         },
         onRemove: () {
+          Navigator.pop(ctx);
           final newList = List<dynamic>.from(listValue);
           newList.removeAt(index);
           onChanged!(newList);
-          Navigator.pop(ctx);
         },
       ),
     );
@@ -298,10 +298,7 @@ class _ChildTableSheetState extends State<_ChildTableSheet> {
                 child: widget.formBuilder(
                   widget.childMeta,
                   widget.initialData,
-                  (data) {
-                    widget.onSubmit(data);
-                    Navigator.pop(context);
-                  },
+                  (data) => widget.onSubmit(data),
                   registerSubmit: (fn) {
                     _submitFn = fn;
                     WidgetsBinding.instance.addPostFrameCallback((_) {
