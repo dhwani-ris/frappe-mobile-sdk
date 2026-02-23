@@ -434,6 +434,13 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
             }
           }
 
+          // Sync FormBuilder internal state (needed for programmatic updates e.g. auto-select)
+          if (field.fieldname != null && oldValue != value) {
+            _formKey.currentState?.patchValue({
+              field.fieldname!: value ?? '',
+            });
+          }
+
           // If value changed, clear dependent link fields that depend on this field
           if (oldValue != value && field.fieldname != null) {
             for (final otherField in widget.meta.fields) {

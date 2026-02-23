@@ -459,6 +459,16 @@ FrappeFormBuilder(
 - Use `field.fieldname` / `field.fieldtype` to branch by button.
 - The button shows a loading indicator during async handlers.
 
+### 4.11 Auto-select for single-option fields
+
+For **Select** and **Link** fields, after `depends_on`, `fetch_from`, and link-filter evaluation, if the selectable option count is exactly one, the SDK automatically selects that option without user interaction.
+
+- **Select fields** (single and multi-select): When `field.options` yields one option and there is no valid selection, the first option is auto-selected and synced to form state.
+- **Link fields (direct options)**: When the options list has one item and there is no valid selection, that item is auto-selected.
+- **Link fields (async dropdown)**: When options load from `LinkOptionService` (after link filters and dependent fields are resolved) and there is one option with no valid selection, it is auto-selected.
+
+This reduces manual selection for cascading dropdowns (e.g. State Agency → District Agency → Sro) when only one valid choice exists at each step.
+
 ---
 
 ## 5. New and notable APIs
