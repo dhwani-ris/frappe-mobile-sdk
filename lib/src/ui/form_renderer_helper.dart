@@ -3,7 +3,12 @@
 
 import 'package:flutter/material.dart';
 import '../sdk/frappe_sdk.dart';
-import 'widgets/form_builder.dart' show FrappeFormBuilder, FrappeFormStyle;
+import 'widgets/form_builder.dart'
+    show
+        FrappeFormBuilder,
+        FrappeFormStyle,
+        ButtonPressedCallback,
+        OnButtonPressedCallback;
 import 'widgets/default_form_style.dart';
 import 'form_screen.dart';
 
@@ -26,6 +31,7 @@ class FrappeFormRenderer {
     Map<String, dynamic>? initialData,
     Function(Map<String, dynamic>)? onSubmit,
     bool readOnly = false,
+    ButtonPressedCallback? onButtonPressed,
   }) async {
     final meta = await sdk.meta.getMeta(doctype);
 
@@ -36,6 +42,7 @@ class FrappeFormRenderer {
       readOnly: readOnly,
       linkOptionService: sdk.linkOptions,
       style: style ?? DefaultFormStyle.standard,
+      onButtonPressed: onButtonPressed,
     );
   }
 
@@ -50,6 +57,7 @@ class FrappeFormRenderer {
     String doctype, {
     Map<String, dynamic>? initialData,
     Function()? onSaveSuccess,
+    OnButtonPressedCallback? onButtonPressed,
   }) async {
     final meta = await sdk.meta.getMeta(doctype);
 
@@ -74,6 +82,7 @@ class FrappeFormRenderer {
           api: sdk.api,
           onSaveSuccess: onSaveSuccess,
           getMobileUuid: () => sdk.getMobileUuid(),
+          onButtonPressed: onButtonPressed,
         ),
       ),
     );
