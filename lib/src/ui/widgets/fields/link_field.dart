@@ -1,12 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_form_builder/flutter_form_builder.dart';
 import 'base_field.dart';
+import '../../../models/doc_field.dart';
 import '../../../services/link_option_service.dart';
+import '../../../services/link_field_coordinator.dart';
 import '../../../database/entities/link_option_entity.dart';
 
 /// Widget for Link field type with cached options
 class LinkField extends BaseField {
   final LinkOptionService? linkOptionService;
+  final LinkFieldCoordinator? linkFieldCoordinator;
   final List<String>? options;
   final Map<String, dynamic>? formData;
 
@@ -18,6 +21,7 @@ class LinkField extends BaseField {
     super.enabled,
     super.style,
     this.linkOptionService,
+    this.linkFieldCoordinator,
     this.options,
     this.formData,
   });
@@ -77,16 +81,18 @@ class LinkField extends BaseField {
       );
     }
 
-    // If field.options contains a DocType name, fetch from service
+    // If field.options contains a DocType name, fetch from service or coordinator
+    final effectiveService = linkOptionService ?? linkFieldCoordinator?.linkOptionService;
     if (field.options != null &&
         field.options!.isNotEmpty &&
-        linkOptionService != null) {
+        effectiveService != null) {
       return _LinkFieldDropdown(
         field: field,
         value: value,
         onChanged: onChanged,
         enabled: enabled,
-        linkOptionService: linkOptionService!,
+        linkOptionService: effectiveService,
+        linkFieldCoordinator: linkFieldCoordinator,
         linkedDoctype: field.options!,
         linkFilters: field.linkFilters,
         formData: formData ?? {},
@@ -120,13 +126,14 @@ class LinkField extends BaseField {
   }
 }
 
-/// Dropdown widget that loads options from service
+/// Dropdown widget that loads options from service or coordinator
 class _LinkFieldDropdown extends StatefulWidget {
   final dynamic field;
   final dynamic value;
   final ValueChanged<dynamic>? onChanged;
   final bool enabled;
   final LinkOptionService linkOptionService;
+  final LinkFieldCoordinator? linkFieldCoordinator;
   final String linkedDoctype;
   final String? linkFilters;
   final Map<String, dynamic> formData;
@@ -138,6 +145,7 @@ class _LinkFieldDropdown extends StatefulWidget {
     this.onChanged,
     required this.enabled,
     required this.linkOptionService,
+    this.linkFieldCoordinator,
     required this.linkedDoctype,
     this.linkFilters,
     required this.formData,
@@ -159,7 +167,73 @@ class _LinkFieldDropdownState extends State<_LinkFieldDropdown> {
   @override
   void initState() {
     super.initState();
-    _loadOptions();
+    if (widget.linkFieldCoordinator != null &&
+        widget.linkFieldCoordinator!.useCoordinator) {
+      _loadOptionsViaCoordinator();
+    } else {
+      _loadOptions();
+    }
+  }
+
+  void _applyOptionsAndAutoSelect(List<LinkOptionEntity> options) {
+    if (!mounted) return;
+    setState(() {
+      _options = options;
+      _isLoading = false;
+      _waitingForDependent = false;
+    });
+    if (options.length == 1) {
+      final currentVal = widget.value?.toString();
+      final hasValidSelection = currentVal != null &&
+          currentVal.isNotEmpty &&
+          options.any((o) =>
+              o.name == currentVal || (o.label ?? o.name) == currentVal);
+      if (!hasValidSelection) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) widget.onChanged?.call(options.first.name);
+        });
+      }
+    }
+  }
+
+  void _loadOptionsViaCoordinator() {
+    final coordinator = widget.linkFieldCoordinator;
+    if (coordinator == null || !coordinator.useCoordinator) {
+      _loadOptions();
+      return;
+    }
+    final docField = widget.field is DocField ? widget.field as DocField : _docFieldFromDynamic(widget.field);
+    if (docField == null) {
+      _loadOptions();
+      return;
+    }
+    if (!coordinator.canFetchNow(docField, widget.formData) &&
+        coordinator.getTier(docField) > 0) {
+      final dependentNames = LinkOptionService.getDependentFieldNames(
+        widget.linkFilters,
+      );
+      setState(() {
+        _options = [];
+        _isLoading = false;
+        _waitingForDependent = true;
+        _dependentFieldName = dependentNames.isNotEmpty ? dependentNames.first : '';
+      });
+      return;
+    }
+    setState(() => _isLoading = true);
+    coordinator.registerField(docField, widget.formData, _applyOptionsAndAutoSelect);
+  }
+
+  DocField? _docFieldFromDynamic(dynamic f) {
+    if (f == null) return null;
+    if (f is DocField) return f;
+    return DocField(
+      fieldname: f.fieldname?.toString(),
+      fieldtype: f.fieldtype ?? 'Link',
+      label: f.label?.toString(),
+      options: f.options?.toString(),
+      linkFilters: f.linkFilters?.toString(),
+    );
   }
 
   Future<void> _loadOptions() async {
@@ -191,24 +265,7 @@ class _LinkFieldDropdownState extends State<_LinkFieldDropdown> {
         widget.linkedDoctype,
         filters: filters,
       );
-      setState(() {
-        _options = options;
-        _isLoading = false;
-        _waitingForDependent = false;
-      });
-      // Auto-select when exactly one option and no valid selection
-      if (options.length == 1) {
-        final currentVal = widget.value?.toString();
-        final hasValidSelection = currentVal != null &&
-            currentVal.isNotEmpty &&
-            options.any((o) =>
-                o.name == currentVal || (o.label ?? o.name) == currentVal);
-        if (!hasValidSelection) {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (mounted) widget.onChanged?.call(options.first.name);
-          });
-        }
-      }
+      _applyOptionsAndAutoSelect(options);
     } catch (e) {
       setState(() {
         _options = [];
@@ -221,9 +278,12 @@ class _LinkFieldDropdownState extends State<_LinkFieldDropdown> {
   @override
   void didUpdateWidget(_LinkFieldDropdown oldWidget) {
     super.didUpdateWidget(oldWidget);
-    // Reload options only if linkFilters changed or a *dependent* form field changed
+    final useCoordinator = widget.linkFieldCoordinator != null &&
+        widget.linkFieldCoordinator!.useCoordinator;
+    final loadFn = useCoordinator ? _loadOptionsViaCoordinator : _loadOptions;
+
     if (oldWidget.linkFilters != widget.linkFilters) {
-      _loadOptions();
+      loadFn();
       return;
     }
     final dependentNames = LinkOptionService.getDependentFieldNames(
@@ -232,7 +292,7 @@ class _LinkFieldDropdownState extends State<_LinkFieldDropdown> {
     if (dependentNames.isEmpty) return;
     for (final key in dependentNames) {
       if (oldWidget.formData[key] != widget.formData[key]) {
-        _loadOptions();
+        loadFn();
         return;
       }
     }

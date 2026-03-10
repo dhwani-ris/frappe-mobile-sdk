@@ -17,6 +17,12 @@ class DocTypeMeta {
   /// Default sort order: 'asc' or 'desc' (from Frappe sort_order)
   final String? sortOrder;
 
+  /// True if this doctype supports submit/cancel workflow (Frappe is_submittable)
+  bool get isSubmittable {
+    final v = metaData?['is_submittable'];
+    return v == 1 || v == true;
+  }
+
   DocTypeMeta({
     required this.name,
     this.label,
