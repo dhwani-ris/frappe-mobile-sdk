@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_form_builder/flutter_form_builder.dart';
@@ -5,6 +6,7 @@ import '../../models/doc_type_meta.dart';
 import '../../models/doc_field.dart';
 import '../../constants/field_types.dart';
 import '../../services/link_option_service.dart';
+import '../../services/link_field_coordinator.dart';
 import '../../utils/depends_on_evaluator.dart';
 import 'fields/field_factory.dart';
 import 'fields/base_field.dart';
@@ -48,6 +50,12 @@ class FrappeFormStyle {
   /// Custom field spacing
   final EdgeInsets? fieldPadding;
 
+  /// Max lines for section titles before ellipsis (default: 3)
+  final int? sectionTitleMaxLines;
+
+  /// Max lines for tab titles before ellipsis (default: 2)
+  final int? tabTitleMaxLines;
+
   const FrappeFormStyle({
     this.fieldDecoration,
     this.labelStyle,
@@ -56,6 +64,8 @@ class FrappeFormStyle {
     this.sectionMargin,
     this.sectionPadding,
     this.fieldPadding,
+    this.sectionTitleMaxLines,
+    this.tabTitleMaxLines,
   });
 }
 
@@ -66,6 +76,9 @@ class FrappeFormBuilder extends StatefulWidget {
   final Function(Map<String, dynamic>)? onSubmit;
   final bool readOnly;
   final LinkOptionService? linkOptionService;
+
+  /// When true (default), use LinkFieldCoordinator for sequenced link option loading.
+  final bool useLinkFieldCoordinator;
 
   /// Custom field factory (if null, uses default FieldFactory)
   final FieldFactory? customFieldFactory;
@@ -106,6 +119,7 @@ class FrappeFormBuilder extends StatefulWidget {
     this.onSubmit,
     this.readOnly = false,
     this.linkOptionService,
+    this.useLinkFieldCoordinator = true,
     this.customFieldFactory,
     this.style,
     this.uploadFile,
@@ -144,6 +158,10 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
     with SingleTickerProviderStateMixin {
   late GlobalKey<FormBuilderState> _formKey;
   late final FieldFactory _fieldFactory;
+  LinkFieldCoordinator? _linkFieldCoordinator;
+  StreamSubscription<LinkLoadProgress>? _progressSubscription;
+  bool _linkOptionsLoading = false;
+  String? _linkOptionsLoadingMessage;
   final Map<String, dynamic> _formData = {};
   late TabController _tabController;
   final List<_FormTab> _tabs = [];
@@ -153,9 +171,6 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
   void initState() {
     super.initState();
     _formKey = GlobalKey<FormBuilderState>();
-    _fieldFactory =
-        widget.customFieldFactory ??
-        FieldFactory(linkOptionService: widget.linkOptionService);
 
     _formData.addAll(widget.initialData ?? {});
 
@@ -166,6 +181,32 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
         _formData[field.fieldname!] ??= field.defaultValue;
       }
     }
+
+    if (widget.linkOptionService != null &&
+        widget.useLinkFieldCoordinator) {
+      _linkFieldCoordinator = LinkFieldCoordinator(
+        meta: widget.meta,
+        linkOptionService: widget.linkOptionService!,
+        useCoordinator: true,
+      );
+      _linkFieldCoordinator!.prefetchInitial(_formData);
+      _progressSubscription = _linkFieldCoordinator!.progressStream.listen(
+        (p) {
+          if (mounted) {
+            setState(() {
+              _linkOptionsLoading = p.loading;
+              _linkOptionsLoadingMessage = p.message;
+            });
+          }
+        },
+      );
+    }
+
+    _fieldFactory = widget.customFieldFactory ??
+        FieldFactory(
+          linkOptionService: widget.linkOptionService,
+          linkFieldCoordinator: _linkFieldCoordinator,
+        );
 
     _buildFormStructure();
     _tabController = TabController(
@@ -414,6 +455,8 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
                   onSubmit: onSubmit,
                   registerSubmit: registerSubmit,
                   getMeta: widget.getMeta,
+                  linkOptionService: widget.linkOptionService,
+                  useLinkFieldCoordinator: widget.useLinkFieldCoordinator,
                   fileUrlBase: widget.fileUrlBase,
                   imageHeaders: widget.imageHeaders,
                   fetchLinkedDocument: widget.fetchLinkedDocument,
@@ -548,13 +591,19 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              section.sectionField.displayLabel,
-              style:
-                  formStyle.sectionTitleStyle ??
-                  Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.bold,
-                  ),
+            SizedBox(
+              width: double.infinity,
+              child: Text(
+                section.sectionField.displayLabel,
+                style:
+                    formStyle.sectionTitleStyle ??
+                    Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.bold,
+                    ),
+                maxLines: formStyle.sectionTitleMaxLines ?? 3,
+                overflow: TextOverflow.ellipsis,
+                softWrap: true,
+              ),
             ),
             const SizedBox(height: 16),
             content,
@@ -581,11 +630,41 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
     super.didUpdateWidget(oldWidget);
     if (oldWidget.initialData != widget.initialData ||
         oldWidget.meta != widget.meta) {
+      _progressSubscription?.cancel();
+      _linkFieldCoordinator?.dispose();
+      _linkFieldCoordinator = null;
       _formKey = GlobalKey<FormBuilderState>();
       _formData.clear();
       if (widget.initialData != null) {
         _formData.addAll(widget.initialData!);
       }
+      for (final field in widget.meta.fields) {
+        if (field.fieldname != null &&
+            !field.hidden &&
+            !_formData.containsKey(field.fieldname)) {
+          _formData[field.fieldname!] ??= field.defaultValue;
+        }
+      }
+      if (widget.linkOptionService != null &&
+          widget.useLinkFieldCoordinator) {
+        _linkFieldCoordinator = LinkFieldCoordinator(
+          meta: widget.meta,
+          linkOptionService: widget.linkOptionService!,
+          useCoordinator: true,
+        );
+        _linkFieldCoordinator!.prefetchInitial(_formData);
+        _progressSubscription = _linkFieldCoordinator!.progressStream.listen(
+          (p) {
+            if (mounted) {
+              setState(() {
+                _linkOptionsLoading = p.loading;
+                _linkOptionsLoadingMessage = p.message;
+              });
+            }
+          },
+        );
+      }
+      _fieldFactory.linkFieldCoordinator = _linkFieldCoordinator;
       _buildFormStructure();
       _tabController.dispose();
       _tabController = TabController(
@@ -597,6 +676,8 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
 
   @override
   void dispose() {
+    _progressSubscription?.cancel();
+    _linkFieldCoordinator?.dispose();
     _tabController.dispose();
     super.dispose();
   }
@@ -664,15 +745,58 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
     }
     widget.registerSubmit?.call(_handleSubmit);
 
+    final formStyle = widget.style ?? DefaultFormStyle.standard;
+
     return FormBuilder(
       key: _formKey,
       child: Column(
         children: [
+          if (_linkOptionsLoading)
+            Material(
+              elevation: 0,
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: Row(
+                  children: [
+                    SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Theme.of(context).colorScheme.primary,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        _linkOptionsLoadingMessage ?? 'Loading options...',
+                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
           if (_tabs.length > 1)
             TabBar(
               controller: _tabController,
+              isScrollable: true,
               tabs: _tabs
-                  .map((tab) => Tab(text: tab.tabField.displayLabel))
+                  .map(
+                    (tab) => Tab(
+                      child: Text(
+                        tab.tabField.displayLabel,
+                        maxLines: formStyle.tabTitleMaxLines ?? 2,
+                        overflow: TextOverflow.ellipsis,
+                        softWrap: true,
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  )
                   .toList(),
             ),
           Expanded(

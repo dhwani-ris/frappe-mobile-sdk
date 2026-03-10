@@ -19,6 +19,12 @@ class LoginScreen extends StatefulWidget {
   final String? initialBaseUrl;
   final VoidCallback? onLoginSuccess;
   final AppDatabase? database;
+  /// Pre-fill username (e.g. for demo automation)
+  final String? initialUsername;
+  /// Pre-fill password (e.g. for demo automation)
+  final String? initialPassword;
+  /// When true, automatically trigger login after first frame if credentials are pre-filled
+  final bool autoLogin;
 
   const LoginScreen({
     super.key,
@@ -27,6 +33,9 @@ class LoginScreen extends StatefulWidget {
     this.initialBaseUrl,
     this.onLoginSuccess,
     this.database,
+    this.initialUsername,
+    this.initialPassword,
+    this.autoLogin = false,
   });
 
   @override
@@ -67,7 +76,22 @@ class _LoginScreenState extends State<LoginScreen> {
     if (widget.initialBaseUrl != null && widget.appConfig == null) {
       _baseUrlController.text = widget.initialBaseUrl!;
     }
+    if (widget.initialUsername != null) {
+      _usernameController.text = widget.initialUsername!;
+    }
+    if (widget.initialPassword != null) {
+      _passwordController.text = widget.initialPassword!;
+    }
     _checkInitialUri();
+    if (widget.autoLogin &&
+        widget.initialUsername != null &&
+        widget.initialUsername!.trim().isNotEmpty &&
+        widget.initialPassword != null &&
+        widget.initialPassword!.isNotEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _handleLogin();
+      });
+    }
   }
 
   Future<void> _checkInitialUri() async {

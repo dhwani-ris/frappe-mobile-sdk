@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../../models/doc_field.dart';
 import '../../../constants/field_types.dart';
 import '../../../services/link_option_service.dart';
+import '../../../services/link_field_coordinator.dart';
 import 'base_field.dart';
 import 'data_field.dart';
 import 'text_field.dart';
@@ -39,9 +40,14 @@ import '../../../models/doc_type_meta.dart';
 /// ```
 class FieldFactory {
   LinkOptionService? linkOptionService;
+  LinkFieldCoordinator? linkFieldCoordinator;
   FieldStyle? defaultStyle;
 
-  FieldFactory({this.linkOptionService, this.defaultStyle});
+  FieldFactory({
+    this.linkOptionService,
+    this.linkFieldCoordinator,
+    this.defaultStyle,
+  });
 
   /// Create a field widget based on field type
   ///
@@ -164,6 +170,7 @@ class FieldFactory {
           onChanged: onChanged,
           enabled: enabled,
           linkOptionService: linkOptionService,
+          linkFieldCoordinator: linkFieldCoordinator,
           options: linkOptions,
           formData: formData,
           style: fieldStyle,

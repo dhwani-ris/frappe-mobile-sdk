@@ -116,6 +116,7 @@ class LinkOptionService {
 
   /// Returns field names that are dependencies in link_filters (eval:doc.xxx).
   /// e.g. [["District","state","=","eval:doc.state"]] -> ["state"]
+  /// Also handles multi-condition filters: [["District","status","=","Active","state","eval:doc.state"]]
   static List<String> getDependentFieldNames(String? linkFiltersJson) {
     if (linkFiltersJson == null || linkFiltersJson.isEmpty) return [];
     try {
@@ -124,15 +125,19 @@ class LinkOptionService {
           ? List<dynamic>.from(decoded)
           : <dynamic>[];
       final names = <String>[];
-      for (final filter in filters) {
-        if (filter is! List || filter.length < 4) continue;
-        final value = filter[3];
-        if (value is String && value.startsWith('eval:doc.')) {
-          final fieldName = value.substring(9).trim();
-          if (fieldName.isNotEmpty && !names.contains(fieldName)) {
-            names.add(fieldName);
+      void collectFromList(List<dynamic> lst) {
+        for (final elem in lst) {
+          if (elem is String && elem.startsWith('eval:doc.')) {
+            final fieldName = elem.substring(9).trim();
+            if (fieldName.isNotEmpty && !names.contains(fieldName)) {
+              names.add(fieldName);
+            }
           }
         }
+      }
+      for (final filter in filters) {
+        if (filter is! List || filter.length < 4) continue;
+        collectFromList(List<dynamic>.from(filter));
       }
       return names;
     } catch (_) {
