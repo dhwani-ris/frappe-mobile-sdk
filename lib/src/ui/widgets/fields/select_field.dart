@@ -63,10 +63,20 @@ class SelectField extends BaseField {
           .where((v) => options.contains(v))
           .toList();
 
+      // Auto-select when exactly one option and no valid selection
+      final displayList = options.length == 1 && validInitialList.isEmpty
+          ? [options.first]
+          : validInitialList;
+      if (options.length == 1 && validInitialList.isEmpty) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          onChanged?.call(_listToValue([options.first]));
+        });
+      }
+
       return FormBuilderCheckboxGroup<String>(
         key: ValueKey('${field.fieldname}_multi_${options.length}'),
         name: field.fieldname ?? '',
-        initialValue: validInitialList,
+        initialValue: displayList,
         enabled: enabled && !field.readOnly,
         decoration:
             style?.decoration ??
@@ -99,6 +109,15 @@ class SelectField extends BaseField {
       } else {
         validInitialValue = null;
       }
+    }
+
+    // Auto-select when exactly one option and no valid selection
+    if (options.length == 1 &&
+        (validInitialValue == null || validInitialValue.isEmpty)) {
+      validInitialValue = options.first;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        onChanged?.call(options.first);
+      });
     }
 
     return FormBuilderDropdown<String>(

@@ -224,6 +224,32 @@ FrappeFormBuilder(
 )
 ```
 
+### Button field type
+
+Frappe Button fields (e.g. "Fetch Data") can call server methods or custom logic. Pass `onButtonPressed` to FormScreen or DocumentListScreen:
+
+```dart
+OnButtonPressedCallback? createHandler(FrappeClient? api) {
+  if (api == null) return null;
+  return (field, formData, useDefault) async {
+    if (field.fieldname == 'fetch_data') {
+      await api.call('your_app.method', args: formData);
+      return;
+    }
+    await useDefault(field, formData); // SDK default for other buttons
+  };
+}
+
+FormScreen(
+  meta: meta,
+  api: sdk.api,
+  onButtonPressed: createHandler(sdk.api),
+  ...
+)
+```
+
+See **[DOCUMENTATION.md § 4.10 Button field type](DOCUMENTATION.md#410-button-field-type)** for full details and callback types.
+
 ### 3. Custom Forms Using Same APIs
 
 ```dart
@@ -468,7 +494,7 @@ You can also create fully custom styles using `FrappeFormStyle`.
 
 ## 📖 Documentation
 
-- **[DOCUMENTATION.md](DOCUMENTATION.md)** – **Full package docs**: API calling (FrappeClient, CRUD, QueryBuilder, attachments, custom methods), form rendering (FormScreen, FrappeFormBuilder, DoctypeListScreen, DocumentListScreen, child tables, images), new APIs (requestHeaders, getMobileUuid, getMobileFormDoctypeNames, error helpers), auth, offline/sync, and quick reference.
+- **[DOCUMENTATION.md](DOCUMENTATION.md)** – **Full package docs**: API calling (FrappeClient, CRUD, QueryBuilder, attachments, custom methods), form rendering (FormScreen, FrappeFormBuilder, DoctypeListScreen, DocumentListScreen, child tables, images, **Button field type**), new APIs (requestHeaders, getMobileUuid, getMobileFormDoctypeNames, error helpers), auth, offline/sync, and quick reference.
 - **[SETUP.md](SETUP.md)** - Detailed setup instructions
 - **[CUSTOMIZATION.md](CUSTOMIZATION.md)** - UI customization guide
 - **[TESTING.md](TESTING.md)** - Testing strategies

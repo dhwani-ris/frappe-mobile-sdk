@@ -20,6 +20,7 @@ import 'rating_field.dart';
 import 'read_only_field.dart';
 import 'attach_field.dart';
 import 'image_field.dart';
+import 'button_field.dart';
 import 'child_table_field.dart';
 import '../../../models/doc_type_meta.dart';
 
@@ -58,6 +59,8 @@ class FieldFactory {
     Map<String, String>? imageHeaders,
     Future<DocTypeMeta> Function(String doctype)? getMeta,
     ChildTableFormBuilder? childTableFormBuilder,
+    Future<void> Function(DocField field, Map<String, dynamic> formData)?
+        onButtonPressed,
   }) {
     if (field.hidden) {
       return null;
@@ -238,6 +241,15 @@ class FieldFactory {
           uploadFile: uploadFile,
           fileUrlBase: fileUrlBase,
           imageHeaders: imageHeaders,
+        );
+
+      case FieldTypes.button:
+        return ButtonField(
+          field: field,
+          enabled: enabled,
+          style: fieldStyle,
+          onButtonPressed: onButtonPressed,
+          formData: formData ?? const {},
         );
 
       default:
