@@ -85,3 +85,6 @@ test/.test_coverage.dart
 *.tmp
 *.temp
 *~
+
+# FVM Version Cache
+.fvm/

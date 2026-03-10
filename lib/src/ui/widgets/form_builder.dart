@@ -10,6 +10,21 @@ import 'fields/field_factory.dart';
 import 'fields/base_field.dart';
 import 'default_form_style.dart';
 
+/// Simple 2-arg callback for Button field. Used by [FrappeFormBuilder] and [renderForm].
+typedef ButtonPressedCallback = Future<void> Function(
+  DocField field,
+  Map<String, dynamic> formData,
+);
+
+/// Callback when a Button field is pressed. Implement client-script logic (API calls, dialogs).
+/// Call [useDefault] to fall back to SDK default (server method from [field.options] when set).
+/// Used by [FormScreen] and [navigateToForm].
+typedef OnButtonPressedCallback = Future<void> Function(
+  DocField field,
+  Map<String, dynamic> formData,
+  Future<void> Function(DocField field, Map<String, dynamic> formData) useDefault,
+);
+
 /// Customization options for form styling
 class FrappeFormStyle {
   /// Custom InputDecoration builder for text fields
@@ -81,6 +96,9 @@ class FrappeFormBuilder extends StatefulWidget {
   /// Called once with the form's submit handler so the parent (e.g. FormScreen) can trigger save from AppBar.
   final void Function(void Function() submit)? registerSubmit;
 
+  /// Called when a Button field is pressed. [FormScreen] adapts [OnButtonPressedCallback] to this.
+  final ButtonPressedCallback? onButtonPressed;
+
   const FrappeFormBuilder({
     super.key,
     required this.meta,
@@ -96,6 +114,7 @@ class FrappeFormBuilder extends StatefulWidget {
     this.fetchLinkedDocument,
     this.getMeta,
     this.registerSubmit,
+    this.onButtonPressed,
   });
 
   @override
@@ -398,8 +417,10 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
                   fileUrlBase: widget.fileUrlBase,
                   imageHeaders: widget.imageHeaders,
                   fetchLinkedDocument: widget.fetchLinkedDocument,
+                  onButtonPressed: widget.onButtonPressed,
                 )
           : null,
+      onButtonPressed: widget.onButtonPressed,
       onChanged: (value) {
         setState(() {
           final oldValue = _formData[field.fieldname];
@@ -411,6 +432,13 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
             if (field.fieldname != null) {
               _formData[field.fieldname!] = value;
             }
+          }
+
+          // Sync FormBuilder internal state (needed for programmatic updates e.g. auto-select)
+          if (field.fieldname != null && oldValue != value) {
+            _formKey.currentState?.patchValue({
+              field.fieldname!: value ?? '',
+            });
           }
 
           // If value changed, clear dependent link fields that depend on this field
@@ -611,8 +639,9 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
     final completeFormData = <String, dynamic>{};
 
     // First, initialize all fields from metadata with their default/initial values
+    // Skip non-data fields (Button, HTML, Image, etc.) - they hold no form value
     for (final field in widget.meta.fields) {
-      if (field.fieldname != null && !field.hidden) {
+      if (field.fieldname != null && !field.hidden && field.isDataField) {
         // Priority: formValues > initialData > defaultValue > empty value
         completeFormData[field.fieldname!] =
             formValues[field.fieldname] ??

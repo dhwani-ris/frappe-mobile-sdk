@@ -387,6 +387,88 @@ FrappeFormStyle(
 )
 ```
 
+### 4.10 Button field type
+
+Frappe doctypes can define **Button** fields (e.g. "Fetch Data", "Submit for Approval"). The SDK renders these as tappable buttons and lets you override their behavior.
+
+#### Default behavior
+
+- If `field.options` contains a **server method path** (e.g. `your_app.module.method_name`), the SDK calls `api.call(method, args: {'doc': formData})` automatically.
+- If `field.options` is empty, the user sees: *"Action not configured for mobile"*.
+- Offline: shows *"Action unavailable offline"*.
+
+#### Custom behavior via `onButtonPressed`
+
+Use **OnButtonPressedCallback** (FormScreen, DocumentListScreen, `navigateToForm`) or **ButtonPressedCallback** (FrappeFormBuilder, `renderForm`) to implement custom logic (API calls, dialogs, client scripts).
+
+**FormScreen / DocumentListScreen (recommended):**
+
+```dart
+// OnButtonPressedCallback: 3 args (field, formData, useDefault)
+// Call useDefault(field, formData) to fall back to SDK default
+OnButtonPressedCallback? createOnButtonPressed(FrappeClient? api) {
+  if (api == null) return null;
+  return (field, formData, useDefault) async {
+    // Custom logic for specific button
+    if (field.fieldname == 'fetch_data' && field.fieldtype == 'Button') {
+      // Your API call, dialog, etc.
+      await api.call('your_app.method', args: {'district': formData['land_district'], ...});
+      return;
+    }
+    // Fall back to default (server method from field.options)
+    await useDefault(field, formData);
+  };
+}
+
+// Pass to FormScreen / DocumentListScreen
+FormScreen(
+  meta: meta,
+  api: sdk.api,
+  onButtonPressed: createOnButtonPressed(sdk.api),
+  ...
+)
+```
+
+**FrappeFormBuilder / renderForm:**
+
+```dart
+// ButtonPressedCallback: 2 args (field, formData)
+// You must implement all Button behavior yourself
+FrappeFormBuilder(
+  meta: meta,
+  onButtonPressed: (field, formData) async {
+    if (field.fieldname == 'fetch_data') {
+      await sdk.api.call('your_app.method', args: formData);
+    }
+  },
+  ...
+)
+```
+
+#### Callback types
+
+| Callback | Args | Use case |
+|----------|------|----------|
+| `OnButtonPressedCallback` | `(field, formData, useDefault)` | FormScreen, DocumentListScreen, `navigateToForm`. Call `useDefault` for SDK default. |
+| `ButtonPressedCallback` | `(field, formData)` | FrappeFormBuilder, `renderForm`. You handle all buttons. |
+
+#### Notes
+
+- Button fields do **not** store form values; they are action triggers only.
+- `formData` is the current form state (all data fields).
+- Use `field.fieldname` / `field.fieldtype` to branch by button.
+- The button shows a loading indicator during async handlers.
+
+### 4.11 Auto-select for single-option fields
+
+For **Select** and **Link** fields, after `depends_on`, `fetch_from`, and link-filter evaluation, if the selectable option count is exactly one, the SDK automatically selects that option without user interaction.
+
+- **Select fields** (single and multi-select): When `field.options` yields one option and there is no valid selection, the first option is auto-selected and synced to form state.
+- **Link fields (direct options)**: When the options list has one item and there is no valid selection, that item is auto-selected.
+- **Link fields (async dropdown)**: When options load from `LinkOptionService` (after link filters and dependent fields are resolved) and there is one option with no valid selection, it is auto-selected.
+
+This reduces manual selection for cascading dropdowns (e.g. State Agency → District Agency → Sro) when only one valid choice exists at each step.
+
 ---
 
 ## 5. New and notable APIs
