@@ -199,10 +199,12 @@ class _LinkFieldDropdownState extends State<_LinkFieldDropdown> {
       // Auto-select when exactly one option and no valid selection
       if (options.length == 1) {
         final currentVal = widget.value?.toString();
-        final hasValidSelection = currentVal != null &&
+        final hasValidSelection =
+            currentVal != null &&
             currentVal.isNotEmpty &&
-            options.any((o) =>
-                o.name == currentVal || (o.label ?? o.name) == currentVal);
+            options.any(
+              (o) => o.name == currentVal || (o.label ?? o.name) == currentVal,
+            );
         if (!hasValidSelection) {
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (mounted) widget.onChanged?.call(options.first.name);

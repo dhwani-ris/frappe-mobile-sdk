@@ -5,9 +5,11 @@ import '../api/client.dart';
 import '../database/app_database.dart';
 import '../services/auth_service.dart';
 import '../services/meta_service.dart';
+import '../services/permission_service.dart';
 import '../services/sync_service.dart';
 import '../services/offline_repository.dart';
 import '../services/link_option_service.dart';
+import '../services/translation_service.dart';
 
 /// Main SDK initialization class for easy setup
 class FrappeSDK {
@@ -17,6 +19,8 @@ class FrappeSDK {
   AppDatabase? _database;
   AuthService? _authService;
   MetaService? _metaService;
+  PermissionService? _permissionService;
+  TranslationService? _translationService;
   SyncService? _syncService;
   OfflineRepository? _repository;
   LinkOptionService? _linkOptionService;
@@ -43,6 +47,8 @@ class FrappeSDK {
 
     _repository = OfflineRepository(_database!);
     _metaService = MetaService(_client!, _database!);
+    _permissionService = PermissionService(_client!, _database!);
+    _translationService = TranslationService(_client!);
     _syncService = SyncService(
       _client!,
       _repository!,
@@ -64,13 +70,39 @@ class FrappeSDK {
   /// Login with username and password (stateless, returns user info)
   Future<Map<String, dynamic>> login(String username, String password) async {
     if (!_initialized) await initialize();
-    return await _authService!.login(username, password);
+    final response = await _authService!.login(username, password);
+    await _permissionService!.saveFromLoginResponse(response['permissions']);
+    final lang = response['language'] as String?;
+    if (lang != null && lang.isNotEmpty) {
+      await _translationService?.setLocale(lang);
+    }
+    return response;
+  }
+
+  /// Send OTP to mobile number for login. Returns response (e.g. tmp_id).
+  Future<Map<String, dynamic>> sendLoginOtp(String mobileNo) async {
+    if (!_initialized) await initialize();
+    return await _authService!.sendLoginOtp(mobileNo);
+  }
+
+  /// Verify OTP and complete login. Returns same shape as [login].
+  Future<Map<String, dynamic>> verifyLoginOtp(String tmpId, String otp) async {
+    if (!_initialized) await initialize();
+    final response = await _authService!.verifyLoginOtp(tmpId, otp);
+    await _permissionService!.saveFromLoginResponse(response['permissions']);
+    final lang = response['language'] as String?;
+    if (lang != null && lang.isNotEmpty) {
+      await _translationService?.setLocale(lang);
+    }
+    return response;
   }
 
   /// Login with API key
   Future<bool> loginWithApiKey(String apiKey, String apiSecret) async {
     if (!_initialized) await initialize();
-    return await _authService!.loginWithApiKey(apiKey, apiSecret);
+    final ok = await _authService!.loginWithApiKey(apiKey, apiSecret);
+    if (ok) await _fetchUserInfoAndApply();
+    return ok;
   }
 
   /// Prepare OAuth login: returns authorize_url and code_verifier. Open URL in browser/WebView; capture redirect with ?code=... then call loginWithOAuth.
@@ -98,12 +130,14 @@ class FrappeSDK {
     required String redirectUri,
   }) async {
     if (!_initialized) await initialize();
-    return await _authService!.loginWithOAuth(
+    final ok = await _authService!.loginWithOAuth(
       code: code,
       codeVerifier: codeVerifier,
       clientId: clientId,
       redirectUri: redirectUri,
     );
+    if (ok) await _fetchUserInfoAndApply();
+    return ok;
   }
 
   /// Logout and clear all local DB data (default). Set clearDatabase: false to keep DB.
@@ -140,6 +174,23 @@ class FrappeSDK {
       throw Exception('SDK not initialized. Call initialize() first.');
     }
     return _metaService!;
+  }
+
+  /// Get Permission Service (doctype read/write/create/delete from login or mobile_auth.permissions)
+  PermissionService get permissions {
+    if (!_initialized) {
+      throw Exception('SDK not initialized. Call initialize() first.');
+    }
+    return _permissionService!;
+  }
+
+  /// Get Translation Service (Frappe translations via mobile_auth.get_translations).
+  /// Use [TranslationService.loadTranslations] then [TranslationService.translate] or [TranslationService.call].
+  TranslationService get translations {
+    if (!_initialized) {
+      throw Exception('SDK not initialized. Call initialize() first.');
+    }
+    return _translationService!;
   }
 
   /// Get Sync Service
@@ -219,6 +270,17 @@ class FrappeSDK {
     await _metaService!.resyncMobileConfiguration();
   }
 
+  /// After OAuth/API key login: fetch user info (mobile_auth.me) and apply permissions + locale.
+  Future<void> _fetchUserInfoAndApply() async {
+    final userInfo = await _authService!.fetchUserInfo();
+    if (userInfo == null) return;
+    await _permissionService!.saveFromLoginResponse(userInfo['permissions']);
+    final lang = userInfo['language'] as String?;
+    if (lang != null && lang.isNotEmpty) {
+      await _translationService?.setLocale(lang);
+    }
+  }
+
   /// Internal: initial metadata + data sync for mobile doctypes.
   ///
   /// 1) Sync doctypes from login mobile_form_names (checkAndSyncDoctypes)
@@ -226,6 +288,18 @@ class FrappeSDK {
   /// 3) Pull records for all mobile doctypes into the offline DB
   Future<void> _initialMetaAndDataSync() async {
     if (_metaService == null || _syncService == null) return;
+
+    try {
+      await _permissionService?.syncFromApi();
+    } catch (_) {
+      // ignore
+    }
+
+    try {
+      await _translationService?.loadTranslations('en');
+    } catch (_) {
+      // ignore
+    }
 
     try {
       await _metaService!.checkAndSyncDoctypes();

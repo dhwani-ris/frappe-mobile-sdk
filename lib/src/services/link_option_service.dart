@@ -99,7 +99,7 @@ class LinkOptionService {
     if (filters == null || filters.isEmpty) return filters;
     final result = <List<dynamic>>[];
     for (final filter in filters) {
-      if (filter is! List || filter.length < 4) continue;
+      if (filter.length < 4) continue;
       final filterDoctype = filter[0]?.toString();
       if (filterDoctype == null || filterDoctype.isEmpty) {
         result.add(List<dynamic>.from(filter));
@@ -125,7 +125,7 @@ class LinkOptionService {
           : <dynamic>[];
       final names = <String>[];
       for (final filter in filters) {
-        if (filter is! List || filter.length < 4) continue;
+        if (filter.length < 4) continue;
         final value = filter[3];
         if (value is String && value.startsWith('eval:doc.')) {
           final fieldName = value.substring(9).trim();
@@ -155,7 +155,7 @@ class LinkOptionService {
           : <dynamic>[];
       final result = <List<dynamic>>[];
       for (final filter in filters) {
-        if (filter is! List || filter.length < 4) continue;
+        if (filter.length < 4) continue;
         dynamic value = filter[3];
         if (value is String && value.startsWith('eval:doc.')) {
           final fieldName = value.substring(9).trim();
