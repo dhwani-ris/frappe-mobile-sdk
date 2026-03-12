@@ -38,6 +38,15 @@ class LinkField extends BaseField {
         }
       }
 
+      // Auto-select when exactly one option and no valid selection
+      if (options!.length == 1 &&
+          (validInitialValue == null || validInitialValue.isEmpty)) {
+        validInitialValue = options!.first;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          onChanged?.call(options!.first);
+        });
+      }
+
       return FormBuilderDropdown<String>(
         key: ValueKey('link_${field.fieldname}_${options!.length}'),
         name: field.fieldname ?? '',
@@ -187,6 +196,21 @@ class _LinkFieldDropdownState extends State<_LinkFieldDropdown> {
         _isLoading = false;
         _waitingForDependent = false;
       });
+      // Auto-select when exactly one option and no valid selection
+      if (options.length == 1) {
+        final currentVal = widget.value?.toString();
+        final hasValidSelection =
+            currentVal != null &&
+            currentVal.isNotEmpty &&
+            options.any(
+              (o) => o.name == currentVal || (o.label ?? o.name) == currentVal,
+            );
+        if (!hasValidSelection) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) widget.onChanged?.call(options.first.name);
+          });
+        }
+      }
     } catch (e) {
       setState(() {
         _options = [];

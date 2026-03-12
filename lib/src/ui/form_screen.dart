@@ -2,13 +2,15 @@ import 'package:flutter/material.dart';
 import '../api/client.dart';
 import '../api/exceptions.dart';
 import '../api/utils.dart';
+import '../models/doc_field.dart';
 import '../models/doc_type_meta.dart';
 import '../models/document.dart';
 import '../services/offline_repository.dart';
 import '../services/sync_service.dart';
 import '../services/link_option_service.dart';
 import '../services/meta_service.dart';
-import 'widgets/form_builder.dart';
+import 'widgets/form_builder.dart'
+    show FrappeFormBuilder, FrappeFormStyle, OnButtonPressedCallback;
 import 'sync_status_screen.dart';
 
 /// Screen for displaying and editing a Frappe document form.
@@ -41,6 +43,14 @@ class FormScreen extends StatefulWidget {
   /// If set, doctype label and field labels are translated (e.g. sdk.translations.translate).
   final String Function(String)? translate;
 
+  /// Optional pre-filled data for new documents (overrides document?.data when document is null).
+  final Map<String, dynamic>? initialData;
+
+  /// Optional callback when a Button field is pressed. Override to implement client-script logic
+  /// (API calls, dialogs, form updates). When null, default behavior applies: if [field.options]
+  /// has a server method path, it is called; otherwise a message is shown.
+  final OnButtonPressedCallback? onButtonPressed;
+
   const FormScreen({
     super.key,
     required this.meta,
@@ -57,6 +67,8 @@ class FormScreen extends StatefulWidget {
     this.canSave,
     this.canDelete,
     this.translate,
+    this.initialData,
+    this.onButtonPressed,
   });
 
   @override
@@ -67,6 +79,61 @@ class _FormScreenState extends State<FormScreen> {
   bool _isSaving = false;
   String? _errorMessage;
   void Function()? _triggerSubmit;
+
+  Future<void> _handleButtonPressed(
+    DocField field,
+    Map<String, dynamic> formData,
+  ) async {
+    final method = field.options?.trim();
+    if (method == null || method.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              '${field.displayLabel}: Action not configured for mobile. '
+              'This button may use client-side logic only available on web.',
+            ),
+            backgroundColor: Colors.orange,
+            duration: const Duration(seconds: 4),
+          ),
+        );
+      }
+      return;
+    }
+
+    if (widget.api == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Action unavailable offline'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+      return;
+    }
+
+    try {
+      await widget.api!.call(method, args: {'doc': formData});
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Action completed'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(toUserFriendlyMessage(e)),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
 
   Future<Map<String, dynamic>?> _fetchLinkedDocument(
     String linkedDoctype,
@@ -428,6 +495,7 @@ class _FormScreenState extends State<FormScreen> {
         actions: [
           if (allowSave)
             TextButton.icon(
+              key: const Key('form_save_button'),
               onPressed: _isSaving ? null : () => _triggerSubmit?.call(),
               icon: _isSaving
                   ? const SizedBox(
@@ -472,7 +540,7 @@ class _FormScreenState extends State<FormScreen> {
                   ? ValueKey('form_${widget.document!.localId}')
                   : const ValueKey('form_new'),
               meta: widget.meta,
-              initialData: widget.document?.data,
+              initialData: widget.document?.data ?? widget.initialData,
               onSubmit: _handleSubmit,
               readOnly: _isSaving || widget.readOnly,
               linkOptionService: widget.linkOptionService,
@@ -490,6 +558,13 @@ class _FormScreenState extends State<FormScreen> {
                   ? (doctype) => widget.metaService!.getMeta(doctype)
                   : null,
               registerSubmit: (trigger) => _triggerSubmit = trigger,
+              onButtonPressed: widget.onButtonPressed != null
+                  ? (field, formData) => widget.onButtonPressed!(
+                      field,
+                      formData,
+                      _handleButtonPressed,
+                    )
+                  : _handleButtonPressed,
               style: widget.style,
               translate: widget.translate,
             ),
