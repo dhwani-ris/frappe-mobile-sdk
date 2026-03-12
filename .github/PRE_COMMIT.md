@@ -1,5 +1,7 @@
 # Pre-commit and CI
 
+> Start here: see the high‑level overview and navigation in `README.md`. This guide is for contributors, explaining local checks and CI workflows.
+
 CI is for **validating code**: analyze, format check, and tests. No build (APK) or publish.
 
 | Workflow | When | What |
