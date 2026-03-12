@@ -26,6 +26,7 @@ class TranslationService {
   }
 
   /// Fetch translations for [lang] from API and cache.
+  /// Response format: { "data": { "langs": ["hr", "my"], "translations": { "hr": {...}, "my": {...} } } }
   /// Returns the translations map (source -> translated).
   Future<Map<String, String>> loadTranslations(String lang) async {
     try {
@@ -35,8 +36,15 @@ class TranslationService {
       );
       if (result is! Map<String, dynamic>) return {};
       final data = result['data'] as Map<String, dynamic>? ?? result;
-      final raw = data['translations'] as Map<String, dynamic>?;
+
+      // New format: data.translations is a map of lang -> translation map
+      final translationsMap = data['translations'] as Map<String, dynamic>?;
+      if (translationsMap == null) return {};
+
+      // Extract translations for the requested language
+      final raw = translationsMap[lang] as Map<String, dynamic>?;
       if (raw == null) return {};
+
       final map = raw.map(
         (k, v) => MapEntry(k.toString(), v?.toString() ?? k.toString()),
       );

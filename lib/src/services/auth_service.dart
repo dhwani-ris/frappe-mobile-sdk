@@ -1,3 +1,5 @@
+import 'dart:developer' as dev;
+
 import '../api/client.dart';
 import '../api/oauth2_helper.dart';
 import '../database/app_database.dart';
@@ -28,6 +30,7 @@ class AuthService {
   bool _isAuthenticated = false;
   AppDatabase? _database;
   List<String> _roles = [];
+  String? _language;
 
   /// Initializes the client with the given [baseUrl].
   ///
@@ -63,6 +66,9 @@ class AuthService {
   /// Roles for the currently authenticated user (if provided by backend).
   List<String> get roles => List.unmodifiable(_roles);
 
+  /// User language from login/OTP/me response (e.g. "en"). Null until set.
+  String? get language => _language;
+
   /// Authenticates with username and password using mobile_auth.login (stateless).
   ///
   /// This is the default login method. Stores access_token and refresh_token in database.
@@ -95,25 +101,25 @@ class AuthService {
       final mobileFormNamesJson =
           response['mobile_form_names'] as List<dynamic>?;
 
-      // Roles from response['permissions']['roles'] (new) or legacy response['roles']
-      final permissions = response['permissions'] as Map<String, dynamic>?;
-      if (permissions != null) {
-        final rolesJson = permissions['roles'] as List<dynamic>?;
-        _roles =
-            rolesJson
-                ?.map((r) => r.toString())
-                .where((r) => r.isNotEmpty)
-                .toList() ??
-            <String>[];
+      // Roles: top-level response['roles'] (new) or response['permissions']['roles'] (legacy)
+      final rolesJson = response['roles'] as List<dynamic>?;
+      if (rolesJson != null && rolesJson.isNotEmpty) {
+        _roles = rolesJson
+            .map((r) => r.toString())
+            .where((r) => r.isNotEmpty)
+            .toList();
       } else {
-        final rolesJson = response['roles'] as List<dynamic>?;
+        final permissionsMap = response['permissions'] as Map<String, dynamic>?;
+        final legacyRoles = permissionsMap?['roles'] as List<dynamic>?;
         _roles =
-            rolesJson
+            legacyRoles
                 ?.map((r) => r.toString())
                 .where((r) => r.isNotEmpty)
                 .toList() ??
             <String>[];
       }
+
+      _language = response['language'] as String?;
 
       if (accessToken == null || accessToken.isEmpty) {
         throw Exception('Login response missing access_token');
@@ -124,88 +130,219 @@ class AuthService {
       if (user == null || user.isEmpty) {
         throw Exception('Login response missing user');
       }
+      dev.log('access_token: $accessToken', name: 'Auth');
 
-      // Store tokens in database
-      final tokenEntity = AuthTokenEntity(
-        accessToken: accessToken,
-        refreshToken: refreshToken,
-        user: user,
-        fullName: fullName,
-        createdAt: DateTime.now().millisecondsSinceEpoch,
+      await _processLoginResponse(
+        response,
+        accessToken,
+        refreshToken,
+        user,
+        fullName,
+        mobileFormNamesJson,
       );
-
-      final existing = await _database!.authTokenDao.getCurrentToken();
-      if (existing != null) {
-        await _database!.authTokenDao.updateToken(tokenEntity);
-      } else {
-        await _database!.authTokenDao.insertToken(tokenEntity);
-      }
-
-      // Store mobile form names (doctypes) from login response in doctype_meta table
-      if (mobileFormNamesJson != null && mobileFormNamesJson.isNotEmpty) {
-        final mobileFormNames = mobileFormNamesJson
-            .map(
-              (json) => MobileFormName.fromJson(json as Map<String, dynamic>),
-            )
-            .toList();
-
-        // Update mobile form doctypes (sync will happen later via checkAndSyncDoctypes)
-        // First, mark all existing mobile forms as false
-        final allMetas = await _database!.doctypeMetaDao.findAll();
-        for (final meta in allMetas) {
-          if (meta.isMobileForm) {
-            final updatedMeta = DoctypeMetaEntity(
-              doctype: meta.doctype,
-              modified: meta.modified,
-              serverModifiedAt: meta.serverModifiedAt,
-              isMobileForm: false,
-              metaJson: meta.metaJson,
-            );
-            await _database!.doctypeMetaDao.updateDoctypeMeta(updatedMeta);
-          }
-        }
-
-        // Now update/create entries for mobile forms from login response
-        for (final mfn in mobileFormNames) {
-          final doctype = mfn.mobileDoctype;
-          final existing = await _database!.doctypeMetaDao.findByDoctype(
-            doctype,
-          );
-
-          if (existing != null) {
-            // Update existing entry with mobile form info
-            final updatedMeta = DoctypeMetaEntity(
-              doctype: doctype,
-              modified: existing.modified,
-              serverModifiedAt: mfn.doctypeMetaModifiedAt,
-              isMobileForm: true,
-              metaJson: existing.metaJson,
-            );
-            await _database!.doctypeMetaDao.updateDoctypeMeta(updatedMeta);
-          } else {
-            // Create new entry with mobile form info (metaJson will be empty until fetched)
-            final newMeta = DoctypeMetaEntity(
-              doctype: doctype,
-              modified: null,
-              serverModifiedAt: mfn.doctypeMetaModifiedAt,
-              isMobileForm: true,
-              metaJson: '{}', // Empty until metadata is fetched
-            );
-            await _database!.doctypeMetaDao.insertDoctypeMeta(newMeta);
-          }
-        }
-      }
-
-      // Set bearer token for API calls
-      _client!.rest.setBearerToken(accessToken);
-      _isAuthenticated = true;
-
       return response;
     } catch (e) {
       _isAuthenticated = false;
       if (e is Exception) rethrow;
       throw Exception('Login failed: $e');
     }
+  }
+
+  /// Sends OTP to mobile number for login. Returns response containing tmp_id.
+  /// Call [verifyLoginOtp] with tmp_id and user-entered OTP to complete login.
+  Future<Map<String, dynamic>> sendLoginOtp(String mobileNo) async {
+    if (_client == null) {
+      throw Exception('AuthService not initialized. Call initialize() first.');
+    }
+    final result = await _client!.rest.call(
+      'mobile_auth.send_login_otp',
+      args: {'mobile_no': mobileNo},
+    );
+    final response = result is Map<String, dynamic>
+        ? (result['message'] is Map ? result['message'] : result)
+        : <String, dynamic>{};
+    return response;
+  }
+
+  /// Verifies OTP and completes login. Returns same shape as [login].
+  /// [tmpId] from [sendLoginOtp] response; [otp] is user-entered code.
+  Future<Map<String, dynamic>> verifyLoginOtp(String tmpId, String otp) async {
+    if (_client == null) {
+      throw Exception('AuthService not initialized. Call initialize() first.');
+    }
+    if (_database == null) {
+      throw Exception(
+        'Database not set. Call initialize(baseUrl, database: db) first.',
+      );
+    }
+    try {
+      final result = await _client!.rest.call(
+        'mobile_auth.verify_login_otp',
+        args: {'tmp_id': tmpId, 'otp': otp},
+      );
+      final response = result is Map<String, dynamic>
+          ? (result['message'] is Map ? result['message'] : result)
+          : <String, dynamic>{};
+
+      final accessToken = response['access_token'] as String?;
+      final refreshToken = response['refresh_token'] as String?;
+      final user = response['user'] as String?;
+      final fullName = response['full_name'] as String?;
+      final mobileFormNamesJson =
+          response['mobile_form_names'] as List<dynamic>?;
+
+      if (accessToken == null || accessToken.isEmpty) {
+        throw Exception('Verify OTP response missing access_token');
+      }
+      if (refreshToken == null || refreshToken.isEmpty) {
+        throw Exception('Verify OTP response missing refresh_token');
+      }
+      if (user == null || user.isEmpty) {
+        throw Exception('Verify OTP response missing user');
+      }
+      dev.log('access_token: $accessToken', name: 'Auth');
+
+      // Roles and language (same as login)
+      final rolesJson = response['roles'] as List<dynamic>?;
+      if (rolesJson != null && rolesJson.isNotEmpty) {
+        _roles = rolesJson
+            .map((r) => r.toString())
+            .where((r) => r.isNotEmpty)
+            .toList();
+      } else {
+        final permissionsMap = response['permissions'] as Map<String, dynamic>?;
+        final legacyRoles = permissionsMap?['roles'] as List<dynamic>?;
+        _roles =
+            legacyRoles
+                ?.map((r) => r.toString())
+                .where((r) => r.isNotEmpty)
+                .toList() ??
+            <String>[];
+      }
+      _language = response['language'] as String?;
+
+      await _processLoginResponse(
+        response,
+        accessToken,
+        refreshToken,
+        user,
+        fullName,
+        mobileFormNamesJson,
+      );
+      return response;
+    } catch (e) {
+      _isAuthenticated = false;
+      if (e is Exception) rethrow;
+      throw Exception('Verify OTP failed: $e');
+    }
+  }
+
+  /// Fetches current user info (roles, permissions, language, mobile_form_names).
+  /// Call after OAuth or API key login to get the same shape as login response.
+  /// Backend must expose e.g. mobile_auth.me returning that payload.
+  Future<Map<String, dynamic>?> fetchUserInfo() async {
+    if (_client == null || !_isAuthenticated) return null;
+    try {
+      final result = await _client!.rest.get('/api/v2/method/mobile_auth.me');
+      if (result is! Map<String, dynamic>) return null;
+      final data = result['data'] as Map<String, dynamic>? ?? result;
+      final message = data['message'] as Map<String, dynamic>? ?? data;
+
+      final rolesJson = message['roles'] as List<dynamic>?;
+      if (rolesJson != null && rolesJson.isNotEmpty) {
+        _roles = rolesJson
+            .map((r) => r.toString())
+            .where((r) => r.isNotEmpty)
+            .toList();
+      } else {
+        final permissionsMap = message['permissions'] as Map<String, dynamic>?;
+        final legacyRoles = permissionsMap?['roles'] as List<dynamic>?;
+        _roles =
+            legacyRoles
+                ?.map((r) => r.toString())
+                .where((r) => r.isNotEmpty)
+                .toList() ??
+            <String>[];
+      }
+      _language = message['language'] as String?;
+      return message;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _processLoginResponse(
+    Map<String, dynamic> response,
+    String accessToken,
+    String refreshToken,
+    String user,
+    String? fullName,
+    List<dynamic>? mobileFormNamesJson,
+  ) async {
+    final tokenEntity = AuthTokenEntity(
+      accessToken: accessToken,
+      refreshToken: refreshToken,
+      user: user,
+      fullName: fullName,
+      createdAt: DateTime.now().millisecondsSinceEpoch,
+    );
+
+    final existing = await _database!.authTokenDao.getCurrentToken();
+    if (existing != null) {
+      await _database!.authTokenDao.updateToken(tokenEntity);
+    } else {
+      await _database!.authTokenDao.insertToken(tokenEntity);
+    }
+
+    if (mobileFormNamesJson != null && mobileFormNamesJson.isNotEmpty) {
+      final mobileFormNames = mobileFormNamesJson
+          .map((json) => MobileFormName.fromJson(json as Map<String, dynamic>))
+          .toList();
+
+      final allMetas = await _database!.doctypeMetaDao.findAll();
+      for (final meta in allMetas) {
+        if (meta.isMobileForm) {
+          final updatedMeta = DoctypeMetaEntity(
+            doctype: meta.doctype,
+            modified: meta.modified,
+            serverModifiedAt: meta.serverModifiedAt,
+            isMobileForm: false,
+            metaJson: meta.metaJson,
+          );
+          await _database!.doctypeMetaDao.updateDoctypeMeta(updatedMeta);
+        }
+      }
+
+      for (final mfn in mobileFormNames) {
+        final doctype = mfn.mobileDoctype;
+        final existingMeta = await _database!.doctypeMetaDao.findByDoctype(
+          doctype,
+        );
+
+        if (existingMeta != null) {
+          final updatedMeta = DoctypeMetaEntity(
+            doctype: doctype,
+            modified: existingMeta.modified,
+            serverModifiedAt: mfn.doctypeMetaModifiedAt,
+            isMobileForm: true,
+            metaJson: existingMeta.metaJson,
+          );
+          await _database!.doctypeMetaDao.updateDoctypeMeta(updatedMeta);
+        } else {
+          final newMeta = DoctypeMetaEntity(
+            doctype: doctype,
+            modified: null,
+            serverModifiedAt: mfn.doctypeMetaModifiedAt,
+            isMobileForm: true,
+            metaJson: '{}',
+          );
+          await _database!.doctypeMetaDao.insertDoctypeMeta(newMeta);
+        }
+      }
+    }
+
+    _client!.rest.setBearerToken(accessToken);
+    _isAuthenticated = true;
   }
 
   /// Authenticates with API key and secret.
@@ -335,6 +472,10 @@ class AuthService {
         code: code,
         codeVerifier: codeVerifier,
         clientSecret: clientSecret,
+      );
+      dev.log(
+        'loginWithOAuth success: access_token length=${tokens.accessToken.length}, refresh_token=${tokens.refreshToken != null ? "set" : "null"}, expires_in=${tokens.expiresIn}',
+        name: 'Auth',
       );
       final accessToken = tokens.accessToken.trim();
       if (accessToken.isEmpty) {

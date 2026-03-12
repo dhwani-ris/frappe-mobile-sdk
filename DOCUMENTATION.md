@@ -510,6 +510,75 @@ Configure the same redirect URI in Frappe OAuth Client and in the app (Android i
 await sdk.logout(clearDatabase: true);
 ```
 
+### 6.6 OAuth token and v2 APIs (401 Invalid authentication token)
+
+After OAuth login the app sends the OAuth-issued **Bearer token** to all API requests, including `mobile_auth.configuration`, `mobile_auth.me`, and `mobile_auth.permissions`. If the server returns **401 Invalid authentication token** for these endpoints, the backend is likely only validating tokens issued by `mobile_auth.login`, not OAuth. Ensure your Frappe server accepts the **same** Bearer token for both:
+
+- Tokens from `mobile_auth.login` (username/password or verify OTP)
+- Tokens from OAuth 2.0 token exchange
+
+If v2 methods (e.g. `mobile_auth.configuration`) only accept mobile_auth-issued tokens, either update the backend to accept OAuth tokens for those routes or use username/password / mobile OTP login instead of OAuth.
+
+### 6.7 Login screen (layout and style)
+
+**Layout (multiple login methods):**
+
+- **Password login enabled:** Username, Password, **Login** button → **OR** → **Login with mobile** (button or expanded section) → **Login with OAuth** (button).
+- **Password login disabled:** Mobile OTP section is **expanded by default** (mobile number + Send OTP); then **Login with OAuth** if enabled.
+- When password is enabled and mobile is enabled, tapping **Login with mobile** expands the mobile/OTP section; **Back to password** collapses it.
+
+**Wiring (example):** Pass `passwordLogin`, `sendLoginOtp`, and `verifyLoginOtp` from the SDK so permissions and locale are applied after login:
+
+```dart
+LoginScreen(
+  authService: sdk.auth,
+  appConfig: appConfig,
+  database: sdk.database,
+  passwordLogin: (u, p) => sdk.login(u, p),
+  sendLoginOtp: (m) => sdk.sendLoginOtp(m),
+  verifyLoginOtp: (t, o) => sdk.verifyLoginOtp(t, o),
+  onLoginSuccess: () => ...,
+)
+```
+
+Set `LoginConfig.enablePasswordLogin`, `enableMobileLogin`, and `enableOAuth` as needed.
+
+**Toggle behaviour:** When both password and mobile OTP are enabled, expanding **Login with mobile** hides the username/password section; **Back to password** shows it again. Only one of the two is visible at a time.
+
+**Style:** Pass optional `LoginScreenStyle` to customize the screen. All fields are optional; unspecified ones use theme/defaults.
+
+```dart
+LoginScreen(
+  ...
+  style: LoginScreenStyle(
+    titleStyle: TextStyle(fontSize: 22, color: Colors.indigo),
+    iconColor: Colors.indigo,
+    loginButtonStyle: ElevatedButton.styleFrom(...),
+    padding: EdgeInsets.all(32),
+  ),
+)
+```
+
+**LoginScreenStyle configuration:**
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `titleStyle` | `TextStyle?` | Title text ("Login to Frappe"). |
+| `iconSize` | `double?` | Login icon size (default 80). |
+| `iconColor` | `Color?` | Login icon color (default blue). |
+| `baseUrlDecoration` | `InputDecoration?` | Base URL field decoration. |
+| `usernameDecoration` | `InputDecoration?` | Username/email field decoration. |
+| `passwordDecoration` | `InputDecoration?` | Password field decoration. |
+| `mobileDecoration` | `InputDecoration?` | Mobile number field decoration. |
+| `otpDecoration` | `InputDecoration?` | OTP field decoration. |
+| `loginButtonStyle` | `ButtonStyle?` | Primary "Login" button style. |
+| `mobileButtonStyle` | `ButtonStyle?` | "Login with mobile" outline button style. |
+| `oauthButtonStyle` | `ButtonStyle?` | "Login with OAuth" button style. |
+| `orDividerTextStyle` | `TextStyle?` | "OR" divider label style. |
+| `padding` | `EdgeInsets?` | Padding around the form (default 24). |
+| `errorBackgroundColor` | `Color?` | Error message container background (default red[50]). |
+| `errorTextStyle` | `TextStyle?` | Error message text style. |
+
 ---
 
 ## 7. Offline & sync
