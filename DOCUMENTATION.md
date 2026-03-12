@@ -15,6 +15,7 @@ Complete guide to using the Frappe Mobile SDK for **API access** and **dynamic f
 7. [Offline & sync](#7-offline--sync)
 8. [Error handling](#8-error-handling)
 9. [Quick reference](#9-quick-reference)
+10. [Translations](#10-translations)
 
 ---
 
@@ -591,6 +592,75 @@ Configure the same redirect URI in Frappe OAuth Client and in the app (Android i
 await sdk.logout(clearDatabase: true);
 ```
 
+### 6.6 OAuth token and v2 APIs (401 Invalid authentication token)
+
+After OAuth login the app sends the OAuth-issued **Bearer token** to all API requests, including `mobile_auth.configuration`, `mobile_auth.me`, and `mobile_auth.permissions`. If the server returns **401 Invalid authentication token** for these endpoints, the backend is likely only validating tokens issued by `mobile_auth.login`, not OAuth. Ensure your Frappe server accepts the **same** Bearer token for both:
+
+- Tokens from `mobile_auth.login` (username/password or verify OTP)
+- Tokens from OAuth 2.0 token exchange
+
+If v2 methods (e.g. `mobile_auth.configuration`) only accept mobile_auth-issued tokens, either update the backend to accept OAuth tokens for those routes or use username/password / mobile OTP login instead of OAuth.
+
+### 6.7 Login screen (layout and style)
+
+**Layout (multiple login methods):**
+
+- **Password login enabled:** Username, Password, **Login** button → **OR** → **Login with mobile** (button or expanded section) → **Login with OAuth** (button).
+- **Password login disabled:** Mobile OTP section is **expanded by default** (mobile number + Send OTP); then **Login with OAuth** if enabled.
+- When password is enabled and mobile is enabled, tapping **Login with mobile** expands the mobile/OTP section; **Back to password** collapses it.
+
+**Wiring (example):** Pass `passwordLogin`, `sendLoginOtp`, and `verifyLoginOtp` from the SDK so permissions and locale are applied after login:
+
+```dart
+LoginScreen(
+  authService: sdk.auth,
+  appConfig: appConfig,
+  database: sdk.database,
+  passwordLogin: (u, p) => sdk.login(u, p),
+  sendLoginOtp: (m) => sdk.sendLoginOtp(m),
+  verifyLoginOtp: (t, o) => sdk.verifyLoginOtp(t, o),
+  onLoginSuccess: () => ...,
+)
+```
+
+Set `LoginConfig.enablePasswordLogin`, `enableMobileLogin`, and `enableOAuth` as needed.
+
+**Toggle behaviour:** When both password and mobile OTP are enabled, expanding **Login with mobile** hides the username/password section; **Back to password** shows it again. Only one of the two is visible at a time.
+
+**Style:** Pass optional `LoginScreenStyle` to customize the screen. All fields are optional; unspecified ones use theme/defaults.
+
+```dart
+LoginScreen(
+  ...
+  style: LoginScreenStyle(
+    titleStyle: TextStyle(fontSize: 22, color: Colors.indigo),
+    iconColor: Colors.indigo,
+    loginButtonStyle: ElevatedButton.styleFrom(...),
+    padding: EdgeInsets.all(32),
+  ),
+)
+```
+
+**LoginScreenStyle configuration:**
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `titleStyle` | `TextStyle?` | Title text ("Login to Frappe"). |
+| `iconSize` | `double?` | Login icon size (default 80). |
+| `iconColor` | `Color?` | Login icon color (default blue). |
+| `baseUrlDecoration` | `InputDecoration?` | Base URL field decoration. |
+| `usernameDecoration` | `InputDecoration?` | Username/email field decoration. |
+| `passwordDecoration` | `InputDecoration?` | Password field decoration. |
+| `mobileDecoration` | `InputDecoration?` | Mobile number field decoration. |
+| `otpDecoration` | `InputDecoration?` | OTP field decoration. |
+| `loginButtonStyle` | `ButtonStyle?` | Primary "Login" button style. |
+| `mobileButtonStyle` | `ButtonStyle?` | "Login with mobile" outline button style. |
+| `oauthButtonStyle` | `ButtonStyle?` | "Login with OAuth" button style. |
+| `orDividerTextStyle` | `TextStyle?` | "OR" divider label style. |
+| `padding` | `EdgeInsets?` | Padding around the form (default 24). |
+| `errorBackgroundColor` | `Color?` | Error message container background (default red[50]). |
+| `errorTextStyle` | `TextStyle?` | Error message text style. |
+
 ---
 
 ## 7. Offline & sync
@@ -663,6 +733,8 @@ try {
 | API client | `sdk.api` (FrappeClient) |
 | Auth | `sdk.auth` (AuthService) |
 | Meta | `sdk.meta` (MetaService) |
+| Permissions | `sdk.permissions` (PermissionService) |
+| Translations | `sdk.translations` (TranslationService) |
 | Sync | `sdk.sync` (SyncService) |
 | Offline | `sdk.repository` (OfflineRepository) |
 | Link options | `sdk.linkOptions` (LinkOptionService) |
@@ -697,6 +769,62 @@ try {
 - **API:** DoctypeService, DocumentService, AttachmentService, QueryBuilder, exceptions, OAuth2Helper
 - **Utils:** extractErrorMessage, toUserFriendlyMessage
 - **UI:** FormScreen, FrappeFormBuilder, DoctypeListScreen, DocumentListScreen, LoginScreen, AppGuard, FrappeFormStyle, DefaultFormStyle
+- **Services:** PermissionService, TranslationService
+
+---
+
+## 10. Translations
+
+The SDK can load translation dictionaries from your Frappe server and use them for doctype labels, field labels, section/tab titles, and validation messages in forms and lists.
+
+### 10.1 When translations are synced
+
+| When | What happens |
+|------|--------------|
+| **App launch with auto restore** | If you call `sdk.initialize(true)` and the user is already logged in (session restore succeeds), the SDK runs an initial sync that includes **one** call to the translations API to load the **English** (`en`) dictionary. No other language is loaded automatically. |
+| **First-time login** | Translations are **not** fetched after `login()`, `loginWithApiKey()`, or `loginWithOAuth()`. |
+| **Other languages** | To load or switch language, the app must call `sdk.translations.loadTranslations(lang)` or `sdk.translations.setLocale(lang)` (e.g. when the user selects a language in settings). |
+
+**Summary:** Translations are synced **only on app launch when the user is already logged in**, and **only for the language `en`**. For any other language or to refresh, the app must call the translation API explicitly.
+
+### 10.2 Server API
+
+The backend must expose an endpoint that returns the translation map for a given language. The SDK calls:
+
+- **URL:** `GET {baseUrl}/api/v2/method/mobile_auth.get_translations?lang={lang}`
+- **Auth:** Same as other mobile APIs (Bearer token or API key).
+- **Response shape:** `{ "data": { "lang": "en", "translations": { "Source string": "Translated string", ... } } }`
+
+The SDK caches the map in memory per language. Lookup is by source string; if no translation exists, the source is returned.
+
+### 10.3 Using translations in the UI
+
+To show translated labels in list and form screens, pass a `translate` callback:
+
+- **DocumentListScreen:** `translate: (s) => sdk.translations.translate(s)` — translates app bar title (doctype label) and sort menu field labels.
+- **FormScreen:** `translate: (s) => sdk.translations.translate(s)` — translates app bar title; when opened from DocumentListScreen, it receives the same callback. Also pass `translate` to FrappeFormBuilder when using it standalone.
+- **FrappeFormBuilder:** Receives `translate` from FormScreen or directly; uses it for field labels, placeholders, descriptions, section titles, and tab labels (and child table forms).
+
+**What gets translated**
+
+| Component | Translated items |
+|-----------|------------------|
+| DocumentListScreen | App bar title (doctype label), sort menu field labels |
+| FormScreen | App bar title (doctype label) |
+| FrappeFormBuilder | Field labels, placeholders, descriptions, section titles, tab labels |
+| BaseField | Label above widget, description, validation message (“X is required”) |
+
+### 10.4 TranslationService API
+
+| Member | Description |
+|--------|-------------|
+| `sdk.translations` | TranslationService (available after `sdk.initialize()`). |
+| `loadTranslations(lang)` | Fetches translations for `lang` from the API and caches them. Returns the map. |
+| `setLocale(lang)` | Sets current language; loads translations for that language if not already cached. |
+| `translate(source, [args])` | Looks up `source` in the current language cache; replaces `{0}`, `{1}`, … with optional `args`. Returns source if no translation. |
+| `call(source, [args])` | Same as `translate` (callable: `sdk.translations('Source')`). |
+| `getCachedTranslations(lang)` | Returns the cached map for `lang` (empty if not loaded). |
+| `currentLang` | Current language code (default `en`). |
 
 ---
 

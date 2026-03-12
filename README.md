@@ -12,6 +12,8 @@ Flutter package for Frappe integration with direct API access, dynamic form rend
 - ✅ **Offline-First** - Full offline capability with SQLite
 - ✅ **Bi-directional Sync** - Push/pull sync with conflict resolution
 - ✅ **Customizable Styling** - Default styles + full customization support
+- ✅ **Translations** - Load Frappe translations by language; map to field labels and doctype labels in forms and lists
+- ✅ **Workflows** - Show workflow state and transition actions on forms when the DocType has a workflow (see [Workflows](docs/WORKFLOWS.md))
 
 ## 📋 Prerequisites
 
@@ -118,6 +120,60 @@ MaterialApp(
   ),
 )
 ```
+
+### Translations
+
+The SDK can load translation dictionaries from your Frappe server and use them for **doctype labels**, **field labels**, **section/tab titles**, and validation messages in forms and lists.
+
+**When translations are synced**
+
+- **Automatically:** Only when you call `sdk.initialize(true)` (auto restore + sync) and the user is already logged in (session restore succeeds). In that case the SDK calls the translations API once and loads the **English** (`en`) dictionary. No other language is loaded automatically.
+- **Manually:** Call `sdk.translations.loadTranslations(lang)` or `sdk.translations.setLocale(lang)` to load or switch language (e.g. after login or when the user changes language in settings).
+
+**Server requirement**
+
+Your backend must expose an API that returns the translation map for a language (e.g. `GET /api/v2/method/mobile_auth.get_translations?lang=en`). Response shape: `{ "data": { "lang": "en", "translations": { "Source string": "Translated string" } } }`.
+
+**Using translations in the UI**
+
+Pass a `translate` callback into the list and form screens so labels use the cached dictionary:
+
+```dart
+// After init, optionally set language (e.g. from user preference or device locale)
+await sdk.translations.setLocale('en');  // or 'hi', 'es', etc.
+
+// When opening DocumentListScreen and FormScreen, pass translate:
+DocumentListScreen(
+  doctype: doctype,
+  meta: meta,
+  repository: repository,
+  syncService: syncService,
+  metaService: metaService,
+  permissionService: sdk.permissions,
+  translate: (s) => sdk.translations.translate(s),
+  // ...
+);
+
+// FormScreen receives translate from DocumentListScreen when opening a document.
+// Or pass it explicitly: FormScreen(..., translate: (s) => sdk.translations.translate(s));
+```
+
+**What gets translated**
+
+- **DocumentListScreen:** App bar title (doctype label), sort menu field labels.
+- **FormScreen:** App bar title (doctype label).
+- **FrappeFormBuilder:** Field labels, placeholders, descriptions, section titles, tab labels (and child table forms).
+- **BaseField:** Label above the widget, description text, and validation message (“X is required”).
+
+**API summary**
+
+| Member | Description |
+|--------|-------------|
+| `sdk.translations` | TranslationService (after `initialize()`). |
+| `loadTranslations(lang)` | Fetches and caches the translation map for `lang`. |
+| `setLocale(lang)` | Sets current language and loads it if not cached. |
+| `translate(source, [args])` | Returns translated string for current language; replaces `{0}`, `{1}` with `args`. |
+| `currentLang` | Current language code (default `en`). |
 
 ### 1. API Usage (No Form Renderer)
 
@@ -398,6 +454,12 @@ LoginScreen(
 ```
 
 **Note**: `LoginScreen` requires `database` parameter. Without it, login will fail with an error.
+
+**Layout:** When multiple methods are enabled, the screen shows: Password (if enabled) → **OR** → Login with mobile → Login with OAuth. If password login is disabled, the mobile OTP section is expanded by default. Opening **Login with mobile** hides the username/password box (toggle); **Back to password** shows it again. Pass `passwordLogin`, `sendLoginOtp`, and `verifyLoginOtp` from the SDK (e.g. `(u,p) => sdk.login(u,p)`) so permissions and locale are applied.
+
+**Style:** Pass optional `style: LoginScreenStyle(...)` to customize title, icon, input decorations, button styles, and padding. Full property list: [DOCUMENTATION.md §6.7](DOCUMENTATION.md#67-login-screen-layout-and-style).
+
+**OAuth and 401:** If you get *401 Invalid authentication token* on `mobile_auth.configuration` after OAuth login, the server may only accept tokens from `mobile_auth.login`. Ensure the backend accepts the OAuth-issued Bearer token for v2 methods (see [DOCUMENTATION.md §6.6](DOCUMENTATION.md#66-oauth-token-and-v2-apis-401-invalid-authentication-token)).
 
 ## 📚 API Reference
 

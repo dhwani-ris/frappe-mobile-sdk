@@ -1,8 +1,11 @@
-/// Login method configuration (password, OAuth, social).
+/// Login method configuration (password, OAuth, social, mobile OTP).
 class LoginConfig {
   final bool enablePasswordLogin;
   final bool enableOAuth;
   final bool enableSocialLogin;
+
+  /// When true, show "Login with mobile" and use send_login_otp / verify_login_otp.
+  final bool enableMobileLogin;
   final String? oauthClientId;
   final String? oauthClientSecret;
 
@@ -10,6 +13,7 @@ class LoginConfig {
     this.enablePasswordLogin = true,
     this.enableOAuth = false,
     this.enableSocialLogin = false,
+    this.enableMobileLogin = false,
     this.oauthClientId,
     this.oauthClientSecret,
   });
@@ -19,6 +23,7 @@ class LoginConfig {
       enablePasswordLogin: json['enablePasswordLogin'] as bool? ?? true,
       enableOAuth: json['enableOAuth'] as bool? ?? false,
       enableSocialLogin: json['enableSocialLogin'] as bool? ?? false,
+      enableMobileLogin: json['enableMobileLogin'] as bool? ?? false,
       oauthClientId: json['oauthClientId'] as String?,
       oauthClientSecret: json['oauthClientSecret'] as String?,
     );
@@ -29,6 +34,7 @@ class LoginConfig {
       'enablePasswordLogin': enablePasswordLogin,
       'enableOAuth': enableOAuth,
       'enableSocialLogin': enableSocialLogin,
+      'enableMobileLogin': enableMobileLogin,
       if (oauthClientId != null) 'oauthClientId': oauthClientId,
       if (oauthClientSecret != null) 'oauthClientSecret': oauthClientSecret,
     };
@@ -83,6 +89,10 @@ class AppConfig {
             login['enable_social_login'] as bool? ??
             login['enableSocialLogin'] as bool? ??
             false,
+        enableMobileLogin:
+            login['enable_mobile_login'] as bool? ??
+            login['enableMobileLogin'] as bool? ??
+            false,
         oauthClientId:
             login['oauth_client_id'] as String? ??
             login['oauthClientId'] as String?,
@@ -105,6 +115,7 @@ class AppConfig {
   bool get enablePasswordLogin => loginConfig?.enablePasswordLogin ?? true;
   bool get enableOAuth => loginConfig?.enableOAuth ?? false;
   bool get enableSocialLogin => loginConfig?.enableSocialLogin ?? false;
+  bool get enableMobileLogin => loginConfig?.enableMobileLogin ?? false;
   String? get oauthClientId => loginConfig?.oauthClientId;
   String? get oauthClientSecret => loginConfig?.oauthClientSecret;
 }

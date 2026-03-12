@@ -156,4 +156,22 @@ class DocTypeMeta {
   List<DocField> get layoutFields {
     return fields.where((f) => f.isLayoutField).toList();
   }
+
+  /// True if this DocType has a Frappe workflow attached (from meta [__workflow_docs]).
+  bool get hasWorkflow {
+    final docs = metaData?['__workflow_docs'];
+    return docs is List && docs.isNotEmpty;
+  }
+
+  /// Name of the field that stores workflow state (e.g. [workflow_state]).
+  /// Non-null only when [hasWorkflow] is true; read from first __workflow_docs entry.
+  String? get workflowStateField {
+    if (!hasWorkflow) return null;
+    final docs = metaData!['__workflow_docs'] as List;
+    if (docs.isEmpty) return null;
+    final first = docs[0];
+    if (first is! Map<String, dynamic>) return null;
+    final v = first['workflow_state_field'];
+    return v is String && v.isNotEmpty ? v : null;
+  }
 }
