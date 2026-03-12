@@ -102,6 +102,9 @@ class FrappeFormBuilder extends StatefulWidget {
   /// Called when a Button field is pressed. [FormScreen] adapts [OnButtonPressedCallback] to this.
   final ButtonPressedCallback? onButtonPressed;
 
+  /// Called when form data changes (any field value). Use to detect dirty state.
+  final void Function(Map<String, dynamic> currentData)? onFormDataChanged;
+
   const FrappeFormBuilder({
     super.key,
     required this.meta,
@@ -119,6 +122,7 @@ class FrappeFormBuilder extends StatefulWidget {
     this.registerSubmit,
     this.translate,
     this.onButtonPressed,
+    this.onFormDataChanged,
   });
 
   @override
@@ -482,7 +486,10 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
           // Trigger rebuild to update dependent fields
           if (oldValue != value) {
             WidgetsBinding.instance.addPostFrameCallback((_) {
-              if (mounted) setState(() {});
+              if (mounted) {
+                setState(() {});
+                _emitFormDataChanged();
+              }
             });
           }
         });
@@ -674,6 +681,31 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
     completeFormData.addAll(formValues);
 
     widget.onSubmit?.call(completeFormData);
+  }
+
+  /// Builds current form data (same structure as submit). Used for dirty detection.
+  Map<String, dynamic> _getCurrentFormData() {
+    final state = _formKey.currentState;
+    final formValues = state != null
+        ? Map<String, dynamic>.from(state.value)
+        : <String, dynamic>{};
+    formValues.addAll(_formData);
+    final complete = <String, dynamic>{};
+    for (final field in widget.meta.fields) {
+      if (field.fieldname != null && !field.hidden && field.isDataField) {
+        complete[field.fieldname!] =
+            formValues[field.fieldname] ??
+            widget.initialData?[field.fieldname] ??
+            field.defaultValue ??
+            (field.fieldtype == 'Check' ? 0 : '');
+      }
+    }
+    complete.addAll(formValues);
+    return complete;
+  }
+
+  void _emitFormDataChanged() {
+    widget.onFormDataChanged?.call(_getCurrentFormData());
   }
 
   @override
