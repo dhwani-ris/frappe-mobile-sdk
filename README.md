@@ -428,6 +428,12 @@ LoginScreen(
 
 **Note**: `LoginScreen` requires `database` parameter. Without it, login will fail with an error.
 
+**Layout:** When multiple methods are enabled, the screen shows: Password (if enabled) → **OR** → Login with mobile → Login with OAuth. If password login is disabled, the mobile OTP section is expanded by default. Opening **Login with mobile** hides the username/password box (toggle); **Back to password** shows it again. Pass `passwordLogin`, `sendLoginOtp`, and `verifyLoginOtp` from the SDK (e.g. `(u,p) => sdk.login(u,p)`) so permissions and locale are applied.
+
+**Style:** Pass optional `style: LoginScreenStyle(...)` to customize title, icon, input decorations, button styles, and padding. Full property list: [DOCUMENTATION.md §6.7](DOCUMENTATION.md#67-login-screen-layout-and-style).
+
+**OAuth and 401:** If you get *401 Invalid authentication token* on `mobile_auth.configuration` after OAuth login, the server may only accept tokens from `mobile_auth.login`. Ensure the backend accepts the OAuth-issued Bearer token for v2 methods (see [DOCUMENTATION.md §6.6](DOCUMENTATION.md#66-oauth-token-and-v2-apis-401-invalid-authentication-token)).
+
 ## 📚 API Reference
 
 ### AuthService (Stateless Login)

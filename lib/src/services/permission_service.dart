@@ -11,19 +11,32 @@ class PermissionService {
   PermissionService(this._client, this._database);
 
   /// Save permissions from login response.
-  /// [permissions] is the full `response['permissions']` object:
-  /// `{ "roles": [...], "permissions": { "State": { "read": true, ... } } }`
-  /// This method only persists the doctype map; roles are handled by AuthService.
-  Future<void> saveFromLoginResponse(Map<String, dynamic>? permissions) async {
+  /// [permissions] can be:
+  /// - List: [ { "doctype": "X", "read": true, "write": false, ... }, ... ]
+  /// - Map (legacy): { "roles": [...], "permissions": { "DocType": { "read": true, ... } } }
+  Future<void> saveFromLoginResponse(dynamic permissions) async {
     if (permissions == null) return;
-    final map = permissions['permissions'] as Map<String, dynamic>?;
-    if (map == null) return;
-    await _savePermissionMap(map);
+    if (permissions is List) {
+      final map = <String, Map<String, dynamic>>{};
+      for (final item in permissions) {
+        if (item is Map<String, dynamic>) {
+          final doctype = item['doctype']?.toString();
+          if (doctype != null && doctype.isNotEmpty) {
+            map[doctype] = item;
+          }
+        }
+      }
+      if (map.isNotEmpty) await _savePermissionMap(map);
+      return;
+    }
+    if (permissions is Map<String, dynamic>) {
+      final map = permissions['permissions'] as Map<String, dynamic>?;
+      if (map != null) await _savePermissionMap(map);
+    }
   }
 
   /// Call mobile_auth.permissions API and refresh local cache.
-  /// Also returns roles from response so caller can update AuthService if desired.
-  /// Returns the raw data payload (contains roles and permissions).
+  /// Accepts permissions as list or map (same as [saveFromLoginResponse]).
   Future<Map<String, dynamic>?> syncFromApi() async {
     try {
       final result = await _client.rest.get(
@@ -31,10 +44,7 @@ class PermissionService {
       );
       if (result is! Map<String, dynamic>) return null;
       final data = result['data'] as Map<String, dynamic>? ?? result;
-      final map = data['permissions'] as Map<String, dynamic>?;
-      if (map != null) {
-        await _savePermissionMap(map);
-      }
+      await saveFromLoginResponse(data['permissions']);
       return data;
     } catch (_) {
       return null;

@@ -55,6 +55,7 @@ export 'src/services/link_option_service.dart';
 // UI Components
 export 'src/ui/app_guard.dart';
 export 'src/ui/login_screen.dart';
+export 'src/ui/login_screen_style.dart';
 export 'src/ui/doctype_list_screen.dart';
 export 'src/ui/form_screen.dart';
 export 'src/ui/document_list_screen.dart';

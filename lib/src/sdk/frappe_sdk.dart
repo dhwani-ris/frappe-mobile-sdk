@@ -71,9 +71,29 @@ class FrappeSDK {
   Future<Map<String, dynamic>> login(String username, String password) async {
     if (!_initialized) await initialize();
     final response = await _authService!.login(username, password);
-    await _permissionService!.saveFromLoginResponse(
-      response['permissions'] as Map<String, dynamic>?,
-    );
+    await _permissionService!.saveFromLoginResponse(response['permissions']);
+    final lang = response['language'] as String?;
+    if (lang != null && lang.isNotEmpty) {
+      await _translationService?.setLocale(lang);
+    }
+    return response;
+  }
+
+  /// Send OTP to mobile number for login. Returns response (e.g. tmp_id).
+  Future<Map<String, dynamic>> sendLoginOtp(String mobileNo) async {
+    if (!_initialized) await initialize();
+    return await _authService!.sendLoginOtp(mobileNo);
+  }
+
+  /// Verify OTP and complete login. Returns same shape as [login].
+  Future<Map<String, dynamic>> verifyLoginOtp(String tmpId, String otp) async {
+    if (!_initialized) await initialize();
+    final response = await _authService!.verifyLoginOtp(tmpId, otp);
+    await _permissionService!.saveFromLoginResponse(response['permissions']);
+    final lang = response['language'] as String?;
+    if (lang != null && lang.isNotEmpty) {
+      await _translationService?.setLocale(lang);
+    }
     return response;
   }
 
@@ -81,7 +101,7 @@ class FrappeSDK {
   Future<bool> loginWithApiKey(String apiKey, String apiSecret) async {
     if (!_initialized) await initialize();
     final ok = await _authService!.loginWithApiKey(apiKey, apiSecret);
-    if (ok) await _permissionService!.syncFromApi();
+    if (ok) await _fetchUserInfoAndApply();
     return ok;
   }
 
@@ -116,7 +136,7 @@ class FrappeSDK {
       clientId: clientId,
       redirectUri: redirectUri,
     );
-    if (ok) await _permissionService!.syncFromApi();
+    if (ok) await _fetchUserInfoAndApply();
     return ok;
   }
 
@@ -248,6 +268,17 @@ class FrappeSDK {
   Future<void> resyncMobileConfiguration() async {
     if (!_initialized) await initialize();
     await _metaService!.resyncMobileConfiguration();
+  }
+
+  /// After OAuth/API key login: fetch user info (mobile_auth.me) and apply permissions + locale.
+  Future<void> _fetchUserInfoAndApply() async {
+    final userInfo = await _authService!.fetchUserInfo();
+    if (userInfo == null) return;
+    await _permissionService!.saveFromLoginResponse(userInfo['permissions']);
+    final lang = userInfo['language'] as String?;
+    if (lang != null && lang.isNotEmpty) {
+      await _translationService?.setLocale(lang);
+    }
   }
 
   /// Internal: initial metadata + data sync for mobile doctypes.

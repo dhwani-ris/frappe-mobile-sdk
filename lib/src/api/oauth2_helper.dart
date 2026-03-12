@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:developer' as dev;
 import 'dart:math';
 
 import 'package:crypto/crypto.dart';
@@ -137,19 +138,39 @@ class OAuth2Helper {
           .map((k) => '$k=${Uri.encodeComponent(body[k]!)}')
           .join('&'),
     );
+    dev.log('token endpoint: $uri', name: 'OAuth');
+    dev.log('response status: ${response.statusCode}', name: 'OAuth');
+    dev.log('response body: ${response.body}', name: 'OAuth');
     if (response.statusCode != 200) {
       throw Exception(
         'OAuth token exchange failed: ${response.statusCode} ${response.body}',
       );
     }
     final json = jsonDecode(response.body) as Map<String, dynamic>;
+    dev.log('parsed json keys: ${json.keys.toList()}', name: 'OAuth');
     if (json['error'] != null) {
+      dev.log(
+        'error in response: ${json['error']} ${json['error_description']}',
+        name: 'OAuth',
+      );
       throw Exception(
         'OAuth error: ${json['error']} - ${json['error_description'] ?? ''}',
       );
     }
     final tokenJson = _unwrapFrappeResponse(json);
-    return OAuth2TokenResponse.fromJson(tokenJson);
+    final keys = tokenJson.keys.toList();
+    final debugMap = <String, String>{};
+    for (final k in keys) {
+      final v = tokenJson[k];
+      if (v is String && (k == 'access_token' || k == 'refresh_token')) {
+        debugMap[k] = 'length=${v.length}';
+      } else {
+        debugMap[k] = v?.toString() ?? 'null';
+      }
+    }
+    dev.log('unwrapped token map: $debugMap', name: 'OAuth');
+    final result = OAuth2TokenResponse.fromJson(tokenJson);
+    return result;
   }
 
   /// Refreshes the access token using [refreshToken].
