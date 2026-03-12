@@ -61,7 +61,7 @@ export 'src/ui/form_screen.dart';
 export 'src/ui/document_list_screen.dart';
 export 'src/ui/sync_status_screen.dart';
 export 'src/ui/form_renderer_helper.dart';
-export 'src/ui/widgets/form_builder.dart'; // Exports FrappeFormStyle
+export 'src/ui/widgets/form_builder.dart'; // Exports FrappeFormStyle, ButtonPressedCallback, OnButtonPressedCallback
 export 'src/ui/widgets/default_form_style.dart'; // Exports DefaultFormStyle
 export 'src/ui/widgets/fields/field_factory.dart';
 export 'src/ui/widgets/fields/base_field.dart'; // Exports FieldStyle
@@ -70,6 +70,7 @@ export 'src/ui/widgets/fields/text_field.dart';
 export 'src/ui/widgets/fields/select_field.dart';
 export 'src/ui/widgets/fields/date_field.dart';
 export 'src/ui/widgets/fields/check_field.dart';
+export 'src/ui/widgets/fields/button_field.dart';
 export 'src/ui/widgets/fields/numeric_field.dart';
 export 'src/ui/widgets/fields/link_field.dart';
 export 'src/ui/widgets/fields/phone_field.dart';

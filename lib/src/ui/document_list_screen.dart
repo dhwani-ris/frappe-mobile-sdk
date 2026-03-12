@@ -11,6 +11,7 @@ import '../services/link_option_service.dart';
 import '../services/meta_service.dart';
 import '../services/permission_service.dart';
 import 'form_screen.dart';
+import 'widgets/form_builder.dart' show OnButtonPressedCallback;
 
 /// SDK document list screen with search, sort, and pagination.
 /// Uses [DocTypeMeta.titleField], [DocTypeMeta.sortField], [DocTypeMeta.sortOrder]
@@ -37,6 +38,9 @@ class DocumentListScreen extends StatefulWidget {
   /// Optional initial documents; if null, list is fetched on load.
   final List<Document>? initialDocuments;
 
+  /// Optional callback when a Button field is pressed in the form. Override to implement client-script logic.
+  final OnButtonPressedCallback? onButtonPressed;
+
   const DocumentListScreen({
     super.key,
     required this.doctype,
@@ -51,6 +55,7 @@ class DocumentListScreen extends StatefulWidget {
     this.userRoles,
     this.permissionService,
     this.translate,
+    this.onButtonPressed,
   });
 
   @override
@@ -468,6 +473,8 @@ class _DocumentListScreenState extends State<DocumentListScreen> {
             _pullDocuments();
           },
           getMobileUuid: widget.getMobileUuid,
+          onButtonPressed: widget.onButtonPressed,
+          // Permissions
           readOnly: !isNew && !_canWrite,
           canSave: isNew ? _canCreate : _canWrite,
           canDelete: !isNew && _canDelete,
