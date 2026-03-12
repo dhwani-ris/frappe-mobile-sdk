@@ -1,5 +1,7 @@
 # Frappe Workflows in the Mobile SDK
 
+> Start here: see the high‑level overview and navigation in `README.md`. This document explains how workflows behave in the mobile SDK in detail.
+
 The SDK supports **Frappe workflows** for DocTypes that have a workflow attached. Behavior matches **Frappe core**: workflow action buttons appear in the **App Bar** only when the form has **no unsaved changes**; when there are changes, the **Save** button is shown instead. Submitted documents (`docstatus == 1`) are **read-only**.
 
 ## When workflow actions are shown
