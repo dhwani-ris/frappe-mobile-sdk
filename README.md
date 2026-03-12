@@ -13,6 +13,7 @@ Flutter package for Frappe integration with direct API access, dynamic form rend
 - ✅ **Bi-directional Sync** - Push/pull sync with conflict resolution
 - ✅ **Customizable Styling** - Default styles + full customization support
 - ✅ **Translations** - Load Frappe translations by language; map to field labels and doctype labels in forms and lists
+- ✅ **Workflows** - Show workflow state and transition actions on forms when the DocType has a workflow (see [Workflows](docs/WORKFLOWS.md))
 
 ## 📋 Prerequisites
 
