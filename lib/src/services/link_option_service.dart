@@ -49,7 +49,6 @@ class LinkOptionService {
     }
 
     final titleField = await _getTitleField(doctype);
-    final isChildDoctype = await _isChildDoctype(doctype);
 
     List<dynamic> documents;
     try {
@@ -224,12 +223,6 @@ class LinkOptionService {
     } catch (_) {
       return null;
     }
-  }
-
-  /// Check if a doctype is a child table (istable=1) from cached metadata.
-  Future<bool> _isChildDoctype(String doctype) async {
-    final meta = await _getDocTypeMeta(doctype);
-    return meta?.isTable ?? false;
   }
 
   void clearAllCache() {
