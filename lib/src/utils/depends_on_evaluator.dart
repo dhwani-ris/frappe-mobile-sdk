@@ -120,6 +120,17 @@ class DependsOnEvaluator {
     return expr;
   }
 
+  /// Extract `doc.fieldname` from an eval expression like `eval:doc.x` or `eval: doc.x`.
+  /// Returns the field name, or null if the value is not an eval:doc expression.
+  static String? extractEvalDocField(String value) {
+    String expr = value.trim();
+    if (value.startsWith('eval:')) {
+      expr = value.substring(5).trimLeft();
+    }
+    String fieldName = _extractFieldName(expr);
+    return expr == fieldName ? null : fieldName;
+  }
+
   static dynamic _extractValue(String expr) {
     expr = expr.trim();
     // Remove quotes if present
