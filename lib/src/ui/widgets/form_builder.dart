@@ -583,6 +583,9 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
                   getMeta: widget.getMeta,
                   fileUrlBase: widget.fileUrlBase,
                   imageHeaders: widget.imageHeaders,
+                  // link option service for child doctype.
+                  linkOptionService: widget.linkOptionService,
+                  // fetch linked document for child doctype.
                   fetchLinkedDocument: widget.fetchLinkedDocument,
                   translate: widget.translate,
                   onButtonPressed: widget.onButtonPressed,
@@ -615,9 +618,10 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
             for (final otherField in widget.meta.fields) {
               if (otherField.fieldtype == 'Link' &&
                   otherField.linkFilters != null &&
-                  otherField.linkFilters!.contains(
-                    'eval:doc.${field.fieldname}',
-                  )) {
+                  // Check if other field's link filters depend on this field ignoring spaces
+                  RegExp(
+                    'eval\\s*:\\s*doc\\.${field.fieldname}',
+                  ).hasMatch(otherField.linkFilters ?? "")) {
                 _formData.remove(otherField.fieldname);
               }
             }
