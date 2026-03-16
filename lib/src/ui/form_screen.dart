@@ -53,6 +53,13 @@ class FormScreen extends StatefulWidget {
   /// has a server method path, it is called; otherwise a message is shown.
   final OnButtonPressedCallback? onButtonPressed;
 
+  /// Called when a field value changes. Returns computed field patches (for hidden computed fields).
+  final Map<String, dynamic>? Function(
+    String fieldName,
+    dynamic newValue,
+    Map<String, dynamic> formData,
+  )? onFieldChange;
+
   const FormScreen({
     super.key,
     required this.meta,
@@ -71,6 +78,7 @@ class FormScreen extends StatefulWidget {
     this.translate,
     this.initialData,
     this.onButtonPressed,
+    this.onFieldChange,
   });
 
   @override
@@ -820,6 +828,7 @@ class _FormScreenState extends State<FormScreen> {
                   : _handleButtonPressed,
               style: widget.style,
               translate: widget.translate,
+              onFieldChange: widget.onFieldChange,
             ),
           ),
         ],

@@ -105,6 +105,14 @@ class FrappeFormBuilder extends StatefulWidget {
   /// Called when form data changes (any field value). Use to detect dirty state.
   final void Function(Map<String, dynamic> currentData)? onFormDataChanged;
 
+  /// Called when a field value changes. Returns a map of computed field updates
+  /// to patch into the form (e.g. for hidden computed fields).
+  final Map<String, dynamic>? Function(
+    String fieldName,
+    dynamic newValue,
+    Map<String, dynamic> formData,
+  )? onFieldChange;
+
   const FrappeFormBuilder({
     super.key,
     required this.meta,
@@ -123,6 +131,7 @@ class FrappeFormBuilder extends StatefulWidget {
     this.translate,
     this.onButtonPressed,
     this.onFormDataChanged,
+    this.onFieldChange,
   });
 
   @override
@@ -169,7 +178,6 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
 
     for (final field in widget.meta.fields) {
       if (field.fieldname != null &&
-          !field.hidden &&
           !_formData.containsKey(field.fieldname)) {
         _formData[field.fieldname!] ??= field.defaultValue;
       }
@@ -180,6 +188,133 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
       length: _tabs.isEmpty ? 1 : _tabs.length,
       vsync: this,
     );
+  }
+
+  String _formatDurationPatchedValue(int seconds) {
+    final hours = seconds ~/ 3600;
+    final minutes = (seconds % 3600) ~/ 60;
+    final secs = seconds % 60;
+
+    if (hours > 0) {
+      return '${hours.toString().padLeft(2, '0')}:${minutes.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}';
+    }
+    return '${minutes.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}';
+  }
+
+  List<String> _normalizeMultiSelectPatchedValue(dynamic value) {
+    if (value == null) return <String>[];
+    if (value is List) {
+      return value.map((item) => item.toString()).toList();
+    }
+    final raw = value.toString();
+    if (raw.isEmpty) return <String>[];
+    return raw
+        .split(',')
+        .map((item) => item.trim())
+        .where((item) => item.isNotEmpty)
+        .toList();
+  }
+
+  dynamic _normalizePatchedValue(DocField field, dynamic value) {
+    switch (field.fieldtype) {
+      case FieldTypes.date:
+      case FieldTypes.datetime:
+        if (value == null || value == '') return null;
+        if (value is DateTime) return value;
+        if (value is String) return DateTime.tryParse(value);
+        return null;
+
+      case FieldTypes.time:
+        if (value == null || value == '') return null;
+        if (value is DateTime) return value;
+        if (value is TimeOfDay) {
+          return DateTime(2000, 1, 1, value.hour, value.minute);
+        }
+        if (value is String) {
+          final parts = value.split(':');
+          if (parts.length >= 2) {
+            final hour = int.tryParse(parts[0]);
+            final minute = int.tryParse(parts[1]);
+            if (hour != null && minute != null) {
+              return DateTime(2000, 1, 1, hour, minute);
+            }
+          }
+        }
+        return null;
+
+      case FieldTypes.check:
+        if (value is bool) return value;
+        if (value is int) return value == 1;
+        if (value is String) {
+          final normalized = value.trim().toLowerCase();
+          return normalized == '1' || normalized == 'true';
+        }
+        return false;
+
+      case FieldTypes.rating:
+        if (value == null || value == '') return null;
+        if (value is int) return value;
+        return int.tryParse(value.toString());
+
+      case FieldTypes.select:
+        if (field.options == null || field.options!.trim().isEmpty) {
+          return value?.toString() ?? '';
+        }
+        if (field.allowMultiple) {
+          return _normalizeMultiSelectPatchedValue(value);
+        }
+        final stringValue = value?.toString();
+        return (stringValue == null || stringValue.isEmpty)
+            ? null
+            : stringValue;
+
+      case FieldTypes.link:
+      case FieldTypes.data:
+      case FieldTypes.text:
+      case FieldTypes.longText:
+      case FieldTypes.smallText:
+      case FieldTypes.password:
+      case FieldTypes.phone:
+      case FieldTypes.attach:
+      case FieldTypes.attachImage:
+      case FieldTypes.image:
+      case FieldTypes.readOnly:
+        return value?.toString() ?? '';
+
+      case FieldTypes.int:
+      case FieldTypes.float:
+      case FieldTypes.currency:
+      case FieldTypes.percent:
+        return value?.toString() ?? '';
+
+      case FieldTypes.duration:
+        if (value == null || value == '') return '';
+        if (value is int) return _formatDurationPatchedValue(value);
+        return value.toString();
+
+      case 'Table':
+        if (value is List) return value;
+        return <dynamic>[];
+
+      default:
+        return value;
+    }
+  }
+
+  Map<String, dynamic> _normalizePatchValues(Map<String, dynamic> updates) {
+    final normalized = <String, dynamic>{};
+    for (final entry in updates.entries) {
+      final fieldMeta = widget.meta.fields
+          .where((f) => f.fieldname == entry.key)
+          .cast<DocField?>()
+          .firstWhere((f) => f != null, orElse: () => null);
+      if (fieldMeta == null) {
+        normalized[entry.key] = entry.value ?? '';
+        continue;
+      }
+      normalized[entry.key] = _normalizePatchedValue(fieldMeta, entry.value);
+    }
+    return normalized;
   }
 
   void _buildFormStructure() {
@@ -356,7 +491,7 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
       setState(() {
         _formData.addAll(updates);
       });
-      _formKey.currentState?.patchValue(updates);
+      _formKey.currentState?.patchValue(_normalizePatchValues(updates));
       if (mounted) setState(() {});
     } catch (e) {
       debugPrint('FetchFrom error: $e');
@@ -365,6 +500,16 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
 
   Widget _buildFieldWidget(DocField field) {
     if (!_shouldShowField(field)) {
+      // Clear stale data for hidden fields so they don't submit old values
+      if (field.fieldname != null && _formData.containsKey(field.fieldname)) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && _formData.containsKey(field.fieldname)) {
+            setState(() {
+              _formData.remove(field.fieldname);
+            });
+          }
+        });
+      }
       return const SizedBox.shrink();
     }
 
@@ -441,6 +586,7 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
                   fetchLinkedDocument: widget.fetchLinkedDocument,
                   translate: widget.translate,
                   onButtonPressed: widget.onButtonPressed,
+                  onFieldChange: widget.onFieldChange,
                 )
           : null,
       onButtonPressed: widget.onButtonPressed,
@@ -459,7 +605,9 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
 
           // Sync FormBuilder internal state (needed for programmatic updates e.g. auto-select)
           if (field.fieldname != null && oldValue != value) {
-            _formKey.currentState?.patchValue({field.fieldname!: value ?? ''});
+            _formKey.currentState?.patchValue({
+              field.fieldname!: _normalizePatchedValue(field, value),
+            });
           }
 
           // If value changed, clear dependent link fields that depend on this field
@@ -481,6 +629,20 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
               value != null &&
               value.toString().trim().isNotEmpty) {
             _handleFetchFrom(field.fieldname!, value);
+          }
+
+          // Computed fields: call onFieldChange and patch hidden field values
+          if (oldValue != value &&
+              field.fieldname != null &&
+              widget.onFieldChange != null) {
+            final patches = widget.onFieldChange!(
+              field.fieldname!,
+              value,
+              Map<String, dynamic>.from(_formData),
+            );
+            if (patches != null && patches.isNotEmpty) {
+              _formData.addAll(patches);
+            }
           }
 
           // Trigger rebuild to update dependent fields
@@ -518,6 +680,11 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
     final formStyle = widget.style ?? DefaultFormStyle.standard;
 
     if (section.columns.isEmpty) return const SizedBox.shrink();
+
+    // Evaluate section-level depends_on — hide entire section if condition is false
+    if (!_shouldShowField(section.sectionField)) {
+      return const SizedBox.shrink();
+    }
 
     Widget content;
     if (section.columns.length == 1) {
