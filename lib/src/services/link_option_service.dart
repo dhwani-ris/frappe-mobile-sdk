@@ -54,6 +54,7 @@ class LinkOptionService {
     try {
       documents = await _client.doctype.list(
         doctype,
+        fields: ['*'],
         filters: normalizedFilters,
         limitPageLength: 1000,
       );
