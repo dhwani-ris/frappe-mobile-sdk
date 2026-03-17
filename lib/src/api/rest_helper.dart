@@ -108,11 +108,6 @@ class RestHelper {
       );
     }
 
-    final headers = _getHeaders();
-    if (method != 'GET' && body != null) {
-      headers['Content-Type'] = 'application/json';
-    }
-
     ApiTracer.traceRequest(
       method: method,
       url: uri.toString(),
@@ -123,6 +118,11 @@ class RestHelper {
     int attempts = 0;
     while (attempts < 3) {
       try {
+        final headers = _getHeaders();
+        if (method != 'GET' && body != null) {
+          headers['Content-Type'] = 'application/json';
+        }
+
         http.Response response;
         switch (method) {
           case 'GET':
