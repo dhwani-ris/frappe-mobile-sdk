@@ -28,6 +28,7 @@ class AuthService {
   static const Uuid _uuid = Uuid();
   FrappeClient? _client;
   bool _isAuthenticated = false;
+  bool _isRefreshingToken = false;
   AppDatabase? _database;
   List<String> _roles = [];
   String? _language;
@@ -567,51 +568,66 @@ class AuthService {
   }
 
   Future<bool> _tryRefreshMobileAuthToken() async {
+    if (_isRefreshingToken) {
+      return false;
+    }
+    _isRefreshingToken = true;
     // Try mobile auth refresh first
-    if (_database != null) {
-      try {
-        final token = await _database!.authTokenDao.getCurrentToken();
-        if (token != null && token.refreshToken.isNotEmpty) {
-          final baseUrl = await getBaseUrl();
-          if (baseUrl != null) {
-            // Call mobile_auth.refresh_token endpoint
-            try {
-              final result = await _client!.rest.call(
-                'mobile_auth.refresh_token',
-                args: {'refresh_token': token.refreshToken},
-              );
-              final response = result is Map<String, dynamic>
-                  ? (result['message'] is Map ? result['message'] : result)
-                  : <String, dynamic>{};
-              final newAccessToken = response['access_token'] as String?;
-              final newRefreshToken =
-                  response['refresh_token'] as String? ?? token.refreshToken;
-
-              if (newAccessToken != null && newAccessToken.isNotEmpty) {
-                final updatedToken = AuthTokenEntity(
-                  accessToken: newAccessToken,
-                  refreshToken: newRefreshToken,
-                  user: token.user,
-                  fullName: token.fullName,
-                  createdAt: token.createdAt,
+    try {
+      if (_database != null) {
+        try {
+          final token = await _database!.authTokenDao.getCurrentToken();
+          if (token != null && token.refreshToken.isNotEmpty) {
+            final baseUrl = await getBaseUrl();
+            if (baseUrl != null) {
+              // Ensure refresh call is not sent with an expired Bearer token
+              _client?.rest.setBearerToken(null);
+              // Call mobile_auth.refresh_token endpoint
+              try {
+                final result = await _client!.rest.call(
+                  'mobile_auth.refresh_token',
+                  args: {'refresh_token': token.refreshToken},
                 );
-                await _database!.authTokenDao.updateToken(updatedToken);
-                _client?.rest.setBearerToken(newAccessToken);
-                return true;
+                final response = result is Map<String, dynamic>
+                    ? (result['message'] is Map ? result['message'] : result)
+                    : <String, dynamic>{};
+                final newAccessToken = response['access_token'] as String?;
+                final newRefreshToken =
+                    response['refresh_token'] as String? ?? token.refreshToken;
+
+                if (newAccessToken != null && newAccessToken.isNotEmpty) {
+                  final updatedToken = AuthTokenEntity(
+                    accessToken: newAccessToken,
+                    refreshToken: newRefreshToken,
+                    user: token.user,
+                    fullName: token.fullName,
+                    createdAt: token.createdAt,
+                  );
+                  await _database!.authTokenDao.updateToken(updatedToken);
+                  _client?.rest.setBearerToken(newAccessToken);
+                  _isAuthenticated = true;
+                  return true;
+                }
+              } catch (_) {
+                // Refresh failed, clear tokens
+                await _database!.authTokenDao.deleteAll();
               }
-            } catch (_) {
-              // Refresh failed, clear tokens
-              await _database!.authTokenDao.deleteAll();
             }
           }
+        } catch (_) {
+          // Continue to OAuth refresh
         }
-      } catch (_) {
-        // Continue to OAuth refresh
       }
-    }
 
-    // Fallback to OAuth refresh
-    return await _tryRefreshOAuthToken();
+      // Fallback to OAuth refresh
+      final refreshed = await _tryRefreshOAuthToken();
+      if (!refreshed) {
+        _isAuthenticated = false;
+      }
+      return refreshed;
+    } finally {
+      _isRefreshingToken = false;
+    }
   }
 
   Future<bool> _tryRefreshOAuthToken() async {
