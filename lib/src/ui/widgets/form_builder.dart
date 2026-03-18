@@ -13,19 +13,19 @@ import 'fields/base_field.dart';
 import 'default_form_style.dart';
 
 /// Simple 2-arg callback for Button field. Used by [FrappeFormBuilder] and [renderForm].
-typedef ButtonPressedCallback = Future<void> Function(
-  DocField field,
-  Map<String, dynamic> formData,
-);
+typedef ButtonPressedCallback =
+    Future<void> Function(DocField field, Map<String, dynamic> formData);
 
 /// Callback when a Button field is pressed. Implement client-script logic (API calls, dialogs).
 /// Call [useDefault] to fall back to SDK default (server method from [field.options] when set).
 /// Used by [FormScreen] and [navigateToForm].
-typedef OnButtonPressedCallback = Future<void> Function(
-  DocField field,
-  Map<String, dynamic> formData,
-  Future<void> Function(DocField field, Map<String, dynamic> formData) useDefault,
-);
+typedef OnButtonPressedCallback =
+    Future<void> Function(
+      DocField field,
+      Map<String, dynamic> formData,
+      Future<void> Function(DocField field, Map<String, dynamic> formData)
+      useDefault,
+    );
 
 /// Customization options for form styling
 class FrappeFormStyle {
@@ -109,8 +109,14 @@ class FrappeFormBuilder extends StatefulWidget {
   /// Called once with the form's submit handler so the parent (e.g. FormScreen) can trigger save from AppBar.
   final void Function(void Function() submit)? registerSubmit;
 
+  /// If set, field labels, section titles and tab labels are passed through this (e.g. sdk.translations.translate).
+  final String Function(String)? translate;
+
   /// Called when a Button field is pressed. [FormScreen] adapts [OnButtonPressedCallback] to this.
   final ButtonPressedCallback? onButtonPressed;
+
+  /// Called when form data changes (any field value). Use to detect dirty state.
+  final void Function(Map<String, dynamic> currentData)? onFormDataChanged;
 
   const FrappeFormBuilder({
     super.key,
@@ -128,7 +134,9 @@ class FrappeFormBuilder extends StatefulWidget {
     this.fetchLinkedDocument,
     this.getMeta,
     this.registerSubmit,
+    this.translate,
     this.onButtonPressed,
+    this.onFormDataChanged,
   });
 
   @override
@@ -402,10 +410,24 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
     }
 
     final formStyle = widget.style ?? DefaultFormStyle.standard;
+    var decoration = formStyle.fieldDecoration?.call(field);
+    if (widget.translate != null && decoration != null) {
+      final labelText = widget.translate!(field.label ?? field.fieldname ?? '');
+      decoration = decoration.copyWith(
+        labelText: labelText,
+        hintText: field.placeholder != null
+            ? widget.translate!(field.placeholder!)
+            : decoration.hintText,
+        helperText: field.description != null
+            ? widget.translate!(field.description!)
+            : decoration.helperText,
+      );
+    }
     final fieldStyle = FieldStyle(
       labelStyle: formStyle.labelStyle,
       descriptionStyle: formStyle.descriptionStyle,
-      decoration: formStyle.fieldDecoration?.call(field),
+      decoration: decoration,
+      translate: widget.translate,
     );
 
     final effectiveReqd = _isFieldRequired(field);
@@ -459,7 +481,9 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
                   useLinkFieldCoordinator: widget.useLinkFieldCoordinator,
                   fileUrlBase: widget.fileUrlBase,
                   imageHeaders: widget.imageHeaders,
+                  // fetch linked document for child doctype.
                   fetchLinkedDocument: widget.fetchLinkedDocument,
+                  translate: widget.translate,
                   onButtonPressed: widget.onButtonPressed,
                 )
           : null,
@@ -479,9 +503,7 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
 
           // Sync FormBuilder internal state (needed for programmatic updates e.g. auto-select)
           if (field.fieldname != null && oldValue != value) {
-            _formKey.currentState?.patchValue({
-              field.fieldname!: value ?? '',
-            });
+            _formKey.currentState?.patchValue({field.fieldname!: value ?? ''});
           }
 
           // If value changed, clear dependent link fields that depend on this field
@@ -489,9 +511,10 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
             for (final otherField in widget.meta.fields) {
               if (otherField.fieldtype == 'Link' &&
                   otherField.linkFilters != null &&
-                  otherField.linkFilters!.contains(
-                    'eval:doc.${field.fieldname}',
-                  )) {
+                  // Check if other field's link filters depend on this field ignoring spaces
+                  RegExp(
+                    'eval\\s*:\\s*doc\\.${field.fieldname}',
+                  ).hasMatch(otherField.linkFilters ?? "")) {
                 _formData.remove(otherField.fieldname);
               }
             }
@@ -508,7 +531,10 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
           // Trigger rebuild to update dependent fields
           if (oldValue != value) {
             WidgetsBinding.instance.addPostFrameCallback((_) {
-              if (mounted) setState(() {});
+              if (mounted) {
+                setState(() {});
+                _emitFormDataChanged();
+              }
             });
           }
         });
@@ -594,7 +620,9 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
             SizedBox(
               width: double.infinity,
               child: Text(
-                section.sectionField.displayLabel,
+                widget.translate != null
+                    ? widget.translate!(section.sectionField.displayLabel)
+                    : section.sectionField.displayLabel,
                 style:
                     formStyle.sectionTitleStyle ??
                     Theme.of(context).textTheme.titleMedium?.copyWith(
@@ -738,6 +766,31 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
     widget.onSubmit?.call(completeFormData);
   }
 
+  /// Builds current form data (same structure as submit). Used for dirty detection.
+  Map<String, dynamic> _getCurrentFormData() {
+    final state = _formKey.currentState;
+    final formValues = state != null
+        ? Map<String, dynamic>.from(state.value)
+        : <String, dynamic>{};
+    formValues.addAll(_formData);
+    final complete = <String, dynamic>{};
+    for (final field in widget.meta.fields) {
+      if (field.fieldname != null && !field.hidden && field.isDataField) {
+        complete[field.fieldname!] =
+            formValues[field.fieldname] ??
+            widget.initialData?[field.fieldname] ??
+            field.defaultValue ??
+            (field.fieldtype == 'Check' ? 0 : '');
+      }
+    }
+    complete.addAll(formValues);
+    return complete;
+  }
+
+  void _emitFormDataChanged() {
+    widget.onFormDataChanged?.call(_getCurrentFormData());
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_tabs.isEmpty) {
@@ -789,7 +842,9 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
                   .map(
                     (tab) => Tab(
                       child: Text(
-                        tab.tabField.displayLabel,
+                        widget.translate != null
+                            ? widget.translate!(tab.tabField.displayLabel)
+                            : tab.tabField.displayLabel,
                         maxLines: formStyle.tabTitleMaxLines ?? 2,
                         overflow: TextOverflow.ellipsis,
                         softWrap: true,

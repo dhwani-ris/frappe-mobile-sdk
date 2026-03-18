@@ -5,11 +5,14 @@ import '../api/utils.dart';
 import '../models/doc_field.dart';
 import '../models/doc_type_meta.dart';
 import '../models/document.dart';
+import '../models/workflow_transition.dart';
 import '../services/offline_repository.dart';
 import '../services/sync_service.dart';
 import '../services/link_option_service.dart';
 import '../services/meta_service.dart';
-import 'widgets/form_builder.dart' show FrappeFormBuilder, FrappeFormStyle, OnButtonPressedCallback;
+import '../services/workflow_service.dart';
+import 'widgets/form_builder.dart'
+    show FrappeFormBuilder, FrappeFormStyle, OnButtonPressedCallback;
 import 'sync_status_screen.dart';
 
 /// Screen for displaying and editing a Frappe document form.
@@ -39,6 +42,9 @@ class FormScreen extends StatefulWidget {
   final bool? canSave;
   final bool? canDelete;
 
+  /// If set, doctype label and field labels are translated (e.g. sdk.translations.translate).
+  final String Function(String)? translate;
+
   /// Optional pre-filled data for new documents (overrides document?.data when document is null).
   final Map<String, dynamic>? initialData;
 
@@ -65,6 +71,7 @@ class FormScreen extends StatefulWidget {
     this.readOnly = false,
     this.canSave,
     this.canDelete,
+    this.translate,
     this.initialData,
     this.onButtonPressed,
     this.useLinkFieldCoordinator = true,
@@ -78,6 +85,220 @@ class _FormScreenState extends State<FormScreen> {
   bool _isSaving = false;
   String? _errorMessage;
   void Function()? _triggerSubmit;
+
+  List<WorkflowTransition>? _workflowTransitions;
+  bool _workflowLoading = false;
+  Map<String, dynamic>? _workflowUpdatedDocData;
+  late WorkflowService? _workflowService;
+
+  /// Baseline form data for dirty check. When current form data differs, show Save.
+  Map<String, dynamic>? _baselineFormData;
+  bool _isFormDirty = false;
+
+  Map<String, dynamic> get _currentDocData =>
+      _workflowUpdatedDocData ??
+      widget.document?.data ??
+      widget.initialData ??
+      {};
+
+  /// True if document is submitted (docstatus == 1). Form is read-only when submitted.
+  bool get _isSubmitted {
+    final d = _currentDocData['docstatus'];
+    if (d == null) return false;
+    if (d == 1) return true;
+    if (d == '1') return true;
+    return false;
+  }
+
+  static bool _formDataEquals(
+    Map<String, dynamic> a,
+    Map<String, dynamic> b,
+    DocTypeMeta meta,
+  ) {
+    String norm(DocField f, dynamic v) {
+      if (f.fieldtype == 'Check') {
+        if (v == null) return '0';
+        if (v == true) return '1';
+        if (v == false) return '0';
+        final s = v.toString().trim();
+        if (s.isEmpty) return '0';
+        return (s == '1' || s.toLowerCase() == 'true') ? '1' : '0';
+      }
+      return v?.toString().trim() ?? '';
+    }
+
+    for (final f in meta.fields) {
+      final k = f.fieldname;
+      if (k == null || k.isEmpty || f.hidden || !f.isDataField) continue;
+      final sa = norm(f, a[k]);
+      final sb = norm(f, b[k]);
+      if (sa != sb) return false;
+    }
+    return true;
+  }
+
+  void _onFormDataChanged(Map<String, dynamic> currentData) {
+    final baseline = _baselineFormData ?? _currentDocData;
+    final dirty = !_formDataEquals(currentData, baseline, widget.meta);
+    if (mounted && dirty != _isFormDirty) {
+      setState(() => _isFormDirty = dirty);
+    }
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _workflowService = widget.api != null ? WorkflowService(widget.api!) : null;
+    _baselineFormData = Map<String, dynamic>.from(_currentDocData);
+    _loadWorkflowTransitions();
+  }
+
+  @override
+  void didUpdateWidget(covariant FormScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.document?.serverId != widget.document?.serverId ||
+        oldWidget.api != widget.api ||
+        oldWidget.document?.data != widget.document?.data ||
+        oldWidget.initialData != widget.initialData) {
+      _workflowTransitions = null;
+      _workflowUpdatedDocData = null;
+      _workflowService = widget.api != null
+          ? WorkflowService(widget.api!)
+          : null;
+      _baselineFormData = Map<String, dynamic>.from(_currentDocData);
+      _isFormDirty = false;
+      _loadWorkflowTransitions();
+    }
+  }
+
+  Future<void> _loadWorkflowTransitions() async {
+    if (!widget.meta.hasWorkflow ||
+        widget.api == null ||
+        widget.document?.serverId == null) {
+      return;
+    }
+    setState(() => _workflowLoading = true);
+    try {
+      final list = await _workflowService!.getTransitions(
+        widget.meta.name,
+        widget.document!.serverId!,
+      );
+      if (mounted) {
+        setState(() {
+          _workflowTransitions = list;
+          _workflowLoading = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _workflowTransitions = [];
+          _workflowLoading = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _applyWorkflowAction(String action) async {
+    if (widget.api == null || widget.document?.serverId == null) return;
+    try {
+      final updated = await _workflowService!.applyWorkflow(
+        widget.meta.name,
+        widget.document!.serverId!,
+        action,
+      );
+      await widget.repository.updateDocumentData(
+        widget.document!.localId,
+        updated,
+      );
+      if (mounted) {
+        setState(() {
+          _workflowUpdatedDocData = updated;
+          _baselineFormData = Map<String, dynamic>.from(updated);
+          _isFormDirty = false;
+        });
+        await _loadWorkflowTransitions();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Workflow: $action'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(toUserFriendlyMessage(e)),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _showWorkflowActionsSheet() async {
+    if (_workflowLoading) {
+      return;
+    }
+    final stateField = widget.meta.workflowStateField;
+    final currentState = stateField != null
+        ? _currentDocData[stateField]?.toString()
+        : null;
+
+    await showModalBottomSheet<void>(
+      context: context,
+      builder: (context) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              ListTile(
+                title: Text(
+                  widget.translate != null
+                      ? widget.translate!('Current State')
+                      : 'Current State',
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                ),
+                subtitle: Text(
+                  currentState?.isNotEmpty == true ? currentState! : '—',
+                ),
+              ),
+              const Divider(height: 1),
+              if (_workflowTransitions == null || _workflowTransitions!.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 12,
+                  ),
+                  child: Text(
+                    widget.translate != null
+                        ? widget.translate!(
+                            'No workflow actions available for this state.',
+                          )
+                        : 'No workflow actions available for this state.',
+                    style: Theme.of(context).textTheme.bodyMedium,
+                  ),
+                )
+              else
+                ..._workflowTransitions!.map((t) {
+                  return ListTile(
+                    title: Text(t.action),
+                    onTap: () {
+                      Navigator.pop(context);
+                      _applyWorkflowAction(t.action);
+                    },
+                  );
+                }),
+            ],
+          ),
+        );
+      },
+    );
+  }
 
   Future<void> _handleButtonPressed(
     DocField field,
@@ -172,6 +393,7 @@ class _FormScreenState extends State<FormScreen> {
 
     try {
       if (widget.api != null) {
+        Map<String, dynamic>? savedData;
         // Server-first: create/update on server, then update local
         if (widget.document == null) {
           if (widget.getMobileUuid != null) {
@@ -202,6 +424,9 @@ class _FormScreenState extends State<FormScreen> {
               serverId: serverName,
               data: merged,
             );
+            savedData = merged;
+          } else {
+            savedData = Map<String, dynamic>.from(payload);
           }
         } else {
           final existingData = Map<String, dynamic>.from(widget.document!.data);
@@ -229,8 +454,13 @@ class _FormScreenState extends State<FormScreen> {
             widget.document!.localId,
             existingData,
           );
+          savedData = existingData;
         }
         if (mounted) {
+          setState(() {
+            _baselineFormData = savedData!;
+            _isFormDirty = false;
+          });
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
               content: Text('Saved successfully'),
@@ -338,6 +568,15 @@ class _FormScreenState extends State<FormScreen> {
       }
 
       if (mounted) {
+        final savedData =
+            widget.document == null
+                  ? Map<String, dynamic>.from(payload)
+                  : Map<String, dynamic>.from(widget.document!.data)
+              ..addAll(payload);
+        setState(() {
+          _baselineFormData = savedData;
+          _isFormDirty = false;
+        });
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Document saved successfully'),
@@ -504,13 +743,22 @@ class _FormScreenState extends State<FormScreen> {
     final allowDelete =
         (widget.canDelete ?? (widget.document != null)) &&
         !widget.readOnly &&
-        widget.document != null;
+        widget.document != null &&
+        !_isSubmitted;
+
+    final showSave = allowSave && (_isFormDirty || widget.document == null);
+
+    final effectiveReadOnly = _isSaving || widget.readOnly || _isSubmitted;
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.meta.label ?? widget.meta.name),
+        title: Text(
+          widget.translate != null
+              ? widget.translate!(widget.meta.label ?? widget.meta.name)
+              : (widget.meta.label ?? widget.meta.name),
+        ),
         actions: [
-          if (allowSave)
+          if (showSave)
             TextButton.icon(
               key: const Key('form_save_button'),
               onPressed: _isSaving ? null : () => _triggerSubmit?.call(),
@@ -553,6 +801,16 @@ class _FormScreenState extends State<FormScreen> {
                     ],
                   ),
                 ),
+              if (widget.meta.hasWorkflow &&
+                  widget.document != null &&
+                  widget.api != null)
+                _WorkflowHeader(
+                  meta: widget.meta,
+                  documentData: _currentDocData,
+                  loading: _workflowLoading,
+                  translate: widget.translate,
+                  onShowActions: _showWorkflowActionsSheet,
+                ),
               Expanded(
                 child: FrappeFormBuilder(
               key: widget.document != null
@@ -560,9 +818,12 @@ class _FormScreenState extends State<FormScreen> {
                   : const ValueKey('form_new'),
               meta: widget.meta,
               initialData:
-                  widget.document?.data ?? widget.initialData,
+                  _workflowUpdatedDocData ??
+                  widget.document?.data ??
+                  widget.initialData,
               onSubmit: _handleSubmit,
-              readOnly: _isSaving || widget.readOnly,
+              readOnly: effectiveReadOnly,
+              onFormDataChanged: _onFormDataChanged,
               linkOptionService: widget.linkOptionService,
               useLinkFieldCoordinator: widget.useLinkFieldCoordinator,
               uploadFile: widget.api != null
@@ -581,12 +842,13 @@ class _FormScreenState extends State<FormScreen> {
               registerSubmit: (trigger) => _triggerSubmit = trigger,
               onButtonPressed: widget.onButtonPressed != null
                   ? (field, formData) => widget.onButtonPressed!(
-                        field,
-                        formData,
-                        _handleButtonPressed,
-                      )
+                      field,
+                      formData,
+                      _handleButtonPressed,
+                    )
                   : _handleButtonPressed,
               style: widget.style,
+              translate: widget.translate,
             ),
               ),
             ],
@@ -619,6 +881,74 @@ class _FormScreenState extends State<FormScreen> {
                     ),
                   ),
                 ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _WorkflowHeader extends StatelessWidget {
+  const _WorkflowHeader({
+    required this.meta,
+    required this.documentData,
+    required this.loading,
+    this.translate,
+    required this.onShowActions,
+  });
+
+  final DocTypeMeta meta;
+  final Map<String, dynamic> documentData;
+  final bool loading;
+  final String Function(String)? translate;
+  final VoidCallback onShowActions;
+
+  @override
+  Widget build(BuildContext context) {
+    final stateField = meta.workflowStateField;
+    final currentState = stateField != null
+        ? documentData[stateField]?.toString()
+        : null;
+    final stateLabel = currentState?.isNotEmpty == true ? currentState! : '—';
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.blue.shade50,
+        border: Border(bottom: BorderSide(color: Colors.blue.shade200)),
+      ),
+      child: Row(
+        children: [
+          Text(
+            translate != null ? translate!('Status') : 'Status',
+            style: TextStyle(
+              fontWeight: FontWeight.w600,
+              color: Colors.blue.shade900,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Chip(
+            label: Text(
+              stateLabel,
+              style: TextStyle(fontSize: 12, color: Colors.blue.shade900),
+            ),
+            backgroundColor: Colors.blue.shade100,
+          ),
+          const Spacer(),
+          if (loading)
+            const SizedBox(
+              height: 20,
+              width: 20,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          else
+            TextButton.icon(
+              onPressed: onShowActions,
+              icon: const Icon(Icons.playlist_play),
+              label: Text(
+                translate != null ? translate!('Actions') : 'Actions',
               ),
             ),
         ],

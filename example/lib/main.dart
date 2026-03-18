@@ -36,9 +36,12 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
+  FrappeSDK? _sdk;
   AppDatabase? _database;
   AuthService? _authService;
   MetaService? _metaService;
+  PermissionService? _permissionService;
+  TranslationService? _translationService;
   OfflineRepository? _repository;
   SyncService? _syncService;
   LinkOptionService? _linkOptionService;
@@ -70,6 +73,7 @@ class _HomeScreenState extends State<HomeScreen> {
         baseUrl: config.AppConstants.baseUrl,
         doctypes: const [],
         loginConfig: LoginConfig(
+          enableMobileLogin: true,
           enablePasswordLogin: true,
           enableOAuth: true,
           oauthClientId: config.AppConstants.oauthClientId,
@@ -81,9 +85,12 @@ class _HomeScreenState extends State<HomeScreen> {
       final sdk = FrappeSDK(baseUrl: _appConfig!.baseUrl);
       await sdk.initialize(true);
 
+      _sdk = sdk;
       _database = sdk.database;
       _authService = sdk.auth;
       _metaService = sdk.meta;
+      _permissionService = sdk.permissions;
+      _translationService = sdk.translations;
       _repository = sdk.repository;
       _syncService = sdk.sync;
       _linkOptionService = sdk.linkOptions;
@@ -239,6 +246,11 @@ class _HomeScreenState extends State<HomeScreen> {
         initialBaseUrl: _appConfig?.baseUrl,
         onLoginSuccess: _handleLoginSuccess,
         database: _database,
+        passwordLogin: _sdk != null ? (u, p) => _sdk!.login(u, p) : null,
+        sendLoginOtp: _sdk != null ? (m) => _sdk!.sendLoginOtp(m) : null,
+        verifyLoginOtp: _sdk != null
+            ? (t, o) => _sdk!.verifyLoginOtp(t, o)
+            : null,
       );
     }
 
@@ -402,6 +414,10 @@ class _HomeScreenState extends State<HomeScreen> {
                             _authService!.getOrCreateMobileUuid(),
                         initialDocuments: docs,
                         userRoles: _authService?.roles,
+                        permissionService: _permissionService,
+                        translate: _translationService != null
+                            ? (s) => _translationService!.translate(s)
+                            : null,
                       ),
                     ),
                   );

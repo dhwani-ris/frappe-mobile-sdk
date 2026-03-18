@@ -8,16 +8,33 @@ import '../constants/oauth_constants.dart';
 import '../database/app_database.dart';
 import '../models/app_config.dart';
 import '../services/auth_service.dart';
+import 'login_screen_style.dart';
 
-/// Login screen for Frappe (credentials or OAuth).
+/// Login screen for Frappe (credentials, OAuth, or mobile OTP).
 ///
 /// Login methods and OAuth credentials come from [AppConfig.loginConfig].
-/// OAuth uses [oauthRedirectUri]; configure this in Frappe OAuth Client.
+/// When [enableMobileLogin] is true in config, provide [sendLoginOtp] and
+/// [verifyLoginOtp] (e.g. from SDK) to enable mobile OTP login.
 class LoginScreen extends StatefulWidget {
   final AuthService authService;
   final AppConfig? appConfig;
   final String? initialBaseUrl;
   final VoidCallback? onLoginSuccess;
+
+  /// When set, used for password login (e.g. [FrappeSDK.login]) so permissions and locale are applied.
+  final Future<Map<String, dynamic>?> Function(
+    String username,
+    String password,
+  )?
+  passwordLogin;
+
+  /// When set with [verifyLoginOtp], enables mobile OTP login. E.g. [FrappeSDK.sendLoginOtp].
+  final Future<Map<String, dynamic>?> Function(String mobileNo)? sendLoginOtp;
+
+  /// When set with [sendLoginOtp], enables mobile OTP login. E.g. [FrappeSDK.verifyLoginOtp].
+  final Future<Map<String, dynamic>?> Function(String tmpId, String otp)?
+  verifyLoginOtp;
+
   final AppDatabase? database;
   /// Pre-fill username (e.g. for demo automation)
   final String? initialUsername;
@@ -26,16 +43,23 @@ class LoginScreen extends StatefulWidget {
   /// When true, automatically trigger login after first frame if credentials are pre-filled
   final bool autoLogin;
 
+  /// Optional styling (title, buttons, inputs, etc.). Null uses theme defaults.
+  final LoginScreenStyle? style;
+
   const LoginScreen({
     super.key,
     required this.authService,
     this.appConfig,
     this.initialBaseUrl,
     this.onLoginSuccess,
+    this.passwordLogin,
+    this.sendLoginOtp,
+    this.verifyLoginOtp,
     this.database,
     this.initialUsername,
     this.initialPassword,
     this.autoLogin = false,
+    this.style,
   });
 
   @override
@@ -47,11 +71,18 @@ class _LoginScreenState extends State<LoginScreen> {
   final _baseUrlController = TextEditingController();
   final _usernameController = TextEditingController();
   final _passwordController = TextEditingController();
+  final _mobileController = TextEditingController();
+  final _otpController = TextEditingController();
   final _appLinks = AppLinks();
   StreamSubscription<Uri>? _linkSubscription;
   bool _isLoading = false;
   String? _errorMessage;
   String? _oauthCodeVerifier;
+  String? _otpTmpId;
+  bool _otpSent = false;
+
+  /// When true, mobile OTP section is expanded. When password login is disabled, starts true.
+  bool _mobileSectionExpanded = false;
 
   String get _baseUrl {
     if (widget.appConfig != null) return widget.appConfig!.baseUrl;
@@ -65,6 +96,11 @@ class _LoginScreenState extends State<LoginScreen> {
       widget.appConfig?.enablePasswordLogin ?? true;
 
   bool get _enableOAuth => widget.appConfig?.enableOAuth ?? false;
+
+  bool get _enableMobileLogin => widget.appConfig?.enableMobileLogin ?? false;
+
+  bool get _hasMobileOtpCallbacks =>
+      widget.sendLoginOtp != null && widget.verifyLoginOtp != null;
 
   String? get _oauthClientId => widget.appConfig?.oauthClientId;
 
@@ -82,6 +118,8 @@ class _LoginScreenState extends State<LoginScreen> {
     if (widget.initialPassword != null) {
       _passwordController.text = widget.initialPassword!;
     }
+    // When password login is disabled, show mobile OTP section expanded by default
+    _mobileSectionExpanded = !_enablePasswordLogin;
     _checkInitialUri();
     if (widget.autoLogin &&
         widget.initialUsername != null &&
@@ -160,6 +198,8 @@ class _LoginScreenState extends State<LoginScreen> {
     _baseUrlController.dispose();
     _usernameController.dispose();
     _passwordController.dispose();
+    _mobileController.dispose();
+    _otpController.dispose();
     super.dispose();
   }
 
@@ -219,21 +259,87 @@ class _LoginScreenState extends State<LoginScreen> {
       _errorMessage = null;
     });
     try {
-      final baseUrl = _baseUrl;
-      if (widget.authService.client == null) {
-        widget.authService.initialize(baseUrl, database: widget.database);
-      }
+      final username = _usernameController.text.trim();
+      final password = _passwordController.text;
 
-      if (widget.database == null) {
+      if (widget.passwordLogin != null) {
+        await widget.passwordLogin!(username, password);
+      } else {
+        final baseUrl = _baseUrl;
+        if (widget.authService.client == null) {
+          widget.authService.initialize(baseUrl, database: widget.database);
+        }
+        if (widget.database == null) {
+          throw Exception(
+            'Database not set. LoginScreen requires database for stateless login.',
+          );
+        }
+        await widget.authService.login(username, password);
+      }
+      if (mounted) {
+        await Future.delayed(const Duration(milliseconds: 100));
+        widget.onLoginSuccess?.call();
+      }
+    } catch (e) {
+      setState(() {
+        _errorMessage = e.toString().replaceAll('Exception: ', '');
+        _isLoading = false;
+      });
+    }
+  }
+
+  Future<void> _handleSendOtp() async {
+    final mobileNo = _mobileController.text.trim();
+    if (mobileNo.isEmpty) {
+      setState(() => _errorMessage = 'Enter mobile number');
+      return;
+    }
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+      _otpSent = false;
+      _otpTmpId = null;
+    });
+    try {
+      if (widget.authService.client == null) {
+        widget.authService.initialize(_baseUrl, database: widget.database);
+      }
+      final response = await widget.sendLoginOtp!(mobileNo);
+      if (response == null) {
+        throw Exception('Send OTP failed');
+      }
+      final tmpId = response['tmp_id']?.toString();
+      if (tmpId == null || tmpId.isEmpty) {
         throw Exception(
-          'Database not set. LoginScreen requires database for stateless login.',
+          response['message']?.toString() ?? 'No tmp_id in response',
         );
       }
+      if (mounted) {
+        setState(() {
+          _otpTmpId = tmpId;
+          _otpSent = true;
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _errorMessage = e.toString().replaceAll('Exception: ', '');
+          _isLoading = false;
+        });
+      }
+    }
+  }
 
-      await widget.authService.login(
-        _usernameController.text.trim(),
-        _passwordController.text,
-      );
+  Future<void> _handleVerifyOtp() async {
+    final otp = _otpController.text.trim();
+    if (otp.isEmpty || _otpTmpId == null) return;
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
+    try {
+      await widget.verifyLoginOtp!(_otpTmpId!, otp);
       if (mounted) {
         await Future.delayed(const Duration(milliseconds: 100));
         widget.onLoginSuccess?.call();
@@ -248,7 +354,10 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final hasAnyLogin = _enablePasswordLogin || _enableOAuth;
+    final hasAnyLogin =
+        _enablePasswordLogin ||
+        _enableOAuth ||
+        (_enableMobileLogin && _hasMobileOtpCallbacks);
     if (!hasAnyLogin) {
       return Scaffold(
         appBar: AppBar(title: const Text('Frappe Login')),
@@ -265,34 +374,52 @@ class _LoginScreenState extends State<LoginScreen> {
       );
     }
 
+    final style = widget.style;
+    final padding = style?.padding ?? const EdgeInsets.all(24.0);
+    final showOr =
+        _enablePasswordLogin &&
+        !_mobileSectionExpanded &&
+        (_enableMobileLogin && _hasMobileOtpCallbacks || _enableOAuth);
+
     return Scaffold(
       appBar: AppBar(title: const Text('Frappe Login')),
       body: Center(
         child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24.0),
+          padding: padding,
           child: Form(
             key: _formKey,
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const Icon(Icons.login, size: 80, color: Colors.blue),
+                Icon(
+                  Icons.login,
+                  size: style?.iconSize ?? 80,
+                  color: style?.iconColor ?? Colors.blue,
+                ),
                 const SizedBox(height: 32),
-                const Text(
+                Text(
                   'Login to Frappe',
                   textAlign: TextAlign.center,
-                  style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+                  style:
+                      style?.titleStyle ??
+                      const TextStyle(
+                        fontSize: 24,
+                        fontWeight: FontWeight.bold,
+                      ),
                 ),
                 const SizedBox(height: 32),
                 if (_showBaseUrlInput)
                   TextFormField(
                     controller: _baseUrlController,
-                    decoration: const InputDecoration(
-                      labelText: 'Base URL',
-                      hintText: 'https://your-site.com',
-                      prefixIcon: Icon(Icons.link),
-                      border: OutlineInputBorder(),
-                    ),
+                    decoration:
+                        style?.baseUrlDecoration ??
+                        const InputDecoration(
+                          labelText: 'Base URL',
+                          hintText: 'https://your-site.com',
+                          prefixIcon: Icon(Icons.link),
+                          border: OutlineInputBorder(),
+                        ),
                     keyboardType: TextInputType.url,
                     validator: (value) {
                       if (value == null || value.isEmpty) {
@@ -306,14 +433,17 @@ class _LoginScreenState extends State<LoginScreen> {
                     },
                   ),
                 if (_showBaseUrlInput) const SizedBox(height: 16),
-                if (_enablePasswordLogin) ...[
+                // Password login section (hidden when mobile OTP section is expanded)
+                if (_enablePasswordLogin && !_mobileSectionExpanded) ...[
                   TextFormField(
                     controller: _usernameController,
-                    decoration: const InputDecoration(
-                      labelText: 'Username / Email',
-                      prefixIcon: Icon(Icons.person),
-                      border: OutlineInputBorder(),
-                    ),
+                    decoration:
+                        style?.usernameDecoration ??
+                        const InputDecoration(
+                          labelText: 'Username / Email',
+                          prefixIcon: Icon(Icons.person),
+                          border: OutlineInputBorder(),
+                        ),
                     keyboardType: TextInputType.emailAddress,
                     validator: (value) {
                       if (value == null || value.isEmpty) {
@@ -325,11 +455,13 @@ class _LoginScreenState extends State<LoginScreen> {
                   const SizedBox(height: 16),
                   TextFormField(
                     controller: _passwordController,
-                    decoration: const InputDecoration(
-                      labelText: 'Password',
-                      prefixIcon: Icon(Icons.lock),
-                      border: OutlineInputBorder(),
-                    ),
+                    decoration:
+                        style?.passwordDecoration ??
+                        const InputDecoration(
+                          labelText: 'Password',
+                          prefixIcon: Icon(Icons.lock),
+                          border: OutlineInputBorder(),
+                        ),
                     obscureText: true,
                     validator: (value) {
                       if (value == null || value.isEmpty) {
@@ -338,13 +470,171 @@ class _LoginScreenState extends State<LoginScreen> {
                       return null;
                     },
                   ),
+                  const SizedBox(height: 24),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      onPressed: _isLoading ? null : _handleLogin,
+                      style:
+                          style?.loginButtonStyle ??
+                          ElevatedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(vertical: 16),
+                            minimumSize: const Size(double.infinity, 48),
+                          ),
+                      child: _isLoading && !_enableOAuth
+                          ? const SizedBox(
+                              height: 20,
+                              width: 20,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Text('Login'),
+                    ),
+                  ),
                 ],
+                // OR divider when password is enabled and at least one other method exists
+                if (showOr) ...[
+                  const SizedBox(height: 24),
+                  Row(
+                    children: [
+                      const Expanded(child: Divider()),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        child: Text(
+                          'OR',
+                          style:
+                              style?.orDividerTextStyle ??
+                              Theme.of(context).textTheme.titleSmall?.copyWith(
+                                color: Colors.grey,
+                              ),
+                        ),
+                      ),
+                      const Expanded(child: Divider()),
+                    ],
+                  ),
+                  const SizedBox(height: 24),
+                ],
+                // Mobile OTP: either expanded section or single "Login with mobile" button
+                if (_enableMobileLogin && _hasMobileOtpCallbacks) ...[
+                  if (!_mobileSectionExpanded)
+                    SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton.icon(
+                        onPressed: _isLoading
+                            ? null
+                            : () =>
+                                  setState(() => _mobileSectionExpanded = true),
+                        style: style?.mobileButtonStyle,
+                        icon: const Icon(Icons.phone),
+                        label: const Text('Login with mobile'),
+                      ),
+                    ),
+                  if (_mobileSectionExpanded) ...[
+                    if (_enablePasswordLogin)
+                      Text(
+                        'Login with mobile',
+                        style: Theme.of(context).textTheme.titleSmall,
+                      ),
+                    if (_enablePasswordLogin) const SizedBox(height: 12),
+                    TextFormField(
+                      controller: _mobileController,
+                      decoration:
+                          style?.mobileDecoration ??
+                          const InputDecoration(
+                            labelText: 'Mobile number',
+                            hintText: '+15551234567',
+                            prefixIcon: Icon(Icons.phone),
+                            border: OutlineInputBorder(),
+                          ),
+                      keyboardType: TextInputType.phone,
+                      enabled: !_otpSent && !_isLoading,
+                    ),
+                    if (!_otpSent) ...[
+                      const SizedBox(height: 12),
+                      SizedBox(
+                        width: double.infinity,
+                        child: OutlinedButton(
+                          onPressed: _isLoading ? null : _handleSendOtp,
+                          child: const Text('Send OTP'),
+                        ),
+                      ),
+                    ] else ...[
+                      const SizedBox(height: 12),
+                      TextFormField(
+                        controller: _otpController,
+                        decoration:
+                            style?.otpDecoration ??
+                            const InputDecoration(
+                              labelText: 'OTP',
+                              hintText: '123456',
+                              prefixIcon: Icon(Icons.pin),
+                              border: OutlineInputBorder(),
+                            ),
+                        keyboardType: TextInputType.number,
+                        maxLength: 6,
+                      ),
+                      const SizedBox(height: 12),
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton(
+                          onPressed: _isLoading ? null : _handleVerifyOtp,
+                          child: _isLoading
+                              ? const SizedBox(
+                                  height: 20,
+                                  width: 20,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : const Text('Verify OTP'),
+                        ),
+                      ),
+                      TextButton(
+                        onPressed: _isLoading
+                            ? null
+                            : () {
+                                setState(() {
+                                  _otpSent = false;
+                                  _otpTmpId = null;
+                                  _otpController.clear();
+                                });
+                              },
+                        child: const Text('Change number'),
+                      ),
+                    ],
+                    if (_enablePasswordLogin)
+                      TextButton(
+                        onPressed: () =>
+                            setState(() => _mobileSectionExpanded = false),
+                        child: const Text('Back to password'),
+                      ),
+                  ],
+                  if (_enableMobileLogin &&
+                      _hasMobileOtpCallbacks &&
+                      _enableOAuth)
+                    const SizedBox(height: 16),
+                ],
+                // OAuth button
+                if (_enableOAuth)
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.tonalIcon(
+                      onPressed: _isLoading ? null : _startOAuth,
+                      style:
+                          style?.oauthButtonStyle ??
+                          FilledButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(vertical: 16),
+                            minimumSize: const Size(double.infinity, 48),
+                          ),
+                      icon: const Icon(Icons.login),
+                      label: const Text('Login with OAuth'),
+                    ),
+                  ),
                 if (_errorMessage != null) ...[
                   const SizedBox(height: 16),
                   Container(
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
-                      color: Colors.red[50],
+                      color: style?.errorBackgroundColor ?? Colors.red[50],
                       borderRadius: BorderRadius.circular(8),
                       border: Border.all(color: Colors.red),
                     ),
@@ -355,7 +645,9 @@ class _LoginScreenState extends State<LoginScreen> {
                         Expanded(
                           child: Text(
                             _errorMessage!,
-                            style: const TextStyle(color: Colors.red),
+                            style:
+                                style?.errorTextStyle ??
+                                const TextStyle(color: Colors.red),
                           ),
                         ),
                       ],
@@ -378,44 +670,6 @@ class _LoginScreenState extends State<LoginScreen> {
                       ),
                     ),
                   ),
-                if (!_isLoading || _enablePasswordLogin) ...[
-                  const SizedBox(height: 24),
-                  if (_enablePasswordLogin)
-                    SizedBox(
-                      width: double.infinity,
-                      child: ElevatedButton(
-                        onPressed: _isLoading ? null : _handleLogin,
-                        style: ElevatedButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                          minimumSize: const Size(double.infinity, 48),
-                        ),
-                        child: _isLoading && !_enableOAuth
-                            ? const SizedBox(
-                                height: 20,
-                                width: 20,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                ),
-                              )
-                            : const Text('Login'),
-                      ),
-                    ),
-                  if (_enablePasswordLogin && _enableOAuth)
-                    const SizedBox(height: 16),
-                  if (_enableOAuth)
-                    SizedBox(
-                      width: double.infinity,
-                      child: FilledButton.tonalIcon(
-                        onPressed: _isLoading ? null : _startOAuth,
-                        icon: const Icon(Icons.login),
-                        label: const Text('Login with OAuth'),
-                        style: FilledButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                          minimumSize: const Size(double.infinity, 48),
-                        ),
-                      ),
-                    ),
-                ],
               ],
             ),
           ),

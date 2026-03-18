@@ -9,6 +9,7 @@ import '../services/offline_repository.dart';
 import '../services/sync_service.dart';
 import '../services/link_option_service.dart';
 import '../services/meta_service.dart';
+import '../services/permission_service.dart';
 import 'form_screen.dart';
 import 'widgets/form_builder.dart' show OnButtonPressedCallback;
 
@@ -25,8 +26,14 @@ class DocumentListScreen extends StatefulWidget {
   final FrappeClient? api;
   final Future<String?> Function()? getMobileUuid;
 
-  /// Optional: current user's roles for permission evaluation.
+  /// Optional: current user's roles for permission evaluation (fallback when [permissionService] is null).
   final List<String>? userRoles;
+
+  /// Optional: when set, create/write/delete are resolved from backend permissions (login / mobile_auth.permissions).
+  final PermissionService? permissionService;
+
+  /// If set, doctype label and field labels are translated (e.g. sdk.translations.translate).
+  final String Function(String)? translate;
 
   /// Optional initial documents; if null, list is fetched on load.
   final List<Document>? initialDocuments;
@@ -46,6 +53,8 @@ class DocumentListScreen extends StatefulWidget {
     this.getMobileUuid,
     this.initialDocuments,
     this.userRoles,
+    this.permissionService,
+    this.translate,
     this.onButtonPressed,
   });
 
@@ -64,11 +73,18 @@ class _DocumentListScreenState extends State<DocumentListScreen> {
   int _page = 0;
   static const int _pageSize = 20;
 
+  bool? _permCreate;
+  bool? _permWrite;
+  bool? _permDelete;
+
   bool get _canCreate =>
+      _permCreate ??
       widget.meta.hasPermission('create', userRoles: widget.userRoles);
   bool get _canWrite =>
+      _permWrite ??
       widget.meta.hasPermission('write', userRoles: widget.userRoles);
   bool get _canDelete =>
+      _permDelete ??
       widget.meta.hasPermission('delete', userRoles: widget.userRoles);
 
   @override
@@ -83,7 +99,22 @@ class _DocumentListScreenState extends State<DocumentListScreen> {
         _page = 0;
       });
     });
+    _loadPermissions();
     _pullDocuments();
+  }
+
+  Future<void> _loadPermissions() async {
+    final ps = widget.permissionService;
+    if (ps == null) return;
+    final c = await ps.canCreate(widget.doctype);
+    final w = await ps.canWrite(widget.doctype);
+    final d = await ps.canDelete(widget.doctype);
+    if (!mounted) return;
+    setState(() {
+      _permCreate = c;
+      _permWrite = w;
+      _permDelete = d;
+    });
   }
 
   @override
@@ -94,14 +125,17 @@ class _DocumentListScreenState extends State<DocumentListScreen> {
 
   String _getFieldLabel(String fieldname) {
     final field = widget.meta.getField(fieldname);
+    String raw;
     if (field != null && field.label != null && field.label!.isNotEmpty) {
-      return field.label!;
+      raw = field.label!;
+    } else {
+      raw = fieldname
+          .replaceAll('_', ' ')
+          .split(' ')
+          .map((w) => w.isEmpty ? '' : w[0].toUpperCase() + w.substring(1))
+          .join(' ');
     }
-    return fieldname
-        .replaceAll('_', ' ')
-        .split(' ')
-        .map((w) => w.isEmpty ? '' : w[0].toUpperCase() + w.substring(1))
-        .join(' ');
+    return widget.translate != null ? widget.translate!(raw) : raw;
   }
 
   String _docTitle(Document doc) {
@@ -181,7 +215,11 @@ class _DocumentListScreenState extends State<DocumentListScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.meta.label ?? widget.doctype),
+        title: Text(
+          widget.translate != null
+              ? widget.translate!(widget.meta.label ?? widget.doctype)
+              : (widget.meta.label ?? widget.doctype),
+        ),
         actions: [
           PopupMenuButton<String>(
             icon: const Icon(Icons.sort),
@@ -309,12 +347,14 @@ class _DocumentListScreenState extends State<DocumentListScreen> {
             icon: const Icon(Icons.refresh),
             label: const Text('Refresh from Server'),
           ),
-          const SizedBox(height: 16),
-          ElevatedButton.icon(
-            onPressed: () => _openForm(null),
-            icon: const Icon(Icons.add),
-            label: const Text('Create New'),
-          ),
+          if (_canCreate) ...[
+            const SizedBox(height: 16),
+            ElevatedButton.icon(
+              onPressed: () => _openForm(null),
+              icon: const Icon(Icons.add),
+              label: const Text('Create New'),
+            ),
+          ],
         ],
       ),
     );
@@ -438,6 +478,7 @@ class _DocumentListScreenState extends State<DocumentListScreen> {
           readOnly: !isNew && !_canWrite,
           canSave: isNew ? _canCreate : _canWrite,
           canDelete: !isNew && _canDelete,
+          translate: widget.translate,
         ),
       ),
     );

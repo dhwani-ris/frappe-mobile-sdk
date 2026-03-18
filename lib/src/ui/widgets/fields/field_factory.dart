@@ -66,7 +66,7 @@ class FieldFactory {
     Future<DocTypeMeta> Function(String doctype)? getMeta,
     ChildTableFormBuilder? childTableFormBuilder,
     Future<void> Function(DocField field, Map<String, dynamic> formData)?
-        onButtonPressed,
+    onButtonPressed,
   }) {
     if (field.hidden) {
       return null;

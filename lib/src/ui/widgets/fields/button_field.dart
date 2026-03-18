@@ -13,10 +13,8 @@ class ButtonField extends BaseField {
   /// Called when the button is pressed. Receives the field and current form data.
   /// When [field.options] contains a server method path, the caller typically
   /// invokes FrappeClient.call(field.options!, args: {'doc': formData}).
-  final Future<void> Function(
-    DocField field,
-    Map<String, dynamic> formData,
-  )? onButtonPressed;
+  final Future<void> Function(DocField field, Map<String, dynamic> formData)?
+  onButtonPressed;
 
   /// Current form data (passed to [onButtonPressed] when invoking server method).
   final Map<String, dynamic>? formData;
@@ -50,9 +48,9 @@ class ButtonField extends BaseField {
               field.description!,
               style:
                   style?.descriptionStyle ??
-                  Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: Colors.grey[600],
-                      ),
+                  Theme.of(
+                    context,
+                  ).textTheme.bodySmall?.copyWith(color: Colors.grey[600]),
             ),
           ),
       ],
@@ -74,10 +72,8 @@ class ButtonField extends BaseField {
 class _ButtonFieldStateful extends StatefulWidget {
   final DocField field;
   final bool enabled;
-  final Future<void> Function(
-    DocField field,
-    Map<String, dynamic> formData,
-  )? onButtonPressed;
+  final Future<void> Function(DocField field, Map<String, dynamic> formData)?
+  onButtonPressed;
   final Map<String, dynamic> formData;
 
   const _ButtonFieldStateful({
@@ -108,9 +104,8 @@ class _ButtonFieldStatefulState extends State<_ButtonFieldStateful> {
 
   @override
   Widget build(BuildContext context) {
-    final canPress = widget.enabled &&
-        !_isLoading &&
-        widget.onButtonPressed != null;
+    final canPress =
+        widget.enabled && !_isLoading && widget.onButtonPressed != null;
 
     return ElevatedButton(
       onPressed: canPress ? _handlePressed : null,
