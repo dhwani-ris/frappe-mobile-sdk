@@ -1,5 +1,585 @@
 # Frappe Mobile SDK
 
+Flutter package for Frappe integration with direct API access, dynamic form rendering, and an offline‑first architecture.
+
+---
+
+## Table of Contents
+
+1. [Overview](#overview)  
+2. [Prerequisites](#prerequisites)  
+3. [Installation](#installation)  
+4. [Configuration](#configuration)  
+5. [Quick Start](#quick-start)  
+   - [App Status Guard (`FrappeAppGuard`)](#app-status-guard-frappeappguard)  
+   - [Translations](#translations)  
+6. [Core Features](#core-features)  
+7. [Usage Patterns](#usage-patterns)  
+   - [API Usage (no form renderer)](#api-usage-no-form-renderer)  
+   - [Form Screens & Builders](#form-screens--builders)  
+   - [Custom Forms Using SDK APIs](#custom-forms-using-sdk-apis)  
+8. [Project Structure](#project-structure)  
+9. [Setup, Customization, and Testing](#setup-customization-and-testing)  
+10. [Contribution & CI](#contribution--ci)  
+11. [License](#license)  
+12. [Links & Further Documentation](#links--further-documentation)
+
+---
+
+## Overview
+
+Frappe Mobile SDK provides:
+
+- **Direct Frappe API access** – Auth, CRUD, file upload, custom method calls.
+- **Dynamic form rendering** – Forms generated from Frappe DocType metadata.
+- **Offline‑first architecture** – SQLite storage with optional bi‑directional sync.
+- **Ready‑made UI screens** – Login, doctype listing, document listing, document forms, sync status.
+- **Server‑driven app control** – App status check and force‑update via backend.
+
+Use this SDK if you:
+
+- Have an existing Frappe instance and want a Flutter mobile app on top of it.
+- Need dynamic, metadata‑driven forms rather than hard‑coded UIs.
+- Require offline usage with later sync to Frappe.
+- Prefer using a higher‑level SDK instead of writing raw HTTP integration.
+
+---
+
+## Prerequisites
+
+### Server‑Side App (Required)
+
+To run apps built with this SDK you **must** install the companion **Frappe Mobile Control** app on your Frappe/ERPNext server. This server app is **not part of this SDK repository** – it lives in its own repo and provides:
+
+- Mobile authentication APIs (`mobile_auth.*`).
+- App status & version control (`mobile_auth.app_status`).
+- Mobile app configuration and metadata endpoints.
+
+Server repo (install & server‑side documentation):
+
+- `https://github.com/dhwani-ris/frappe_mobile_control`
+
+Install via bench:
+
+```bash
+cd /path/to/your/frappe-bench
+bench get-app https://github.com/dhwani-ris/frappe_mobile_control
+bench install-app frappe_mobile_control
+bench migrate
+```
+
+All **server‑side configuration, workflows, and mobile control documentation** belong in that repository; this SDK repo focuses on the Flutter client.
+
+---
+
+## Installation
+
+Add the SDK to your Flutter app’s `pubspec.yaml`:
+
+```yaml
+dependencies:
+  flutter:
+    sdk: flutter
+
+  frappe_mobile_sdk:
+    git:
+      url: https://github.com/dhwani-ris/frappe-mobile-sdk
+      ref: main
+```
+
+Or use a local path during development:
+
+```yaml
+dependencies:
+  frappe_mobile_sdk:
+    path: ../frappe_mobile_sdk
+```
+
+Then run:
+
+```bash
+flutter pub get
+```
+
+---
+
+## Configuration
+
+Create a centralized config file to store your app constants (base URL, OAuth credentials, doctypes, etc.). The example app uses `example/lib/config/app_config.dart`:
+
+```dart
+class AppConstants {
+  /// Frappe server base URL (with trailing slash)
+  static const String baseUrl = 'https://your-site.com/';
+
+  /// OAuth client ID from Frappe OAuth Client settings
+  static const String oauthClientId = 'your_oauth_client_id';
+
+  /// OAuth client secret from Frappe OAuth Client settings
+  static const String oauthClientSecret = 'your_oauth_client_secret';
+}
+```
+
+Integrate it into your app:
+
+```dart
+import 'config/app_config.dart' as config;
+import 'package:frappe_mobile_sdk/frappe_mobile_sdk.dart';
+
+MaterialApp(
+  home: FrappeAppGuard(
+    baseUrl: config.AppConstants.baseUrl,
+    child: YourHomeWidget(),
+  ),
+);
+```
+
+> Note: your own `app_config.dart` should typically be git‑ignored; only an example template should be committed.
+
+---
+
+## Quick Start
+
+### Basic Initialization with `FrappeSDK`
+
+```dart
+import 'package:flutter/material.dart';
+import 'package:frappe_mobile_sdk/frappe_mobile_sdk.dart';
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  final sdk = FrappeSDK(baseUrl: 'https://your-frappe-site.com/');
+  // autoRestoreAndSync = true tries to restore a previous session and run initial sync
+  await sdk.initialize(true);
+
+  runApp(MyApp(sdk: sdk));
+}
+
+class MyApp extends StatelessWidget {
+  final FrappeSDK sdk;
+
+  const MyApp({super.key, required this.sdk});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'Frappe Mobile App',
+      home: HomeScreen(sdk: sdk),
+    );
+  }
+}
+```
+
+### App Status Guard (`FrappeAppGuard`)
+
+Use `FrappeAppGuard` to:
+
+- Check app status via `/api/v2/method/mobile_auth.app_status` on launch.
+- Block app access if `enabled == false` or API returns 417/404.
+- Show force‑update screen when package name or version mismatch.
+- Redirect users to Play Store / App Store (or a custom store URL).
+
+```dart
+import 'config/app_config.dart' as config;
+import 'package:frappe_mobile_sdk/frappe_mobile_sdk.dart';
+
+MaterialApp(
+  home: FrappeAppGuard(
+    baseUrl: config.AppConstants.baseUrl,
+    child: const HomeScreen(),
+  ),
+);
+```
+
+> Requires the `frappe_mobile_control` server app – see [Prerequisites](#prerequisites).
+
+### Translations
+
+The SDK can load translation dictionaries from your Frappe server and use them for **doctype labels**, **field labels**, **section/tab titles**, and validation messages.
+
+- **Automatically**: when you call `sdk.initialize(true)` and session restore succeeds (loads English `en` dictionary once).
+- **Manually**: call `sdk.translations.loadTranslations(lang)` or `sdk.translations.setLocale(lang)` to load/switch language.
+
+Example:
+
+```dart
+// After init, optionally set language
+await sdk.translations.setLocale('en');  // or 'hi', 'es', etc.
+
+DocumentListScreen(
+  doctype: doctype,
+  meta: meta,
+  repository: sdk.repository,
+  syncService: sdk.sync,
+  metaService: sdk.meta,
+  permissionService: sdk.permissions,
+  translate: (s) => sdk.translations.translate(s),
+);
+```
+
+Server requirement for translations (handled by `frappe_mobile_control`):
+
+- Endpoint like: `GET /api/v2/method/mobile_auth.get_translations?lang=en`  
+  Response shape: `{ "data": { "lang": "en", "translations": { "Source": "Translated" } } }`.
+
+---
+
+## Core Features
+
+- **Stateless Login & Session Restore**
+  - Token‑based auth via `mobile_auth.login`.
+  - Tokens persisted in DB; restore with `AuthService.restoreSession()` or via `FrappeSDK.initialize(true)`.
+  - Automatic refresh on 401 where supported.
+
+- **Multiple Authentication Flows**
+  - Username/password.
+  - Mobile OTP login (`sendLoginOtp` / `verifyLoginOtp`).
+  - API key login (`loginWithApiKey`).
+  - OAuth 2.0 with PKCE (`prepareOAuthLogin` / `loginWithOAuth`).
+
+- **Direct Frappe API Access**
+  - `FrappeClient` with:
+    - `auth` – authentication.
+    - `doctype` – metadata and listing.
+    - `document` – CRUD (`createDocument`, `updateDocument`, `deleteDocument`, `submitDocument`, `cancelDocument`).
+    - `attachment` – file upload.
+  - `QueryBuilder` via `client.doc('ToDo').where(...).orderBy(...).limit(...).get()`.
+  - Arbitrary method calls via `client.call(method, args: {...})`.
+
+- **Dynamic Form Renderer**
+  - Auto‑generate forms from Frappe metadata:
+    - Uses `DocTypeMeta`, `DocField`, `Document`, `WorkflowTransition`.
+  - Widgets:
+    - `DoctypeListScreen`, `DocumentListScreen`, `FormScreen`, `FrappeFormBuilder`.
+  - Field types:
+    - Text/data, numeric, date/time, check, link, child table, attachment, phone, password, rating, image, etc.
+  - Button field support via `OnButtonPressedCallback` with default or custom server calls.
+
+- **Offline‑First Architecture**
+  - SQLite (`AppDatabase`) for:
+    - Doctype metadata, documents, auth tokens, permissions, link options.
+  - `OfflineRepository`:
+    - Local CRUD operations on docs.
+    - Tracks dirty (unsynced) documents (`getDirtyDocuments`).
+  - `SyncService`:
+    - `isOnline()`, `pullSync(doctype: ...)`.
+    - Integrated into example flows to sync before showing lists.
+
+- **Workflows**
+  - Workflow detection via metadata (`DocTypeMeta.hasWorkflow`, `workflowStateField`).
+  - `WorkflowService` for:
+    - Fetching transitions (`get_transitions`).
+    - Applying actions (`apply_workflow`) and updating local data.
+  - `FormScreen`:
+    - Frappe‑like AppBar:
+      - Unsaved changes → shows Save (and Delete if allowed).
+      - Clean form + workflow → shows workflow actions instead of Save.
+      - New document → Save only; workflow after first save.
+    - Submitted documents (`docstatus == 1`) are read‑only.
+  - Details: `docs/WORKFLOWS.md`.
+
+- **Styling & Customization**
+  - Predefined styles: `DefaultFormStyle.standard`, `DefaultFormStyle.compact`, `DefaultFormStyle.material`.
+  - Fully custom styles via `FrappeFormStyle`.
+  - Extensibility points:
+    - Custom field factory.
+    - Custom field widgets.
+  - See `CUSTOMIZATION.md` for detailed guidance.
+
+- **Utilities & Error Handling**
+  - Exceptions:
+    - `FrappeException`, `AuthException`, `ApiException`, `NetworkException`, `ValidationException`.
+  - Helpers:
+    - `extractErrorMessage(error)`, `toUserFriendlyMessage(error)` for mapping raw errors to readable text.
+  - `ApiTracer` for debugging API calls.
+
+---
+
+## Usage Patterns
+
+### API Usage (no form renderer)
+
+```dart
+import 'dart:io';
+import 'package:frappe_mobile_sdk/frappe_mobile_sdk.dart';
+
+// Initialize database (required for stateless login)
+final database = await AppDatabase.getInstance();
+
+// Auth service + client
+final authService = AuthService();
+authService.initialize('https://your-frappe-site.com', database: database);
+
+// Stateless login via mobile_auth.login
+final loginResponse = await authService.login('username', 'password');
+
+// Restore session on app launch
+final isAuthenticated = await authService.restoreSession();
+
+// Create FrappeClient
+final client = FrappeClient('https://your-frappe-site.com');
+await client.initialize();
+
+// CRUD
+final doc = await client.document.createDocument('Customer', {
+  'customer_name': 'John Doe',
+  'email': 'john@example.com',
+});
+
+await client.document.updateDocument('Customer', doc['name'], {
+  'phone': '1234567890',
+});
+
+final customer = await client.doctype.getByName('Customer', doc['name']);
+final customers = await client.doctype.list('Customer', fields: ['*']);
+
+await client.document.deleteDocument('Customer', doc['name']);
+
+// File upload
+final file = File('/path/to/file.pdf');
+final uploaded = await client.attachment.uploadFile(file);
+
+// Query builder
+final todos = await client
+    .doc('ToDo')
+    .where('status', 'Open')
+    .orderBy('creation', descending: true)
+    .limit(10)
+    .get();
+```
+
+### Form Screens & Builders
+
+Use ready‑made screens when you want a full mobile experience quickly (the example app demonstrates this pattern).
+
+```dart
+// After SDK initialization and successful login
+
+// List mobile doctypes
+final doctypes = await sdk.meta.getMobileFormDoctypeNames();
+
+Navigator.push(
+  context,
+  MaterialPageRoute(
+    builder: (context) => DoctypeListScreen(
+      appConfig: AppConfig(
+        baseUrl: 'https://your-frappe-site.com',
+        doctypes: doctypes,
+        loginConfig: LoginConfig(
+          enableMobileLogin: true,
+          enablePasswordLogin: true,
+          enableOAuth: true,
+          oauthClientId: 'your_oauth_client_id',
+          oauthClientSecret: 'your_oauth_client_secret',
+        ),
+      ),
+      repository: sdk.repository,
+      doctypes: doctypes,
+      onDoctypeSelected: (doctype) async {
+        final meta = await sdk.meta.getMeta(doctype);
+
+        if (await sdk.sync.isOnline()) {
+          await sdk.sync.pullSync(doctype: doctype);
+        }
+
+        final docs = await sdk.repository.getDocumentsByDoctype(doctype);
+
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => DocumentListScreen(
+              doctype: doctype,
+              meta: meta,
+              repository: sdk.repository,
+              syncService: sdk.sync,
+              metaService: sdk.meta,
+              linkOptionService: sdk.linkOptions,
+              api: sdk.api,
+              getMobileUuid: () => sdk.getMobileUuid(),
+              initialDocuments: docs,
+              userRoles: sdk.roles,
+              permissionService: sdk.permissions,
+              translate: (s) => sdk.translations.translate(s),
+            ),
+          ),
+        );
+      },
+      onNewDocument: (doctype) async {
+        final meta = await sdk.meta.getMeta(doctype);
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => FormScreen(
+              meta: meta,
+              repository: sdk.repository,
+              syncService: sdk.sync,
+              linkOptionService: sdk.linkOptions,
+              metaService: sdk.meta,
+              api: sdk.api,
+              getMobileUuid: () => sdk.getMobileUuid(),
+              onSaveSuccess: () => Navigator.pop(context),
+            ),
+          ),
+        );
+      },
+    ),
+  ),
+);
+```
+
+**Button field handling**:
+
+```dart
+OnButtonPressedCallback? createHandler(FrappeClient api) {
+  return (field, formData, useDefault) async {
+    if (field.fieldname == 'fetch_data') {
+      await api.call('your_app.method', args: formData);
+      return;
+    }
+    await useDefault(field, formData); // SDK default for other buttons
+  };
+}
+
+FormScreen(
+  meta: meta,
+  repository: sdk.repository,
+  syncService: sdk.sync,
+  linkOptionService: sdk.linkOptions,
+  api: sdk.api,
+  onButtonPressed: createHandler(sdk.api),
+);
+```
+
+See `DOCUMENTATION.md` (§ Button field type) for full details.
+
+### Custom Forms Using SDK APIs
+
+```dart
+import 'package:frappe_mobile_sdk/frappe_mobile_sdk.dart';
+
+class CustomCustomerForm extends StatefulWidget {
+  const CustomCustomerForm({super.key, required this.client});
+  final FrappeClient client;
+
+  @override
+  State<CustomCustomerForm> createState() => _CustomCustomerFormState();
+}
+
+class _CustomCustomerFormState extends State<CustomCustomerForm> {
+  final Map<String, dynamic> _data = {};
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        TextField(
+          decoration: const InputDecoration(labelText: 'Customer Name'),
+          onChanged: (value) => _data['customer_name'] = value,
+        ),
+        ElevatedButton(
+          onPressed: () async {
+            await widget.client.document.createDocument('Customer', _data);
+          },
+          child: const Text('Save'),
+        ),
+      ],
+    );
+  }
+}
+```
+
+---
+
+## Project Structure
+
+High‑level layout:
+
+```text
+lib/
+├── frappe_mobile_sdk.dart      # Public SDK barrel file
+└── src/
+    ├── api/                    # Frappe HTTP client & services
+    ├── constants/              # Field type & OAuth constants
+    ├── database/               # SQLite DB: DAOs + entities
+    ├── models/                 # AppConfig, DocTypeMeta, DocField, Document, etc.
+    ├── sdk/                    # High-level FrappeSDK
+    ├── services/               # Auth, meta, sync, permissions, translations, workflows, etc.
+    ├── ui/                     # Ready-made screens & widgets
+    └── utils/                  # Tracing & misc utilities
+```
+
+The `example/` directory contains a complete Flutter app wiring these pieces together.
+
+---
+
+## Setup, Customization, and Testing
+
+This repository includes focused documents (under `docs/` unless noted):
+
+- `docs/SETUP.md` – SDK setup, app config, Android/iOS configuration.
+- `docs/CUSTOMIZATION.md` – UI customization:
+  - `FrappeFormStyle`, custom field factories, custom field widgets.
+- `docs/TESTING.md` – Testing strategies:
+  - Running the example app.
+  - Using local path vs Git dependency.
+  - Automated and manual tests.
+- `docs/QUICK_TEST.md` – Short, practical instructions to quickly validate the SDK.
+- `docs/WORKFLOWS.md` – Detailed workflow behavior in the mobile SDK.
+
+For a full conceptual/API guide (installation, API calling, forms, auth, offline & sync, error handling, translations), see **`docs/DOCUMENTATION.md`**.
+
+---
+
+## Contribution & CI
+
+Before committing, run pre‑commit checks (see `.github/PRE_COMMIT.md`):
+
+```bash
+# Flutter pre-commit (recommended)
+dart run flutter_pre_commit
+
+# Or pre-commit framework
+pre-commit run --all-files
+```
+
+GitHub Actions workflows:
+
+- **CI (`ci.yml`)** – `flutter analyze`, `dart format --set-exit-if-changed`, `flutter test`.
+- **Semantic commit messages (`semantic-commits.yml`)** – validates Conventional Commits format.
+
+Commit message format:
+
+- `type(scope)?: subject`  
+  Types: `feat`, `fix`, `docs`, `style`, `refactor`, `test`, `chore`, `ci`, `build`, `perf`, `revert`.
+
+---
+
+## License
+
+MIT License – see `LICENSE`.
+
+© 2026 Dhwani Rural Information System
+
+---
+
+## Links & Further Documentation
+
+- SDK repo: `https://github.com/dhwani-ris/frappe-mobile-sdk`
+- Server companion app (required): `https://github.com/dhwani-ris/frappe_mobile_control`
+
+In‑repo documentation:
+
+- `docs/DOCUMENTATION.md` – Full SDK documentation.
+- `docs/SETUP.md` – Environment and platform setup.
+- `docs/CUSTOMIZATION.md` – UI customization guide.
+- `docs/TESTING.md` – Testing and verification guide.
+- `docs/QUICK_TEST.md` – Quick validation steps.
+- `docs/WORKFLOWS.md` – Workflow behavior.
+- `.github/PRE_COMMIT.md` – Pre‑commit and CI details.
+
+# Frappe Mobile SDK
+
 Flutter package for Frappe integration with direct API access, dynamic form rendering, and offline-first architecture.
 
 ## ✨ Features
@@ -12,6 +592,8 @@ Flutter package for Frappe integration with direct API access, dynamic form rend
 - ✅ **Offline-First** - Full offline capability with SQLite
 - ✅ **Bi-directional Sync** - Push/pull sync with conflict resolution
 - ✅ **Customizable Styling** - Default styles + full customization support
+- ✅ **Translations** - Load Frappe translations by language; map to field labels and doctype labels in forms and lists
+- ✅ **Workflows** - Show workflow state and transition actions on forms when the DocType has a workflow (see [Workflows](docs/WORKFLOWS.md))
 
 ## 📋 Prerequisites
 
@@ -118,6 +700,60 @@ MaterialApp(
   ),
 )
 ```
+
+### Translations
+
+The SDK can load translation dictionaries from your Frappe server and use them for **doctype labels**, **field labels**, **section/tab titles**, and validation messages in forms and lists.
+
+**When translations are synced**
+
+- **Automatically:** Only when you call `sdk.initialize(true)` (auto restore + sync) and the user is already logged in (session restore succeeds). In that case the SDK calls the translations API once and loads the **English** (`en`) dictionary. No other language is loaded automatically.
+- **Manually:** Call `sdk.translations.loadTranslations(lang)` or `sdk.translations.setLocale(lang)` to load or switch language (e.g. after login or when the user changes language in settings).
+
+**Server requirement**
+
+Your backend must expose an API that returns the translation map for a language (e.g. `GET /api/v2/method/mobile_auth.get_translations?lang=en`). Response shape: `{ "data": { "lang": "en", "translations": { "Source string": "Translated string" } } }`.
+
+**Using translations in the UI**
+
+Pass a `translate` callback into the list and form screens so labels use the cached dictionary:
+
+```dart
+// After init, optionally set language (e.g. from user preference or device locale)
+await sdk.translations.setLocale('en');  // or 'hi', 'es', etc.
+
+// When opening DocumentListScreen and FormScreen, pass translate:
+DocumentListScreen(
+  doctype: doctype,
+  meta: meta,
+  repository: repository,
+  syncService: syncService,
+  metaService: metaService,
+  permissionService: sdk.permissions,
+  translate: (s) => sdk.translations.translate(s),
+  // ...
+);
+
+// FormScreen receives translate from DocumentListScreen when opening a document.
+// Or pass it explicitly: FormScreen(..., translate: (s) => sdk.translations.translate(s));
+```
+
+**What gets translated**
+
+- **DocumentListScreen:** App bar title (doctype label), sort menu field labels.
+- **FormScreen:** App bar title (doctype label).
+- **FrappeFormBuilder:** Field labels, placeholders, descriptions, section titles, tab labels (and child table forms).
+- **BaseField:** Label above the widget, description text, and validation message (“X is required”).
+
+**API summary**
+
+| Member | Description |
+|--------|-------------|
+| `sdk.translations` | TranslationService (after `initialize()`). |
+| `loadTranslations(lang)` | Fetches and caches the translation map for `lang`. |
+| `setLocale(lang)` | Sets current language and loads it if not cached. |
+| `translate(source, [args])` | Returns translated string for current language; replaces `{0}`, `{1}` with `args`. |
+| `currentLang` | Current language code (default `en`). |
 
 ### 1. API Usage (No Form Renderer)
 
@@ -398,6 +1034,12 @@ LoginScreen(
 ```
 
 **Note**: `LoginScreen` requires `database` parameter. Without it, login will fail with an error.
+
+**Layout:** When multiple methods are enabled, the screen shows: Password (if enabled) → **OR** → Login with mobile → Login with OAuth. If password login is disabled, the mobile OTP section is expanded by default. Opening **Login with mobile** hides the username/password box (toggle); **Back to password** shows it again. Pass `passwordLogin`, `sendLoginOtp`, and `verifyLoginOtp` from the SDK (e.g. `(u,p) => sdk.login(u,p)`) so permissions and locale are applied.
+
+**Style:** Pass optional `style: LoginScreenStyle(...)` to customize title, icon, input decorations, button styles, and padding. Full property list: [DOCUMENTATION.md §6.7](DOCUMENTATION.md#67-login-screen-layout-and-style).
+
+**OAuth and 401:** If you get *401 Invalid authentication token* on `mobile_auth.configuration` after OAuth login, the server may only accept tokens from `mobile_auth.login`. Ensure the backend accepts the OAuth-issued Bearer token for v2 methods (see [DOCUMENTATION.md §6.6](DOCUMENTATION.md#66-oauth-token-and-v2-apis-401-invalid-authentication-token)).
 
 ## 📚 API Reference
 
