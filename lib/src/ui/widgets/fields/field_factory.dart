@@ -22,6 +22,7 @@ import 'attach_field.dart';
 import 'image_field.dart';
 import 'button_field.dart';
 import 'child_table_field.dart';
+import 'html_field.dart';
 import '../../../models/doc_type_meta.dart';
 
 /// Factory class to create appropriate field widget based on field type
@@ -243,6 +244,14 @@ class FieldFactory {
           imageHeaders: imageHeaders,
         );
 
+      case FieldTypes.html:
+        return HtmlField(
+          field: field,
+          value: value,
+          enabled: enabled,
+          style: fieldStyle,
+        );
+
       case FieldTypes.button:
         return ButtonField(
           field: field,
@@ -285,15 +294,29 @@ class _TableFieldBase extends BaseField {
   @override
   Widget build(BuildContext context) {
     if (field.hidden) return const SizedBox.shrink();
-    return ChildTableField(
-      field: field,
-      value: value,
-      onChanged: onChanged != null
-          ? (List<dynamic> v) => onChanged!.call(v)
-          : null,
-      enabled: enabled,
-      getMeta: getMeta,
-      formBuilder: formBuilder,
+    if (field.options == null) {
+      return ChildTableField(
+        field: field,
+        value: value,
+        onChanged: onChanged != null ? (v) => onChanged!.call(v) : null,
+        enabled: enabled,
+        getMeta: getMeta,
+        formBuilder: formBuilder,
+      );
+    }
+    return FutureBuilder<DocTypeMeta>(
+      future: getMeta(field.options!),
+      builder: (context, snapshot) {
+        return ChildTableField(
+          field: field,
+          value: value,
+          onChanged: onChanged != null ? (v) => onChanged!.call(v) : null,
+          enabled: enabled,
+          getMeta: getMeta,
+          formBuilder: formBuilder,
+          titleField: snapshot.data?.titleField,
+        );
+      },
     );
   }
 
