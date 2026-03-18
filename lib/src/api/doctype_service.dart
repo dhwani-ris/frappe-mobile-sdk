@@ -51,6 +51,41 @@ class DoctypeService {
     return [];
   }
 
+  /// Lists child doctype records with ALL fields.
+  /// get_list and reportview only return standard fields for child doctypes.
+  /// This fetches names first, then batch-loads full docs via /api/resource.
+  Future<List<Map<String, dynamic>>> listChildDocs(
+    String doctype, {
+    List<List<dynamic>>? filters,
+    int limitPageLength = 1000,
+  }) async {
+    // Step 1: get names (get_list works for this)
+    final nameList = await list(
+      doctype,
+      fields: ['name'],
+      filters: filters,
+      limitPageLength: limitPageLength,
+    );
+    if (nameList.isEmpty) return [];
+
+    // Step 2: batch-fetch full documents via /api/resource/{doctype}/{name}
+    final docs = <Map<String, dynamic>>[];
+    const batchSize = 50;
+    for (var i = 0; i < nameList.length; i += batchSize) {
+      final batch = nameList.skip(i).take(batchSize);
+      final futures = batch.map((n) {
+        final name = n is Map<String, dynamic>
+            ? n['name']?.toString() ?? ''
+            : '';
+        if (name.isEmpty) return Future.value(<String, dynamic>{});
+        return getByName(doctype, name);
+      });
+      final results = await Future.wait(futures);
+      docs.addAll(results.where((d) => d.isNotEmpty));
+    }
+    return docs;
+  }
+
   Future<Map<String, dynamic>> getByName(String doctype, String name) async {
     final response = await _restHelper.get('/api/resource/$doctype/$name');
     if (response is Map<String, dynamic> && response.containsKey('data')) {
