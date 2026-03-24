@@ -1,6 +1,8 @@
 // Copyright (c) 2026, Bhushan Barbuddhe and contributors
 // For license information, please see license.txt
 
+import 'package:flutter/foundation.dart';
+
 import '../api/client.dart';
 import '../database/app_database.dart';
 import '../services/auth_service.dart';
@@ -28,6 +30,32 @@ class FrappeSDK {
   bool _initialized = false;
 
   FrappeSDK({required this.baseUrl});
+
+  /// Test-only constructor: accepts a pre-built [AppDatabase] (e.g. in-memory).
+  /// Wires all services directly without calling [initialize()].
+  /// Avoids FlutterSecureStorage (not available in unit/widget tests).
+  @visibleForTesting
+  FrappeSDK.forTesting(String baseUrl, AppDatabase database)
+      : baseUrl = baseUrl {
+    _database = database;
+    // Create FrappeClient directly — avoids AuthService.initialize() which
+    // writes to FlutterSecureStorage and hangs in widget tests.
+    _client = FrappeClient(baseUrl);
+    // AuthService is set to a stub instance (not initialized) so getters work.
+    _authService = AuthService();
+    _repository = OfflineRepository(_database!);
+    _metaService = MetaService(_client!, _database!);
+    _permissionService = PermissionService(_client!, _database!);
+    _translationService = TranslationService(_client!);
+    _syncService = SyncService(
+      _client!,
+      _repository!,
+      _database!,
+      getMobileUuid: () async => 'test-uuid',
+    );
+    _linkOptionService = LinkOptionService(_client!);
+    _initialized = true;
+  }
 
   /// Initialize SDK (call this first).
   ///
