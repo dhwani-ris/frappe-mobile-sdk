@@ -152,4 +152,57 @@ void main() {
       await databaseFactoryFfi.deleteDatabase(dbPath);
     });
   });
+
+  group('DoctypeMetaDao.findMobileFormDoctypes ordering', () {
+    test('returns mobile form doctypes sorted by sortOrder ASC', () async {
+      const dbPath = 'ordering_test.db';
+      await databaseFactoryFfi.deleteDatabase(dbPath);
+      final rawDb = await databaseFactoryFfi.openDatabase(
+        dbPath,
+        options: OpenDatabaseOptions(
+          version: 2,
+          singleInstance: false,
+          onCreate: (db, v) async {
+            await db.execute('''
+              CREATE TABLE doctype_meta (
+                doctype TEXT PRIMARY KEY,
+                modified TEXT,
+                serverModifiedAt TEXT,
+                isMobileForm INTEGER NOT NULL DEFAULT 0,
+                metaJson TEXT NOT NULL,
+                groupName TEXT,
+                sortOrder INTEGER
+              )
+            ''');
+          },
+        ),
+      );
+
+      // Insert in reverse sortOrder to confirm ordering is explicit, not insertion-based
+      await rawDb.insert('doctype_meta', {
+        'doctype': 'FormC', 'modified': null, 'serverModifiedAt': null,
+        'isMobileForm': 1, 'metaJson': '{}', 'groupName': 'G1', 'sortOrder': 2,
+      });
+      await rawDb.insert('doctype_meta', {
+        'doctype': 'FormA', 'modified': null, 'serverModifiedAt': null,
+        'isMobileForm': 1, 'metaJson': '{}', 'groupName': 'G1', 'sortOrder': 0,
+      });
+      await rawDb.insert('doctype_meta', {
+        'doctype': 'FormB', 'modified': null, 'serverModifiedAt': null,
+        'isMobileForm': 1, 'metaJson': '{}', 'groupName': 'G2', 'sortOrder': 1,
+      });
+
+      final maps = await rawDb.query(
+        'doctype_meta',
+        where: 'isMobileForm = ?',
+        whereArgs: [1],
+        orderBy: 'sortOrder ASC',
+      );
+      final doctypes = maps.map((m) => m['doctype'] as String).toList();
+      expect(doctypes, ['FormA', 'FormB', 'FormC']);
+
+      await rawDb.close();
+      await databaseFactoryFfi.deleteDatabase(dbPath);
+    });
+  });
 }
