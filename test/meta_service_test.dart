@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:frappe_mobile_sdk/src/api/client.dart';
 import 'package:frappe_mobile_sdk/src/database/app_database.dart';
+import 'package:frappe_mobile_sdk/src/database/daos/doctype_meta_dao.dart';
 import 'package:frappe_mobile_sdk/src/database/entities/doctype_meta_entity.dart';
 import 'package:frappe_mobile_sdk/src/services/meta_service.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -192,13 +193,9 @@ void main() {
         'isMobileForm': 1, 'metaJson': '{}', 'groupName': 'G2', 'sortOrder': 1,
       });
 
-      final maps = await rawDb.query(
-        'doctype_meta',
-        where: 'isMobileForm = ?',
-        whereArgs: [1],
-        orderBy: 'sortOrder ASC',
-      );
-      final doctypes = maps.map((m) => m['doctype'] as String).toList();
+      final dao = DoctypeMetaDao(rawDb);
+      final results = await dao.findMobileFormDoctypes();
+      final doctypes = results.map((e) => e.doctype).toList();
       expect(doctypes, ['FormA', 'FormB', 'FormC']);
 
       await rawDb.close();
