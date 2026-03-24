@@ -54,6 +54,9 @@ export 'src/services/offline_repository.dart';
 export 'src/services/link_option_service.dart';
 export 'src/services/workflow_service.dart';
 
+// Screens
+export 'src/screens/mobile_home_screen.dart';
+
 // UI Components
 export 'src/ui/app_guard.dart';
 export 'src/ui/login_screen.dart';
