@@ -33,6 +33,17 @@ class AuthService {
   List<String> _roles = [];
   String? _language;
 
+  /// Default constructor. Call [initialize] before using auth methods.
+  AuthService();
+
+  /// Named constructor used by [FrappeSDK.forTesting]: wires [client] and
+  /// [database] directly without touching [FlutterSecureStorage] (which is
+  /// unavailable in unit/widget tests).
+  AuthService.forTesting(FrappeClient client, {AppDatabase? database}) {
+    _client = client;
+    _database = database;
+  }
+
   /// Initializes the client with the given [baseUrl].
   ///
   /// Optionally provide [database] for stateless login token storage.

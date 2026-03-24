@@ -39,10 +39,13 @@ class FrappeSDK {
       : baseUrl = baseUrl {
     _database = database;
     // Create FrappeClient directly — avoids AuthService.initialize() which
-    // writes to FlutterSecureStorage and hangs in widget tests.
+    // writes to FlutterSecureStorage and is unavailable in widget tests.
     _client = FrappeClient(baseUrl);
-    // AuthService is set to a stub instance (not initialized) so getters work.
-    _authService = AuthService();
+    // Use AuthService.forTesting so the client and database are wired up
+    // without touching FlutterSecureStorage. This means sdk.auth methods
+    // (e.g. getOrCreateMobileUuid, restoreSession) won't throw "not
+    // initialized" if called from any production code path under test.
+    _authService = AuthService.forTesting(_client!, database: database);
     _repository = OfflineRepository(_database!);
     _metaService = MetaService(_client!, _database!);
     _permissionService = PermissionService(_client!, _database!);

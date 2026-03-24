@@ -38,12 +38,16 @@ void main() {
     await tester.pumpWidget(MaterialApp(
       home: MobileHomeScreen(sdk: emptySdk, appTitle: 'TestApp'),
     ));
-    // runAsync lets sqflite_ffi futures (real isolates) resolve, then pump rebuilds UI
+    // pumpAndSettle() cannot be used here: MobileHomeScreen._load() calls
+    // sqflite_ffi which runs on real OS isolates outside Flutter's test
+    // scheduler. pumpAndSettle() only drains microtasks/timers managed by
+    // that scheduler and would hang indefinitely waiting for I/O that it
+    // can never advance. runAsync() yields to the real event loop so the
+    // sqflite future resolves, then pump() triggers the setState rebuild.
     await tester.runAsync(() async {
-      await emptySdk.meta.getMobileFormGroups(); // warm up
+      await emptySdk.meta.getMobileFormGroups();
     });
     await tester.pump();
-    await tester.pump(const Duration(milliseconds: 50));
     expect(find.textContaining('No forms configured'), findsOneWidget);
   });
 
@@ -51,9 +55,18 @@ void main() {
     await tester.pumpWidget(MaterialApp(
       home: MobileHomeScreen(sdk: sdkWithSurvey, appTitle: 'TestApp'),
     ));
+    // pumpAndSettle() cannot be used here: MobileHomeScreen._load() calls
+    // sqflite_ffi which runs on real OS isolates outside Flutter's test
+    // scheduler and would cause pumpAndSettle to hang indefinitely.
+    // runAsync() yields to the real event loop so the sqflite futures resolve.
+    // We await all the operations _load() performs (groups + per-doctype
+    // document query) so the widget's internal future has completed before
+    // we pump the rebuild.
     await tester.runAsync(() async {
-      // Wait for _load() to complete by waiting on the underlying async ops
-      await Future<void>.delayed(const Duration(milliseconds: 200));
+      final groups = await sdkWithSurvey.meta.getMobileFormGroups();
+      for (final doctype in groups.values.expand((l) => l)) {
+        await sdkWithSurvey.repository.getDocumentsByDoctype(doctype);
+      }
     });
     await tester.pump();
     expect(find.text('Survey'), findsOneWidget);
