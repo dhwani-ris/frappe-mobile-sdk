@@ -68,4 +68,88 @@ void main() {
       expect(names, isNot(contains('Lead')));
     });
   });
+
+  group('DB migration v1→v2', () {
+    test('groupName and sortOrder columns exist after onCreate', () async {
+      final db = await AppDatabase.inMemoryDatabase();
+      await db.doctypeMetaDao.insertDoctypeMeta(
+        DoctypeMetaEntity(
+          doctype: 'TestDoc',
+          modified: null,
+          serverModifiedAt: null,
+          isMobileForm: true,
+          metaJson: '{}',
+          groupName: 'TestGroup',
+          sortOrder: 0,
+        ),
+      );
+      final result = await db.doctypeMetaDao.findByDoctype('TestDoc');
+      expect(result?.groupName, 'TestGroup');
+      expect(result?.sortOrder, 0);
+    });
+
+    test('groupName defaults to null when not provided', () async {
+      final db = await AppDatabase.inMemoryDatabase();
+      await db.doctypeMetaDao.insertDoctypeMeta(
+        DoctypeMetaEntity(
+          doctype: 'NoGroup',
+          modified: null,
+          serverModifiedAt: null,
+          isMobileForm: false,
+          metaJson: '{}',
+        ),
+      );
+      final result = await db.doctypeMetaDao.findByDoctype('NoGroup');
+      expect(result?.groupName, isNull);
+      expect(result?.sortOrder, isNull);
+    });
+
+    test('onUpgrade adds groupName and sortOrder to existing v1 database', () async {
+      const dbPath = 'v1_migration_test.db';
+      // Delete any leftover DB from a previous run to ensure a clean slate
+      await databaseFactoryFfi.deleteDatabase(dbPath);
+
+      final rawDb = await databaseFactoryFfi.openDatabase(
+        dbPath,
+        options: OpenDatabaseOptions(
+          version: 1,
+          singleInstance: false,
+          onCreate: (db, v) async {
+            await db.execute('''
+              CREATE TABLE doctype_meta (
+                doctype TEXT PRIMARY KEY,
+                modified TEXT,
+                serverModifiedAt TEXT,
+                isMobileForm INTEGER NOT NULL DEFAULT 0,
+                metaJson TEXT NOT NULL
+              )
+            ''');
+          },
+        ),
+      );
+      await rawDb.insert('doctype_meta', {
+        'doctype': 'OldDoc',
+        'modified': '2025-01-01',
+        'serverModifiedAt': null,
+        'isMobileForm': 1,
+        'metaJson': '{}',
+      });
+      // Simulate onUpgrade 1→2
+      await rawDb.execute('ALTER TABLE doctype_meta ADD COLUMN groupName TEXT');
+      await rawDb.execute('ALTER TABLE doctype_meta ADD COLUMN sortOrder INTEGER');
+      final rows = await rawDb.query('doctype_meta', where: 'doctype = ?', whereArgs: ['OldDoc']);
+      expect(rows.length, 1);
+      expect(rows.first['groupName'], isNull);
+      expect(rows.first['sortOrder'], isNull);
+      await rawDb.insert('doctype_meta', {
+        'doctype': 'NewDoc', 'modified': null, 'serverModifiedAt': null,
+        'isMobileForm': 1, 'metaJson': '{}', 'groupName': 'MyGroup', 'sortOrder': 0,
+      });
+      final newRows = await rawDb.query('doctype_meta', where: 'doctype = ?', whereArgs: ['NewDoc']);
+      expect(newRows.first['groupName'], 'MyGroup');
+      await rawDb.close();
+      // Clean up
+      await databaseFactoryFfi.deleteDatabase(dbPath);
+    });
+  });
 }
