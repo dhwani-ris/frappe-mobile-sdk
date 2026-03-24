@@ -93,6 +93,7 @@ class AppDatabase {
       version: _version,
       onCreate: _onCreate,
       onConfigure: _onConfigure,
+      onUpgrade: _onUpgrade,
     );
     return AppDatabase._(database);
   }
