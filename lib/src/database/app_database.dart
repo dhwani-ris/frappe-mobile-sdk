@@ -86,7 +86,8 @@ class AppDatabase {
     return _instance!;
   }
 
-  /// Create in-memory database for testing
+  /// Create in-memory database for testing.
+  /// Each call returns a fresh isolated database (singleInstance: false).
   static Future<AppDatabase> inMemoryDatabase() async {
     final database = await openDatabase(
       inMemoryDatabasePath,
@@ -94,6 +95,7 @@ class AppDatabase {
       onCreate: _onCreate,
       onConfigure: _onConfigure,
       onUpgrade: _onUpgrade,
+      singleInstance: false,
     );
     return AppDatabase._(database);
   }
