@@ -292,8 +292,7 @@ class MetaService {
   ///
   /// Marks all existing mobile forms as false, then updates/creates entries
   /// for the provided mobile form names. Returns list of doctypes that need syncing.
-  @visibleForTesting
-  Future<List<String>> updateMobileFormDoctypesForTest(
+  Future<List<String>> _updateMobileFormDoctypes(
     List<MobileFormName> mobileFormNames,
   ) async {
     // First, mark all existing mobile forms as false (loop 1)
@@ -371,6 +370,12 @@ class MetaService {
     return doctypesToSync;
   }
 
+  /// Thin wrapper for testing purposes only.
+  @visibleForTesting
+  Future<List<String>> updateMobileFormDoctypesForTest(
+    List<MobileFormName> mobileFormNames,
+  ) => _updateMobileFormDoctypes(mobileFormNames);
+
   /// Fetches mobile configuration from server and resyncs doctype metadata.
   ///
   /// Calls `/api/v2/method/mobile_auth.configuration` to get updated mobile form list
@@ -407,7 +412,7 @@ class MetaService {
       }
 
       // Update mobile form doctypes and get list of doctypes to sync
-      final doctypesToSync = await updateMobileFormDoctypesForTest(mobileFormNames);
+      final doctypesToSync = await _updateMobileFormDoctypes(mobileFormNames);
 
       // Sync all doctypes that need updating
       if (doctypesToSync.isNotEmpty) {
