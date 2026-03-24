@@ -86,7 +86,11 @@ class ChildTableField extends StatelessWidget {
               return Card(
                 margin: const EdgeInsets.only(bottom: 8),
                 child: ListTile(
-                  title: Text(_rowTitle(row)),
+                  title: FutureBuilder<String>(
+                    future: _rowTitle(row),
+                    builder: (_, snap) =>
+                        Text(snap.data ?? '…'),
+                  ),
                   subtitle: _rowSubtitle(row).isNotEmpty
                       ? Text(_rowSubtitle(row))
                       : null,
@@ -111,7 +115,16 @@ class ChildTableField extends StatelessWidget {
     );
   }
 
-  String _rowTitle(Map<String, dynamic> row) {
+  Future<String> _rowTitle(Map<String, dynamic> row) async {
+    final meta = await getMeta?.call(field.options!);
+    // Use the doctype's configured title_field first
+    if (meta != null &&
+        meta.titleField != null &&
+        meta.titleField!.isNotEmpty) {
+      final v = row[meta.titleField!];
+      if (v != null && v.toString().isNotEmpty) return v.toString();
+    }
+    // Common name fields (excluding 'name' which is a raw server ID)
     final prefer = ['item_name', 'item_code', 'bank_name', 'name'];
     for (final k in prefer) {
       if (row[k] != null && row[k].toString().isNotEmpty) {

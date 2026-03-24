@@ -1,29 +1,32 @@
 import 'dart:io';
+
 import 'package:flutter/material.dart';
-import '../../../models/doc_field.dart';
+
 import '../../../constants/field_types.dart';
+import '../../../models/doc_field.dart';
+import '../../../models/doc_type_meta.dart';
 import '../../../services/link_option_service.dart';
 import '../../../services/link_field_coordinator.dart';
+import 'attach_field.dart';
 import 'base_field.dart';
+import 'button_field.dart';
+import 'check_field.dart';
+import 'child_table_field.dart';
 import 'data_field.dart';
-import 'text_field.dart';
-import 'select_field.dart';
 import 'date_field.dart';
 import 'datetime_field.dart';
-import 'time_field.dart';
 import 'duration_field.dart';
-import 'check_field.dart';
-import 'numeric_field.dart';
+import 'html_field.dart';
+import 'image_field.dart';
 import 'link_field.dart';
-import 'phone_field.dart';
+import 'numeric_field.dart';
 import 'password_field.dart';
+import 'phone_field.dart';
 import 'rating_field.dart';
 import 'read_only_field.dart';
-import 'attach_field.dart';
-import 'image_field.dart';
-import 'button_field.dart';
-import 'child_table_field.dart';
-import '../../../models/doc_type_meta.dart';
+import 'select_field.dart';
+import 'text_field.dart';
+import 'time_field.dart';
 
 /// Factory class to create appropriate field widget based on field type
 ///
@@ -65,8 +68,7 @@ class FieldFactory {
     Map<String, String>? imageHeaders,
     Future<DocTypeMeta> Function(String doctype)? getMeta,
     ChildTableFormBuilder? childTableFormBuilder,
-    Future<void> Function(DocField field, Map<String, dynamic> formData)?
-    onButtonPressed,
+    Future<void> Function(DocField field, Map<String, dynamic> formData)? onButtonPressed,
   }) {
     if (field.hidden) {
       return null;
@@ -178,9 +180,7 @@ class FieldFactory {
 
       case 'Table':
         if (getMeta == null || childTableFormBuilder == null) return null;
-        final listValue = value is List
-            ? List<dynamic>.from(value)
-            : <dynamic>[];
+        final listValue = value is List ? List<dynamic>.from(value) : <dynamic>[];
         return _TableFieldBase(
           field: field,
           value: listValue,
@@ -250,6 +250,9 @@ class FieldFactory {
           imageHeaders: imageHeaders,
         );
 
+      case FieldTypes.html:
+        return HtmlField(field: field, value: value, enabled: enabled, style: fieldStyle);
+
       case FieldTypes.button:
         return ButtonField(
           field: field,
@@ -295,9 +298,7 @@ class _TableFieldBase extends BaseField {
     return ChildTableField(
       field: field,
       value: value,
-      onChanged: onChanged != null
-          ? (List<dynamic> v) => onChanged!.call(v)
-          : null,
+      onChanged: onChanged != null ? (List<dynamic> v) => onChanged!.call(v) : null,
       enabled: enabled,
       getMeta: getMeta,
       formBuilder: formBuilder,
