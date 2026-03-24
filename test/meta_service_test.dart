@@ -301,8 +301,8 @@ void main() {
     });
   });
 
-  group('MetaService preserves groupName on meta refresh', () {
-    test('fetchAndStoreInDb preserves groupName of existing row', () async {
+  group('DoctypeMetaDao preserves groupName on update', () {
+    test('updateDoctypeMeta preserves groupName and sortOrder from existing row', () async {
       final db = await AppDatabase.inMemoryDatabase();
 
       await db.doctypeMetaDao.insertDoctypeMeta(DoctypeMetaEntity(
