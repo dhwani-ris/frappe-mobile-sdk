@@ -8,7 +8,7 @@ import 'daos/auth_token_dao.dart';
 import 'daos/doctype_permission_dao.dart';
 
 class AppDatabase {
-  static const int _version = 1;
+  static const int _version = 2;
   static Database? _database;
   static AppDatabase? _instance;
   static String? _databaseName;
@@ -78,6 +78,7 @@ class AppDatabase {
         version: _version,
         onCreate: _onCreate,
         onConfigure: _onConfigure,
+        onUpgrade: _onUpgrade,
       );
     }
 
@@ -94,6 +95,14 @@ class AppDatabase {
       onConfigure: _onConfigure,
     );
     return AppDatabase._(database);
+  }
+
+  /// Migrate database schema on upgrade
+  static Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
+    if (oldVersion < 2) {
+      await db.execute('ALTER TABLE doctype_meta ADD COLUMN groupName TEXT');
+      await db.execute('ALTER TABLE doctype_meta ADD COLUMN sortOrder INTEGER');
+    }
   }
 
   /// Configure database (enable foreign keys)
@@ -131,7 +140,9 @@ class AppDatabase {
         modified TEXT,
         serverModifiedAt TEXT,
         isMobileForm INTEGER NOT NULL DEFAULT 0,
-        metaJson TEXT NOT NULL
+        metaJson TEXT NOT NULL,
+        groupName TEXT,
+        sortOrder INTEGER
       )
     ''');
 
