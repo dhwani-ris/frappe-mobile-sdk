@@ -80,4 +80,41 @@ void main() {
     await tester.pump();
     expect(find.text('My App'), findsOneWidget);
   });
+
+  testWidgets('renders group as card with chevron', (tester) async {
+    await tester.pumpWidget(MaterialApp(
+      home: MobileHomeScreen(sdk: sdkWithSurvey, appTitle: 'TestApp'),
+    ));
+    await tester.runAsync(() async {
+      final groups = await sdkWithSurvey.meta.getMobileFormGroups();
+      for (final doctype in groups.values.expand((l) => l)) {
+        await sdkWithSurvey.repository.getDocumentsByDoctype(doctype);
+      }
+    });
+    await tester.pump();
+
+    expect(find.text('Survey'), findsOneWidget);
+    expect(find.text('Survey Form'), findsOneWidget);
+    // Chevron icon for navigation hint on each tile
+    expect(find.byIcon(Icons.chevron_right), findsOneWidget);
+  });
+
+  testWidgets('shows profile avatar in AppBar', (tester) async {
+    await tester.pumpWidget(MaterialApp(
+      home: MobileHomeScreen(sdk: emptySdk, appTitle: 'TestApp'),
+    ));
+    await tester.pump();
+
+    // CircleAvatar used for the profile button
+    expect(find.byType(CircleAvatar), findsOneWidget);
+  });
+
+  testWidgets('shows sync button in AppBar', (tester) async {
+    await tester.pumpWidget(MaterialApp(
+      home: MobileHomeScreen(sdk: emptySdk, appTitle: 'TestApp'),
+    ));
+    await tester.pump();
+
+    expect(find.byIcon(Icons.sync), findsOneWidget);
+  });
 }

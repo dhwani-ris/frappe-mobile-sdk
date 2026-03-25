@@ -173,7 +173,9 @@ class FrappeSDK {
 
   /// Logout and clear all local DB data (default). Set clearDatabase: false to keep DB.
   Future<void> logout({bool clearDatabase = true}) async {
-    if (!_initialized) return;
+    if (!_initialized) {
+      throw StateError('Cannot logout: SDK not initialized. Call initialize() first.');
+    }
     await _authService!.logout(clearDatabase: clearDatabase);
   }
 
@@ -261,6 +263,10 @@ class FrappeSDK {
 
   /// Roles for the currently authenticated user (if provided by backend).
   List<String> get roles => _authService?.roles ?? const [];
+
+  /// Returns the current authenticated user's info, or null.
+  ({String email, String fullName})? get currentUser =>
+      _authService?.currentUserInfo;
 
   /// Stable UUID for this device/install. Use when creating docs from mobile so server can set mobile_uuid.
   Future<String> getMobileUuid() async {
