@@ -33,6 +33,12 @@ class AuthService {
   List<String> _roles = [];
   String? _language;
 
+  /// Cached user info from the last successful authentication.
+  ({String email, String fullName})? _cachedUserInfo;
+
+  /// Returns the current user's email and full name, or null if not authenticated.
+  ({String email, String fullName})? get currentUserInfo => _cachedUserInfo;
+
   /// Default constructor. Call [initialize] before using auth methods.
   AuthService();
 
@@ -355,6 +361,7 @@ class AuthService {
 
     _client!.rest.setBearerToken(accessToken);
     _isAuthenticated = true;
+    _cachedUserInfo = (email: user, fullName: fullName ?? user);
   }
 
   /// Authenticates with API key and secret.
@@ -395,6 +402,7 @@ class AuthService {
         if (token != null && token.accessToken.isNotEmpty) {
           _client!.rest.setBearerToken(token.accessToken);
           _isAuthenticated = true;
+          _cachedUserInfo = (email: token.user, fullName: token.fullName ?? token.user);
           return true;
         }
       } catch (_) {
@@ -542,6 +550,7 @@ class AuthService {
     } catch (_) {}
     _client?.rest.setBearerToken(null);
     _isAuthenticated = false;
+    _cachedUserInfo = null;
     _roles = [];
     await _storage.delete(key: _keyApiKey);
     await _storage.delete(key: _keyApiSecret);
