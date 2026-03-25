@@ -60,6 +60,9 @@ dependencies:
   # Image picker for image fields
   image_picker: ^1.1.2
 
+  # HTML rendering for HTML field type
+  flutter_widget_from_html: ^0.15.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
