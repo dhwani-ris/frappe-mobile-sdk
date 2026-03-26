@@ -53,6 +53,9 @@ class FormScreen extends StatefulWidget {
   /// has a server method path, it is called; otherwise a message is shown.
   final OnButtonPressedCallback? onButtonPressed;
 
+  /// When true (default), use LinkFieldCoordinator for sequenced link option loading.
+  final bool useLinkFieldCoordinator;
+
   const FormScreen({
     super.key,
     required this.meta,
@@ -71,6 +74,7 @@ class FormScreen extends StatefulWidget {
     this.translate,
     this.initialData,
     this.onButtonPressed,
+    this.useLinkFieldCoordinator = true,
   });
 
   @override
@@ -407,6 +411,14 @@ class _FormScreenState extends State<FormScreen> {
           if (serverName != null) {
             final merged = Map<String, dynamic>.from(payload)
               ..['name'] = serverName;
+            // Submit directly for submittable doctypes (no draft)
+            if (widget.meta.isSubmittable) {
+              await widget.api!.document.submitDocument(
+                widget.meta.name,
+                serverName,
+              );
+              merged['docstatus'] = 1;
+            }
             await widget.repository.saveServerDocument(
               doctype: widget.meta.name,
               serverId: serverName,
@@ -424,6 +436,20 @@ class _FormScreenState extends State<FormScreen> {
             widget.document!.serverId!,
             existingData,
           );
+          // Submit directly for submittable doctypes when doc is still draft
+          if (widget.meta.isSubmittable) {
+            final docstatus = int.tryParse(
+                  existingData['docstatus']?.toString() ?? '0',
+                ) ??
+                0;
+            if (docstatus == 0) {
+              await widget.api!.document.submitDocument(
+                widget.meta.name,
+                widget.document!.serverId!,
+              );
+              existingData['docstatus'] = 1;
+            }
+          }
           await widget.repository.updateDocumentData(
             widget.document!.localId,
             existingData,
@@ -753,38 +779,40 @@ class _FormScreenState extends State<FormScreen> {
             ),
         ],
       ),
-      body: Column(
+      body: Stack(
         children: [
-          if (_errorMessage != null)
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(12),
-              color: Colors.red[50],
-              child: Row(
-                children: [
-                  const Icon(Icons.error, color: Colors.red),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      _errorMessage!,
-                      style: const TextStyle(color: Colors.red),
-                    ),
+          Column(
+            children: [
+              if (_errorMessage != null)
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(12),
+                  color: Colors.red[50],
+                  child: Row(
+                    children: [
+                      const Icon(Icons.error, color: Colors.red),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          _errorMessage!,
+                          style: const TextStyle(color: Colors.red),
+                        ),
+                      ),
+                    ],
                   ),
-                ],
-              ),
-            ),
-          if (widget.meta.hasWorkflow &&
-              widget.document != null &&
-              widget.api != null)
-            _WorkflowHeader(
-              meta: widget.meta,
-              documentData: _currentDocData,
-              loading: _workflowLoading,
-              translate: widget.translate,
-              onShowActions: _showWorkflowActionsSheet,
-            ),
-          Expanded(
-            child: FrappeFormBuilder(
+                ),
+              if (widget.meta.hasWorkflow &&
+                  widget.document != null &&
+                  widget.api != null)
+                _WorkflowHeader(
+                  meta: widget.meta,
+                  documentData: _currentDocData,
+                  loading: _workflowLoading,
+                  translate: widget.translate,
+                  onShowActions: _showWorkflowActionsSheet,
+                ),
+              Expanded(
+                child: FrappeFormBuilder(
               key: widget.document != null
                   ? ValueKey('form_${widget.document!.localId}')
                   : const ValueKey('form_new'),
@@ -797,6 +825,7 @@ class _FormScreenState extends State<FormScreen> {
               readOnly: effectiveReadOnly,
               onFormDataChanged: _onFormDataChanged,
               linkOptionService: widget.linkOptionService,
+              useLinkFieldCoordinator: widget.useLinkFieldCoordinator,
               uploadFile: widget.api != null
                   ? (file) async {
                       final res = await widget.api!.attachment.uploadFile(file);
@@ -821,7 +850,39 @@ class _FormScreenState extends State<FormScreen> {
               style: widget.style,
               translate: widget.translate,
             ),
+              ),
+            ],
           ),
+          if (_isSaving)
+            Positioned.fill(
+              child: IgnorePointer(
+                child: Container(
+                  color: Colors.black26,
+                  child: Center(
+                    child: Card(
+                      child: Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const SizedBox(
+                              width: 40,
+                              height: 40,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
+                            const SizedBox(height: 16),
+                            Text(
+                              'Saving...',
+                              style: Theme.of(context).textTheme.titleMedium,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
         ],
       ),
     );
