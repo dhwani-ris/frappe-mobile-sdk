@@ -36,6 +36,12 @@ class LoginScreen extends StatefulWidget {
   verifyLoginOtp;
 
   final AppDatabase? database;
+  /// Pre-fill username (e.g. for demo automation)
+  final String? initialUsername;
+  /// Pre-fill password (e.g. for demo automation)
+  final String? initialPassword;
+  /// When true, automatically trigger login after first frame if credentials are pre-filled
+  final bool autoLogin;
 
   /// Optional styling (title, buttons, inputs, etc.). Null uses theme defaults.
   final LoginScreenStyle? style;
@@ -50,6 +56,9 @@ class LoginScreen extends StatefulWidget {
     this.sendLoginOtp,
     this.verifyLoginOtp,
     this.database,
+    this.initialUsername,
+    this.initialPassword,
+    this.autoLogin = false,
     this.style,
   });
 
@@ -103,9 +112,24 @@ class _LoginScreenState extends State<LoginScreen> {
     if (widget.initialBaseUrl != null && widget.appConfig == null) {
       _baseUrlController.text = widget.initialBaseUrl!;
     }
+    if (widget.initialUsername != null) {
+      _usernameController.text = widget.initialUsername!;
+    }
+    if (widget.initialPassword != null) {
+      _passwordController.text = widget.initialPassword!;
+    }
     // When password login is disabled, show mobile OTP section expanded by default
     _mobileSectionExpanded = !_enablePasswordLogin;
     _checkInitialUri();
+    if (widget.autoLogin &&
+        widget.initialUsername != null &&
+        widget.initialUsername!.trim().isNotEmpty &&
+        widget.initialPassword != null &&
+        widget.initialPassword!.isNotEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _handleLogin();
+      });
+    }
   }
 
   Future<void> _checkInitialUri() async {
