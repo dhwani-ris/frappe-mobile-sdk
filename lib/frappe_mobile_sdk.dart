@@ -52,6 +52,7 @@ export 'src/services/translation_service.dart';
 export 'src/services/sync_service.dart';
 export 'src/services/offline_repository.dart';
 export 'src/services/link_option_service.dart';
+export 'src/services/link_field_coordinator.dart';
 export 'src/services/workflow_service.dart';
 
 // UI Components

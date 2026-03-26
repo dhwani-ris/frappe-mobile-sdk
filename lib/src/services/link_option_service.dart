@@ -146,12 +146,15 @@ class LinkOptionService {
           : <dynamic>[];
       final names = <String>[];
       for (final filter in filters) {
-        if (filter is! List || filter.length < 4) continue;
-        final value = filter[3];
-        if (value is String) {
-          final fieldName = DependsOnEvaluator.extractEvalDocField(value);
-          if (fieldName != null && !names.contains(fieldName)) {
-            names.add(fieldName);
+        if (filter is! List) continue;
+        for (final elem in filter) {
+          if (elem is! String) continue;
+          // Prefer the evaluator helper (supports "eval: doc.x" and variations)
+          final extracted = DependsOnEvaluator.extractEvalDocField(elem);
+          final fieldName = extracted ??
+              (elem.startsWith('eval:doc.') ? elem.substring(9).trim() : null);
+          if (fieldName != null && fieldName.isNotEmpty) {
+            if (!names.contains(fieldName)) names.add(fieldName);
           }
         }
       }
