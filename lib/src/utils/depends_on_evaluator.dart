@@ -23,6 +23,31 @@ class DependsOnEvaluator {
     // eval:doc.field <= value
 
     try {
+      // Handle && (AND) operator — split outside brackets to avoid breaking .includes([...])
+      final andParts = _splitOutsideBrackets(expr, ' && ');
+      if (andParts.length > 1) {
+        return andParts.every((part) => evaluate(part.trim(), formData));
+      }
+
+      // Handle || (OR) operator — same bracket-aware splitting
+      final orParts = _splitOutsideBrackets(expr, ' || ');
+      if (orParts.length > 1) {
+        return orParts.any((part) => evaluate(part.trim(), formData));
+      }
+
+      // Handle [values].includes(doc.field) pattern
+      final includesMatch = RegExp(
+        r"^\[(.*)?\]\.includes\(doc\.(\w+)\)$",
+      ).firstMatch(expr);
+      if (includesMatch != null) {
+        final arrayContent = includesMatch.group(1) ?? '';
+        final fieldName = includesMatch.group(2)!;
+        final values = _parseArrayValues(arrayContent);
+        final actual = formData[fieldName];
+        if (actual == null) return false;
+        return values.contains(actual.toString());
+      }
+
       // Handle == comparison
       if (expr.contains(' == ')) {
         final parts = expr.split(' == ');
@@ -42,6 +67,28 @@ class DependsOnEvaluator {
           final expectedValue = _extractValue(parts[1]);
           final actualValue = formData[fieldName];
           return _compareValues(actualValue, expectedValue, '!=');
+        }
+      }
+
+      // Handle >= comparison (before > to avoid false match)
+      if (expr.contains(' >= ')) {
+        final parts = expr.split(' >= ');
+        if (parts.length == 2) {
+          final fieldName = _extractFieldName(parts[0]);
+          final expectedValue = _extractValue(parts[1]);
+          final actualValue = formData[fieldName];
+          return _compareValues(actualValue, expectedValue, '>=');
+        }
+      }
+
+      // Handle <= comparison (before < to avoid false match)
+      if (expr.contains(' <= ')) {
+        final parts = expr.split(' <= ');
+        if (parts.length == 2) {
+          final fieldName = _extractFieldName(parts[0]);
+          final expectedValue = _extractValue(parts[1]);
+          final actualValue = formData[fieldName];
+          return _compareValues(actualValue, expectedValue, '<=');
         }
       }
 
@@ -65,40 +112,6 @@ class DependsOnEvaluator {
           final actualValue = formData[fieldName];
           return _compareValues(actualValue, expectedValue, '<');
         }
-      }
-
-      // Handle >= comparison
-      if (expr.contains(' >= ')) {
-        final parts = expr.split(' >= ');
-        if (parts.length == 2) {
-          final fieldName = _extractFieldName(parts[0]);
-          final expectedValue = _extractValue(parts[1]);
-          final actualValue = formData[fieldName];
-          return _compareValues(actualValue, expectedValue, '>=');
-        }
-      }
-
-      // Handle <= comparison
-      if (expr.contains(' <= ')) {
-        final parts = expr.split(' <= ');
-        if (parts.length == 2) {
-          final fieldName = _extractFieldName(parts[0]);
-          final expectedValue = _extractValue(parts[1]);
-          final actualValue = formData[fieldName];
-          return _compareValues(actualValue, expectedValue, '<=');
-        }
-      }
-
-      // Handle && (AND) operator
-      if (expr.contains(' && ')) {
-        final parts = expr.split(' && ');
-        return parts.every((part) => evaluate(part.trim(), formData));
-      }
-
-      // Handle || (OR) operator
-      if (expr.contains(' || ')) {
-        final parts = expr.split(' || ');
-        return parts.any((part) => evaluate(part.trim(), formData));
       }
 
       // Default: check if field exists and is truthy
@@ -146,6 +159,39 @@ class DependsOnEvaluator {
       return double.tryParse(expr);
     }
     return expr;
+  }
+
+  /// Split expression by delimiter, but only when not inside [...] brackets.
+  static List<String> _splitOutsideBrackets(String expr, String delimiter) {
+    final parts = <String>[];
+    int bracketDepth = 0;
+    int lastSplit = 0;
+
+    for (int i = 0; i < expr.length; i++) {
+      if (expr[i] == '[') {
+        bracketDepth++;
+      } else if (expr[i] == ']') {
+        bracketDepth--;
+      } else if (bracketDepth == 0 &&
+          i + delimiter.length <= expr.length &&
+          expr.substring(i, i + delimiter.length) == delimiter) {
+        parts.add(expr.substring(lastSplit, i));
+        lastSplit = i + delimiter.length;
+        i += delimiter.length - 1;
+      }
+    }
+    parts.add(expr.substring(lastSplit));
+    return parts;
+  }
+
+  /// Parse comma-separated quoted values from inside array brackets.
+  static List<String> _parseArrayValues(String arrayContent) {
+    final values = <String>[];
+    final regex = RegExp(r"""['"]([^'"]*?)['"]""");
+    for (final match in regex.allMatches(arrayContent)) {
+      values.add(match.group(1)!);
+    }
+    return values;
   }
 
   static bool _compareValues(

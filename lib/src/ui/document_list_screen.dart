@@ -42,6 +42,13 @@ class DocumentListScreen extends StatefulWidget {
   /// Optional callback when a Button field is pressed in the form. Override to implement client-script logic.
   final OnButtonPressedCallback? onButtonPressed;
 
+  /// Called when a field value changes in the form. Returns computed field patches.
+  final Map<String, dynamic>? Function(
+    String fieldName,
+    dynamic newValue,
+    Map<String, dynamic> formData,
+  )? onFieldChange;
+
   const DocumentListScreen({
     super.key,
     required this.doctype,
@@ -57,6 +64,7 @@ class DocumentListScreen extends StatefulWidget {
     this.permissionService,
     this.translate,
     this.onButtonPressed,
+    this.onFieldChange,
   });
 
   @override
@@ -453,6 +461,7 @@ class _DocumentListScreenState extends State<DocumentListScreen> {
           },
           getMobileUuid: widget.getMobileUuid,
           onButtonPressed: widget.onButtonPressed,
+          onFieldChange: widget.onFieldChange,
           // Permissions
           readOnly: !isNew && !_canWrite,
           canSave: isNew ? _canCreate : _canWrite,
