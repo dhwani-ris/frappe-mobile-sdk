@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+
 import '../api/client.dart';
 import '../api/exceptions.dart';
 import '../api/utils.dart';
@@ -6,14 +7,13 @@ import '../models/doc_field.dart';
 import '../models/doc_type_meta.dart';
 import '../models/document.dart';
 import '../models/workflow_transition.dart';
-import '../services/offline_repository.dart';
-import '../services/sync_service.dart';
 import '../services/link_option_service.dart';
 import '../services/meta_service.dart';
+import '../services/offline_repository.dart';
+import '../services/sync_service.dart';
 import '../services/workflow_service.dart';
-import 'widgets/form_builder.dart'
-    show FrappeFormBuilder, FrappeFormStyle, OnButtonPressedCallback;
 import 'sync_status_screen.dart';
+import 'widgets/form_builder.dart' show FrappeFormBuilder, FrappeFormStyle, OnButtonPressedCallback;
 
 /// Screen for displaying and editing a Frappe document form.
 /// When [api] is set, CRUD is done directly on the server then local repo is updated.
@@ -53,6 +53,14 @@ class FormScreen extends StatefulWidget {
   /// has a server method path, it is called; otherwise a message is shown.
   final OnButtonPressedCallback? onButtonPressed;
 
+  /// Called when a field value changes. Returns computed field patches (for hidden computed fields).
+  final Map<String, dynamic>? Function(
+    String fieldName,
+    dynamic newValue,
+    Map<String, dynamic> formData,
+  )?
+  onFieldChange;
+
   /// When true (default), use LinkFieldCoordinator for sequenced link option loading.
   final bool useLinkFieldCoordinator;
 
@@ -74,6 +82,7 @@ class FormScreen extends StatefulWidget {
     this.translate,
     this.initialData,
     this.onButtonPressed,
+    this.onFieldChange,
     this.useLinkFieldCoordinator = true,
   });
 
@@ -96,10 +105,7 @@ class _FormScreenState extends State<FormScreen> {
   bool _isFormDirty = false;
 
   Map<String, dynamic> get _currentDocData =>
-      _workflowUpdatedDocData ??
-      widget.document?.data ??
-      widget.initialData ??
-      {};
+      _workflowUpdatedDocData ?? widget.document?.data ?? widget.initialData ?? {};
 
   /// True if document is submitted (docstatus == 1). Form is read-only when submitted.
   bool get _isSubmitted {
@@ -110,11 +116,7 @@ class _FormScreenState extends State<FormScreen> {
     return false;
   }
 
-  static bool _formDataEquals(
-    Map<String, dynamic> a,
-    Map<String, dynamic> b,
-    DocTypeMeta meta,
-  ) {
+  static bool _formDataEquals(Map<String, dynamic> a, Map<String, dynamic> b, DocTypeMeta meta) {
     String norm(DocField f, dynamic v) {
       if (f.fieldtype == 'Check') {
         if (v == null) return '0';
@@ -162,9 +164,7 @@ class _FormScreenState extends State<FormScreen> {
         oldWidget.initialData != widget.initialData) {
       _workflowTransitions = null;
       _workflowUpdatedDocData = null;
-      _workflowService = widget.api != null
-          ? WorkflowService(widget.api!)
-          : null;
+      _workflowService = widget.api != null ? WorkflowService(widget.api!) : null;
       _baselineFormData = Map<String, dynamic>.from(_currentDocData);
       _isFormDirty = false;
       _loadWorkflowTransitions();
@@ -172,9 +172,7 @@ class _FormScreenState extends State<FormScreen> {
   }
 
   Future<void> _loadWorkflowTransitions() async {
-    if (!widget.meta.hasWorkflow ||
-        widget.api == null ||
-        widget.document?.serverId == null) {
+    if (!widget.meta.hasWorkflow || widget.api == null || widget.document?.serverId == null) {
       return;
     }
     setState(() => _workflowLoading = true);
@@ -207,10 +205,7 @@ class _FormScreenState extends State<FormScreen> {
         widget.document!.serverId!,
         action,
       );
-      await widget.repository.updateDocumentData(
-        widget.document!.localId,
-        updated,
-      );
+      await widget.repository.updateDocumentData(widget.document!.localId, updated);
       if (mounted) {
         setState(() {
           _workflowUpdatedDocData = updated;
@@ -220,20 +215,14 @@ class _FormScreenState extends State<FormScreen> {
         await _loadWorkflowTransitions();
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Workflow: $action'),
-              backgroundColor: Colors.green,
-            ),
+            SnackBar(content: Text('Workflow: $action'), backgroundColor: Colors.green),
           );
         }
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(toUserFriendlyMessage(e)),
-            backgroundColor: Colors.red,
-          ),
+          SnackBar(content: Text(toUserFriendlyMessage(e)), backgroundColor: Colors.red),
         );
       }
     }
@@ -244,9 +233,7 @@ class _FormScreenState extends State<FormScreen> {
       return;
     }
     final stateField = widget.meta.workflowStateField;
-    final currentState = stateField != null
-        ? _currentDocData[stateField]?.toString()
-        : null;
+    final currentState = stateField != null ? _currentDocData[stateField]?.toString() : null;
 
     await showModalBottomSheet<void>(
       context: context,
@@ -258,27 +245,18 @@ class _FormScreenState extends State<FormScreen> {
             children: [
               ListTile(
                 title: Text(
-                  widget.translate != null
-                      ? widget.translate!('Current State')
-                      : 'Current State',
+                  widget.translate != null ? widget.translate!('Current State') : 'Current State',
                   style: const TextStyle(fontWeight: FontWeight.w600),
                 ),
-                subtitle: Text(
-                  currentState?.isNotEmpty == true ? currentState! : '—',
-                ),
+                subtitle: Text(currentState?.isNotEmpty == true ? currentState! : '—'),
               ),
               const Divider(height: 1),
               if (_workflowTransitions == null || _workflowTransitions!.isEmpty)
                 Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 12,
-                  ),
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                   child: Text(
                     widget.translate != null
-                        ? widget.translate!(
-                            'No workflow actions available for this state.',
-                          )
+                        ? widget.translate!('No workflow actions available for this state.')
                         : 'No workflow actions available for this state.',
                     style: Theme.of(context).textTheme.bodyMedium,
                   ),
@@ -300,10 +278,7 @@ class _FormScreenState extends State<FormScreen> {
     );
   }
 
-  Future<void> _handleButtonPressed(
-    DocField field,
-    Map<String, dynamic> formData,
-  ) async {
+  Future<void> _handleButtonPressed(DocField field, Map<String, dynamic> formData) async {
     final method = field.options?.trim();
     if (method == null || method.isEmpty) {
       if (mounted) {
@@ -337,33 +312,21 @@ class _FormScreenState extends State<FormScreen> {
       await widget.api!.call(method, args: {'doc': formData});
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Action completed'),
-            backgroundColor: Colors.green,
-          ),
+          const SnackBar(content: Text('Action completed'), backgroundColor: Colors.green),
         );
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(toUserFriendlyMessage(e)),
-            backgroundColor: Colors.red,
-          ),
+          SnackBar(content: Text(toUserFriendlyMessage(e)), backgroundColor: Colors.red),
         );
       }
     }
   }
 
-  Future<Map<String, dynamic>?> _fetchLinkedDocument(
-    String linkedDoctype,
-    String docName,
-  ) async {
+  Future<Map<String, dynamic>?> _fetchLinkedDocument(String linkedDoctype, String docName) async {
     try {
-      final doc = await widget.repository.getDocumentByServerId(
-        docName,
-        linkedDoctype,
-      );
+      final doc = await widget.repository.getDocumentByServerId(docName, linkedDoctype);
       if (doc != null) return doc.data;
     } catch (_) {}
     if (widget.api != null) {
@@ -380,9 +343,7 @@ class _FormScreenState extends State<FormScreen> {
     for (final f in widget.meta.fields) {
       final name = f.fieldname;
       if (f.allowMultiple && name != null && payload[name] is List) {
-        payload[name] = (payload[name] as List)
-            .map((e) => e.toString())
-            .join(',');
+        payload[name] = (payload[name] as List).map((e) => e.toString()).join(',');
       }
     }
 
@@ -402,21 +363,13 @@ class _FormScreenState extends State<FormScreen> {
               payload['mobile_uuid'] = uuid;
             }
           }
-          final result = await widget.api!.document.createDocument(
-            widget.meta.name,
-            payload,
-          );
-          final serverName =
-              result['name']?.toString() ?? result['docname']?.toString();
+          final result = await widget.api!.document.createDocument(widget.meta.name, payload);
+          final serverName = result['name']?.toString() ?? result['docname']?.toString();
           if (serverName != null) {
-            final merged = Map<String, dynamic>.from(payload)
-              ..['name'] = serverName;
+            final merged = Map<String, dynamic>.from(payload)..['name'] = serverName;
             // Submit directly for submittable doctypes (no draft)
             if (widget.meta.isSubmittable) {
-              await widget.api!.document.submitDocument(
-                widget.meta.name,
-                serverName,
-              );
+              await widget.api!.document.submitDocument(widget.meta.name, serverName);
               merged['docstatus'] = 1;
             }
             await widget.repository.saveServerDocument(
@@ -438,10 +391,7 @@ class _FormScreenState extends State<FormScreen> {
           );
           // Submit directly for submittable doctypes when doc is still draft
           if (widget.meta.isSubmittable) {
-            final docstatus = int.tryParse(
-                  existingData['docstatus']?.toString() ?? '0',
-                ) ??
-                0;
+            final docstatus = int.tryParse(existingData['docstatus']?.toString() ?? '0') ?? 0;
             if (docstatus == 0) {
               await widget.api!.document.submitDocument(
                 widget.meta.name,
@@ -450,10 +400,7 @@ class _FormScreenState extends State<FormScreen> {
               existingData['docstatus'] = 1;
             }
           }
-          await widget.repository.updateDocumentData(
-            widget.document!.localId,
-            existingData,
-          );
+          await widget.repository.updateDocumentData(widget.document!.localId, existingData);
           savedData = existingData;
         }
         if (mounted) {
@@ -462,10 +409,7 @@ class _FormScreenState extends State<FormScreen> {
             _isFormDirty = false;
           });
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Saved successfully'),
-              backgroundColor: Colors.green,
-            ),
+            const SnackBar(content: Text('Saved successfully'), backgroundColor: Colors.green),
           );
           widget.onSaveSuccess?.call();
         }
@@ -480,35 +424,25 @@ class _FormScreenState extends State<FormScreen> {
             payload['mobile_uuid'] = uuid;
           }
         }
-        await widget.repository.createDocument(
-          doctype: widget.meta.name,
-          data: payload,
-        );
+        await widget.repository.createDocument(doctype: widget.meta.name, data: payload);
       } else {
         final existingData = Map<String, dynamic>.from(widget.document!.data);
         existingData.addAll(payload);
-        await widget.repository.updateDocumentData(
-          widget.document!.localId,
-          existingData,
-        );
+        await widget.repository.updateDocumentData(widget.document!.localId, existingData);
       }
 
       if (widget.syncService != null) {
         final isOnline = await widget.syncService!.isOnline();
         if (isOnline) {
           try {
-            final syncResult = await widget.syncService!.pushSync(
-              doctype: widget.meta.name,
-            );
+            final syncResult = await widget.syncService!.pushSync(doctype: widget.meta.name);
             if (mounted) {
               if (syncResult.errors.isNotEmpty) {
                 _showSyncErrorDialog(syncResult.errors);
               } else if (syncResult.failed > 0) {
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
-                    content: Text(
-                      'Saved locally. ${syncResult.failed} update(s) failed to sync.',
-                    ),
+                    content: Text('Saved locally. ${syncResult.failed} update(s) failed to sync.'),
                     backgroundColor: Colors.orange,
                     action: SnackBarAction(
                       label: 'Details',
@@ -520,9 +454,7 @@ class _FormScreenState extends State<FormScreen> {
               } else if (syncResult.success > 0) {
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
-                    content: Text(
-                      'Saved and synced (${syncResult.success} document(s))',
-                    ),
+                    content: Text('Saved and synced (${syncResult.success} document(s))'),
                     backgroundColor: Colors.green,
                   ),
                 );
@@ -587,9 +519,7 @@ class _FormScreenState extends State<FormScreen> {
       }
     } catch (e) {
       setState(() {
-        _errorMessage = e is FrappeException
-            ? e.message
-            : toUserFriendlyMessage(e);
+        _errorMessage = e is FrappeException ? e.message : toUserFriendlyMessage(e);
       });
     } finally {
       setState(() {
@@ -607,10 +537,7 @@ class _FormScreenState extends State<FormScreen> {
         title: const Text('Delete Document'),
         content: const Text('Are you sure you want to delete this document?'),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
             child: const Text('Delete', style: TextStyle(color: Colors.red)),
@@ -627,10 +554,7 @@ class _FormScreenState extends State<FormScreen> {
 
     try {
       if (widget.api != null && widget.document!.serverId != null) {
-        await widget.api!.document.deleteDocument(
-          widget.meta.name,
-          widget.document!.serverId!,
-        );
+        await widget.api!.document.deleteDocument(widget.meta.name, widget.document!.serverId!);
         await widget.repository.hardDeleteDocument(widget.document!.localId);
       } else {
         await widget.repository.deleteDocument(widget.document!.localId);
@@ -646,19 +570,14 @@ class _FormScreenState extends State<FormScreen> {
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Document deleted'),
-            backgroundColor: Colors.orange,
-          ),
+          const SnackBar(content: Text('Document deleted'), backgroundColor: Colors.orange),
         );
         Navigator.pop(context);
         widget.onSaveSuccess?.call();
       }
     } catch (e) {
       setState(() {
-        _errorMessage = e is FrappeException
-            ? e.message
-            : toUserFriendlyMessage(e);
+        _errorMessage = e is FrappeException ? e.message : toUserFriendlyMessage(e);
       });
     } finally {
       setState(() {
@@ -712,10 +631,7 @@ class _FormScreenState extends State<FormScreen> {
           ),
         ),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Close'),
-          ),
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Close')),
           if (widget.syncService != null)
             TextButton(
               onPressed: () {
@@ -793,17 +709,12 @@ class _FormScreenState extends State<FormScreen> {
                       const Icon(Icons.error, color: Colors.red),
                       const SizedBox(width: 8),
                       Expanded(
-                        child: Text(
-                          _errorMessage!,
-                          style: const TextStyle(color: Colors.red),
-                        ),
+                        child: Text(_errorMessage!, style: const TextStyle(color: Colors.red)),
                       ),
                     ],
                   ),
                 ),
-              if (widget.meta.hasWorkflow &&
-                  widget.document != null &&
-                  widget.api != null)
+              if (widget.meta.hasWorkflow && widget.document != null && widget.api != null)
                 _WorkflowHeader(
                   meta: widget.meta,
                   documentData: _currentDocData,
@@ -813,43 +724,38 @@ class _FormScreenState extends State<FormScreen> {
                 ),
               Expanded(
                 child: FrappeFormBuilder(
-              key: widget.document != null
-                  ? ValueKey('form_${widget.document!.localId}')
-                  : const ValueKey('form_new'),
-              meta: widget.meta,
-              initialData:
-                  _workflowUpdatedDocData ??
-                  widget.document?.data ??
-                  widget.initialData,
-              onSubmit: _handleSubmit,
-              readOnly: effectiveReadOnly,
-              onFormDataChanged: _onFormDataChanged,
-              linkOptionService: widget.linkOptionService,
-              useLinkFieldCoordinator: widget.useLinkFieldCoordinator,
-              uploadFile: widget.api != null
-                  ? (file) async {
-                      final res = await widget.api!.attachment.uploadFile(file);
-                      return res['file_url'] as String? ??
-                          res['file_name'] as String?;
-                    }
-                  : null,
-              fileUrlBase: widget.api?.baseUrl,
-              imageHeaders: widget.api?.requestHeaders,
-              fetchLinkedDocument: _fetchLinkedDocument,
-              getMeta: widget.metaService != null
-                  ? (doctype) => widget.metaService!.getMeta(doctype)
-                  : null,
-              registerSubmit: (trigger) => _triggerSubmit = trigger,
-              onButtonPressed: widget.onButtonPressed != null
-                  ? (field, formData) => widget.onButtonPressed!(
-                      field,
-                      formData,
-                      _handleButtonPressed,
-                    )
-                  : _handleButtonPressed,
-              style: widget.style,
-              translate: widget.translate,
-            ),
+                  key: widget.document != null
+                      ? ValueKey('form_${widget.document!.localId}')
+                      : const ValueKey('form_new'),
+                  meta: widget.meta,
+                  initialData:
+                      _workflowUpdatedDocData ?? widget.document?.data ?? widget.initialData,
+                  onSubmit: _handleSubmit,
+                  readOnly: effectiveReadOnly,
+                  onFormDataChanged: _onFormDataChanged,
+                  linkOptionService: widget.linkOptionService,
+                  useLinkFieldCoordinator: widget.useLinkFieldCoordinator,
+                  uploadFile: widget.api != null
+                      ? (file) async {
+                          final res = await widget.api!.attachment.uploadFile(file);
+                          return res['file_url'] as String? ?? res['file_name'] as String?;
+                        }
+                      : null,
+                  fileUrlBase: widget.api?.baseUrl,
+                  imageHeaders: widget.api?.requestHeaders,
+                  fetchLinkedDocument: _fetchLinkedDocument,
+                  getMeta: widget.metaService != null
+                      ? (doctype) => widget.metaService!.getMeta(doctype)
+                      : null,
+                  registerSubmit: (trigger) => _triggerSubmit = trigger,
+                  onButtonPressed: widget.onButtonPressed != null
+                      ? (field, formData) =>
+                            widget.onButtonPressed!(field, formData, _handleButtonPressed)
+                      : _handleButtonPressed,
+                  style: widget.style,
+                  translate: widget.translate,
+                  onFieldChange: widget.onFieldChange,
+                ),
               ),
             ],
           ),
@@ -871,10 +777,7 @@ class _FormScreenState extends State<FormScreen> {
                               child: CircularProgressIndicator(strokeWidth: 2),
                             ),
                             const SizedBox(height: 16),
-                            Text(
-                              'Saving...',
-                              style: Theme.of(context).textTheme.titleMedium,
-                            ),
+                            Text('Saving...', style: Theme.of(context).textTheme.titleMedium),
                           ],
                         ),
                       ),
@@ -907,9 +810,7 @@ class _WorkflowHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final stateField = meta.workflowStateField;
-    final currentState = stateField != null
-        ? documentData[stateField]?.toString()
-        : null;
+    final currentState = stateField != null ? documentData[stateField]?.toString() : null;
     final stateLabel = currentState?.isNotEmpty == true ? currentState! : '—';
 
     return Container(
@@ -923,33 +824,21 @@ class _WorkflowHeader extends StatelessWidget {
         children: [
           Text(
             translate != null ? translate!('Status') : 'Status',
-            style: TextStyle(
-              fontWeight: FontWeight.w600,
-              color: Colors.blue.shade900,
-            ),
+            style: TextStyle(fontWeight: FontWeight.w600, color: Colors.blue.shade900),
           ),
           const SizedBox(width: 8),
           Chip(
-            label: Text(
-              stateLabel,
-              style: TextStyle(fontSize: 12, color: Colors.blue.shade900),
-            ),
+            label: Text(stateLabel, style: TextStyle(fontSize: 12, color: Colors.blue.shade900)),
             backgroundColor: Colors.blue.shade100,
           ),
           const Spacer(),
           if (loading)
-            const SizedBox(
-              height: 20,
-              width: 20,
-              child: CircularProgressIndicator(strokeWidth: 2),
-            )
+            const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2))
           else
             TextButton.icon(
               onPressed: onShowActions,
               icon: const Icon(Icons.playlist_play),
-              label: Text(
-                translate != null ? translate!('Actions') : 'Actions',
-              ),
+              label: Text(translate != null ? translate!('Actions') : 'Actions'),
             ),
         ],
       ),
