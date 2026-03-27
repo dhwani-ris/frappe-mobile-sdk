@@ -42,9 +42,14 @@ class ChildTableField extends StatelessWidget {
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Text(
-              field.label ?? field.fieldname ?? 'Table',
-              style: Theme.of(context).textTheme.titleMedium,
+            Expanded(
+              child: Text(
+                field.label ?? field.fieldname ?? 'Table',
+                style: Theme.of(context).textTheme.titleMedium,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                softWrap: true,
+              ),
             ),
             if (enabled && !field.readOnly && onChanged != null)
               TextButton.icon(

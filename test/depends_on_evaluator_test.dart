@@ -7,15 +7,15 @@ void main() {
       test('== comparison', () {
         expect(
           DependsOnEvaluator.evaluate(
-            "eval:doc.study == 'Yes'",
-            {'study': 'Yes'},
+            "eval:doc.status == 'Yes'",
+            {'status': 'Yes'},
           ),
           isTrue,
         );
         expect(
           DependsOnEvaluator.evaluate(
-            "eval:doc.study == 'Yes'",
-            {'study': 'No'},
+            "eval:doc.status == 'Yes'",
+            {'status': 'No'},
           ),
           isFalse,
         );
@@ -24,8 +24,8 @@ void main() {
       test('!= comparison', () {
         expect(
           DependsOnEvaluator.evaluate(
-            "eval:doc.study != 'Yes'",
-            {'study': 'No'},
+            "eval:doc.status != 'Yes'",
+            {'status': 'No'},
           ),
           isTrue,
         );
@@ -34,15 +34,15 @@ void main() {
       test('&& operator', () {
         expect(
           DependsOnEvaluator.evaluate(
-            "eval:doc.age_grup == '15 Years and Above' && doc.valdy_check == 'Yes'",
-            {'age_grup': '15 Years and Above', 'valdy_check': 'Yes'},
+            "eval:doc.category == 'TypeA' && doc.verified == 'Yes'",
+            {'category': 'TypeA', 'verified': 'Yes'},
           ),
           isTrue,
         );
         expect(
           DependsOnEvaluator.evaluate(
-            "eval:doc.age_grup == '15 Years and Above' && doc.valdy_check == 'Yes'",
-            {'age_grup': '15 Years and Above', 'valdy_check': 'No'},
+            "eval:doc.category == 'TypeA' && doc.verified == 'Yes'",
+            {'category': 'TypeA', 'verified': 'No'},
           ),
           isFalse,
         );
@@ -51,8 +51,8 @@ void main() {
       test('|| operator', () {
         expect(
           DependsOnEvaluator.evaluate(
-            "eval:doc.case_i == 'Yes' || doc.case_ii == 'Yes'",
-            {'case_i': 'No', 'case_ii': 'Yes'},
+            "eval:doc.flag_a == 'Yes' || doc.flag_b == 'Yes'",
+            {'flag_a': 'No', 'flag_b': 'Yes'},
           ),
           isTrue,
         );
@@ -83,8 +83,8 @@ void main() {
       test('single-quoted values — match', () {
         expect(
           DependsOnEvaluator.evaluate(
-            "eval:['5 Years to Less than 15 Years','15 Years and Above'].includes(doc.age_grup)",
-            {'age_grup': '15 Years and Above'},
+            "eval:['TypeA','TypeB'].includes(doc.category)",
+            {'category': 'TypeB'},
           ),
           isTrue,
         );
@@ -93,8 +93,8 @@ void main() {
       test('single-quoted values — no match', () {
         expect(
           DependsOnEvaluator.evaluate(
-            "eval:['5 Years to Less than 15 Years','15 Years and Above'].includes(doc.age_grup)",
-            {'age_grup': 'Less than 1 Year'},
+            "eval:['TypeA','TypeB'].includes(doc.category)",
+            {'category': 'TypeC'},
           ),
           isFalse,
         );
@@ -123,15 +123,15 @@ void main() {
       test('.includes() combined with && operator', () {
         expect(
           DependsOnEvaluator.evaluate(
-            "eval:['5 Years to Less than 15 Years','15 Years and Above'].includes(doc.age_grup) && doc.study == 'Yes'",
-            {'age_grup': '15 Years and Above', 'study': 'Yes'},
+            "eval:['TypeA','TypeB'].includes(doc.category) && doc.status == 'Yes'",
+            {'category': 'TypeA', 'status': 'Yes'},
           ),
           isTrue,
         );
         expect(
           DependsOnEvaluator.evaluate(
-            "eval:['5 Years to Less than 15 Years','15 Years and Above'].includes(doc.age_grup) && doc.study == 'Yes'",
-            {'age_grup': '15 Years and Above', 'study': 'No'},
+            "eval:['TypeA','TypeB'].includes(doc.category) && doc.status == 'Yes'",
+            {'category': 'TypeA', 'status': 'No'},
           ),
           isFalse,
         );
