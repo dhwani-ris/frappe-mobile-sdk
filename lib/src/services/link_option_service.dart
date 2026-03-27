@@ -1,10 +1,11 @@
 import 'dart:convert';
+
 import '../api/client.dart';
 import '../database/app_database.dart';
 import '../database/entities/link_option_entity.dart';
 import '../models/doc_type_meta.dart';
-import 'meta_service.dart';
 import '../utils/depends_on_evaluator.dart';
+import 'meta_service.dart';
 
 const int _kLinkOptionCacheMaxEntries = 30;
 
@@ -25,8 +26,7 @@ class LinkOptionService {
   }
 
   void _putCache(String key, List<LinkOptionEntity> options) {
-    if (_memoryCache.length >= _kLinkOptionCacheMaxEntries &&
-        !_memoryCache.containsKey(key)) {
+    if (_memoryCache.length >= _kLinkOptionCacheMaxEntries && !_memoryCache.containsKey(key)) {
       if (_cacheKeys.isNotEmpty) {
         final evict = _cacheKeys.removeAt(0);
         _memoryCache.remove(evict);
@@ -48,19 +48,32 @@ class LinkOptionService {
       return _memoryCache[key]!;
     }
 
-    final titleField = await _getTitleField(doctype);
+    final meta = await _getDocTypeMeta(doctype);
+    final titleField = _resolveTitleField(doctype, meta);
 
     List<dynamic> documents;
+
     try {
-      documents = await _client.doctype.list(
-        doctype,
-        fields: ['*'],
-        filters: normalizedFilters,
-        limitPageLength: 1000,
-      );
+      // For child doctypes (istable=1), get_list/reportview only return
+      // standard fields. Batch-fetch full docs via /api/resource instead.
+      if (meta != null && meta.isTable) {
+        documents = await _client.doctype.listChildDocs(
+          doctype,
+          filters: normalizedFilters,
+          limitPageLength: 5000,
+        );
+      } else {
+        documents = await _client.doctype.list(
+          doctype,
+          fields: ['*'],
+          filters: normalizedFilters,
+          limitPageLength: 5000,
+        );
+      }
     } catch (_) {
       return [];
     }
+
     final now = DateTime.now().millisecondsSinceEpoch;
     final linkOptions = <LinkOptionEntity>[];
 
@@ -79,13 +92,7 @@ class LinkOptionService {
         label = docMap[titleField].toString();
       }
       // Fall back to common label fields if title field is not available or empty
-      for (final k in [
-        'title',
-        'full_name',
-        'customer_name',
-        'supplier_name',
-        'label',
-      ]) {
+      for (final k in ['title', 'full_name', 'customer_name', 'supplier_name', 'label']) {
         if (label != null && label.isNotEmpty) break;
         if (docMap.containsKey(k) && docMap[k] != null) {
           label = docMap[k].toString();
@@ -141,9 +148,7 @@ class LinkOptionService {
     if (linkFiltersJson == null || linkFiltersJson.isEmpty) return [];
     try {
       final decoded = jsonDecode(linkFiltersJson) as dynamic;
-      final filters = decoded is List
-          ? List<dynamic>.from(decoded)
-          : <dynamic>[];
+      final filters = decoded is List ? List<dynamic>.from(decoded) : <dynamic>[];
       final names = <String>[];
       for (final filter in filters) {
         if (filter is! List) continue;
@@ -175,9 +180,7 @@ class LinkOptionService {
     if (linkFiltersJson == null || linkFiltersJson.isEmpty) return null;
     try {
       final decoded = jsonDecode(linkFiltersJson) as dynamic;
-      final filters = decoded is List
-          ? List<dynamic>.from(decoded)
-          : <dynamic>[];
+      final filters = decoded is List ? List<dynamic>.from(decoded) : <dynamic>[];
       final result = <List<dynamic>>[];
       for (final filter in filters) {
         if (filter is! List || filter.length < 4) continue;
@@ -207,13 +210,13 @@ class LinkOptionService {
     _titleFieldCache.remove(doctype);
   }
 
-  //get title field from docType db. API if online.
-  Future<String?> _getTitleField(String doctype) async {
+  /// Resolves the display field for a doctype.
+  /// Checks title_field first, then falls back to first search_field from meta
+  /// (common for child doctypes where title_field is not set).
+  String? _resolveTitleField(String doctype, DocTypeMeta? meta) {
     if (_titleFieldCache.containsKey(doctype)) {
       return _titleFieldCache[doctype];
     }
-
-    final meta = await _getDocTypeMeta(doctype);
     final titleField = meta?.titleField;
     _titleFieldCache[doctype] = titleField;
     return titleField;
