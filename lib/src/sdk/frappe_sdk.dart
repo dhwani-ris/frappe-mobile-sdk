@@ -1,6 +1,8 @@
 // Copyright (c) 2026, Bhushan Barbuddhe and contributors
 // For license information, please see license.txt
 
+import 'package:flutter/foundation.dart';
+
 import '../api/client.dart';
 import '../database/app_database.dart';
 import '../services/auth_service.dart';
@@ -28,6 +30,35 @@ class FrappeSDK {
   bool _initialized = false;
 
   FrappeSDK({required this.baseUrl});
+
+  /// Test-only constructor: accepts a pre-built [AppDatabase] (e.g. in-memory).
+  /// Wires all services directly without calling [initialize()].
+  /// Avoids FlutterSecureStorage (not available in unit/widget tests).
+  @visibleForTesting
+  FrappeSDK.forTesting(String baseUrl, AppDatabase database)
+      : baseUrl = baseUrl {
+    _database = database;
+    // Create FrappeClient directly — avoids AuthService.initialize() which
+    // writes to FlutterSecureStorage and is unavailable in widget tests.
+    _client = FrappeClient(baseUrl);
+    // Use AuthService.forTesting so the client and database are wired up
+    // without touching FlutterSecureStorage. This means sdk.auth methods
+    // (e.g. getOrCreateMobileUuid, restoreSession) won't throw "not
+    // initialized" if called from any production code path under test.
+    _authService = AuthService.forTesting(_client!, database: database);
+    _repository = OfflineRepository(_database!);
+    _metaService = MetaService(_client!, _database!);
+    _permissionService = PermissionService(_client!, _database!);
+    _translationService = TranslationService(_client!);
+    _syncService = SyncService(
+      _client!,
+      _repository!,
+      _database!,
+      getMobileUuid: () async => 'test-uuid',
+    );
+    _linkOptionService = LinkOptionService(_client!);
+    _initialized = true;
+  }
 
   /// Initialize SDK (call this first).
   ///
@@ -142,7 +173,9 @@ class FrappeSDK {
 
   /// Logout and clear all local DB data (default). Set clearDatabase: false to keep DB.
   Future<void> logout({bool clearDatabase = true}) async {
-    if (!_initialized) return;
+    if (!_initialized) {
+      throw StateError('Cannot logout: SDK not initialized. Call initialize() first.');
+    }
     await _authService!.logout(clearDatabase: clearDatabase);
   }
 
@@ -230,6 +263,10 @@ class FrappeSDK {
 
   /// Roles for the currently authenticated user (if provided by backend).
   List<String> get roles => _authService?.roles ?? const [];
+
+  /// Returns the current authenticated user's info, or null.
+  ({String email, String fullName})? get currentUser =>
+      _authService?.currentUserInfo;
 
   /// Stable UUID for this device/install. Use when creating docs from mobile so server can set mobile_uuid.
   Future<String> getMobileUuid() async {

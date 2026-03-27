@@ -88,8 +88,7 @@ class ChildTableField extends StatelessWidget {
                 child: ListTile(
                   title: FutureBuilder<String>(
                     future: _rowTitle(row),
-                    builder: (_, snap) =>
-                        Text(snap.data ?? '…'),
+                    builder: (_, snap) => Text(snap.data ?? '…'),
                   ),
                   subtitle: _rowSubtitle(row).isNotEmpty
                       ? Text(_rowSubtitle(row))

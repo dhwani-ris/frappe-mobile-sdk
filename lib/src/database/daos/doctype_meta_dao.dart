@@ -38,6 +38,7 @@ class DoctypeMetaDao {
       'doctype_meta',
       where: 'isMobileForm = ?',
       whereArgs: [1],
+      orderBy: 'sortOrder ASC',
     );
     return maps.map((map) => DoctypeMetaEntity.fromDb(map)).toList();
   }

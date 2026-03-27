@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import '../api/client.dart';
 import '../models/doc_type_meta.dart';
 import '../models/mobile_form_name.dart';
@@ -43,6 +44,8 @@ class MetaService {
       serverModifiedAt: existing?.serverModifiedAt,
       isMobileForm: existing?.isMobileForm ?? false,
       metaJson: jsonEncode(metaData),
+      groupName: existing?.groupName,
+      sortOrder: existing?.sortOrder,
     );
     // Check if exists, update if present, insert if new
     if (existing != null) {
@@ -117,6 +120,8 @@ class MetaService {
       serverModifiedAt: existing?.serverModifiedAt,
       isMobileForm: existing?.isMobileForm ?? false,
       metaJson: jsonEncode(metaData),
+      groupName: existing?.groupName,
+      sortOrder: existing?.sortOrder,
     );
     if (existing != null) {
       await _database.doctypeMetaDao.updateDoctypeMeta(entity);
@@ -225,6 +230,21 @@ class MetaService {
     return list.map((e) => e.doctype).toList();
   }
 
+  /// Returns doctypes grouped by group name, ordered by server-defined sort order.
+  ///
+  /// Groups are ordered by the lowest sortOrder of any member.
+  /// Doctypes with null or empty groupName are placed in an 'Other' bucket.
+  /// Returns an empty map if no mobile forms are configured.
+  Future<Map<String, List<String>>> getMobileFormGroups() async {
+    final list = await _database.doctypeMetaDao.findMobileFormDoctypes();
+    final groups = <String, List<String>>{};
+    for (final entity in list) {
+      final group = (entity.groupName?.isNotEmpty == true) ? entity.groupName! : 'Other';
+      groups.putIfAbsent(group, () => []).add(entity.doctype);
+    }
+    return groups;
+  }
+
   /// Prefetch metadata for all mobile form doctypes into DB.
   Future<void> prefetchMobileFormDoctypes() async {
     try {
@@ -275,7 +295,7 @@ class MetaService {
   Future<List<String>> _updateMobileFormDoctypes(
     List<MobileFormName> mobileFormNames,
   ) async {
-    // First, mark all existing mobile forms as false
+    // First, mark all existing mobile forms as false (loop 1)
     final allMetas = await _database.doctypeMetaDao.findAll();
     for (final meta in allMetas) {
       if (meta.isMobileForm) {
@@ -285,15 +305,18 @@ class MetaService {
           serverModifiedAt: meta.serverModifiedAt,
           isMobileForm: false,
           metaJson: meta.metaJson,
+          groupName: meta.groupName,
+          sortOrder: meta.sortOrder,
         );
         await _database.doctypeMetaDao.updateDoctypeMeta(updatedMeta);
       }
     }
 
-    // Now update/create entries for mobile forms
+    // Now update/create entries for mobile forms (loop 2)
     final doctypesToSync = <String>[];
 
-    for (final mfn in mobileFormNames) {
+    for (int i = 0; i < mobileFormNames.length; i++) {
+      final mfn = mobileFormNames[i];
       final doctype = mfn.mobileDoctype;
       final existing = await _database.doctypeMetaDao.findByDoctype(doctype);
 
@@ -317,6 +340,8 @@ class MetaService {
           serverModifiedAt: mfn.doctypeMetaModifiedAt,
           isMobileForm: true,
           metaJson: existing.metaJson,
+          groupName: mfn.groupName,
+          sortOrder: i,
         );
         await _database.doctypeMetaDao.updateDoctypeMeta(updatedMeta);
 
@@ -334,6 +359,8 @@ class MetaService {
           serverModifiedAt: mfn.doctypeMetaModifiedAt,
           isMobileForm: true,
           metaJson: '{}', // Empty until metadata is fetched
+          groupName: mfn.groupName,
+          sortOrder: i,
         );
         await _database.doctypeMetaDao.insertDoctypeMeta(newMeta);
         doctypesToSync.add(doctype);
@@ -342,6 +369,12 @@ class MetaService {
 
     return doctypesToSync;
   }
+
+  /// Thin wrapper for testing purposes only.
+  @visibleForTesting
+  Future<List<String>> updateMobileFormDoctypesForTest(
+    List<MobileFormName> mobileFormNames,
+  ) => _updateMobileFormDoctypes(mobileFormNames);
 
   /// Fetches mobile configuration from server and resyncs doctype metadata.
   ///

@@ -124,7 +124,8 @@ class FrappeFormBuilder extends StatefulWidget {
     String fieldName,
     dynamic newValue,
     Map<String, dynamic> formData,
-  )? onFieldChange;
+  )?
+  onFieldChange;
 
   const FrappeFormBuilder({
     super.key,
@@ -192,8 +193,7 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
     _formData.addAll(widget.initialData ?? {});
 
     for (final field in widget.meta.fields) {
-      if (field.fieldname != null &&
-          !_formData.containsKey(field.fieldname)) {
+      if (field.fieldname != null && !_formData.containsKey(field.fieldname)) {
         _formData[field.fieldname!] ??= field.defaultValue;
       }
     }
@@ -534,6 +534,24 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
       });
       _formKey.currentState?.patchValue(_normalizePatchValues(updates));
       if (mounted) setState(() {});
+
+      // Chain: if a patched field is itself a Link, trigger its dependents too.
+      // e.g. learner_name → household_survey (Link) → religion, category
+      for (final entry in updates.entries) {
+        if (entry.value == null || entry.value.toString().trim().isEmpty) {
+          continue;
+        }
+        DocField? updatedFieldMeta;
+        for (final f in widget.meta.fields) {
+          if (f.fieldname == entry.key) {
+            updatedFieldMeta = f;
+            break;
+          }
+        }
+        if (updatedFieldMeta?.fieldtype == FieldTypes.link) {
+          _handleFetchFrom(entry.key, entry.value.toString());
+        }
+      }
     } catch (e) {
       debugPrint('FetchFrom error: $e');
     }
