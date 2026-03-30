@@ -582,20 +582,20 @@ In‑repo documentation:
 
 Flutter package for Frappe integration with direct API access, dynamic form rendering, and offline-first architecture.
 
-## ✨ Features
+## Features
 
-- ✅ **Stateless Login** - Token-based authentication via `mobile_auth.login` API
-- ✅ **Keep User Logged In** - Tokens persist in database, automatic session restore
-- ✅ **Auto Token Refresh** - Automatic token refresh on expiry (401 errors)
-- ✅ **Frappe API Access** - Auth, CRUD, file upload via `FrappeClient`
-- ✅ **Dynamic Form Renderer** - Auto-generate forms from Frappe metadata
-- ✅ **Offline-First** - Full offline capability with SQLite
-- ✅ **Bi-directional Sync** - Push/pull sync with conflict resolution
-- ✅ **Customizable Styling** - Default styles + full customization support
-- ✅ **Translations** - Load Frappe translations by language; map to field labels and doctype labels in forms and lists
-- ✅ **Workflows** - Show workflow state and transition actions on forms when the DocType has a workflow (see [Workflows](docs/WORKFLOWS.md))
+- **Stateless Login** - Token-based authentication via `mobile_auth.login` API
+- **Keep User Logged In** - Tokens persist in database, automatic session restore
+- **Auto Token Refresh** - Automatic token refresh on expiry (401 errors)
+- **Frappe API Access** - Auth, CRUD, file upload via `FrappeClient`
+- **Dynamic Form Renderer** - Auto-generate forms from Frappe metadata
+- **Offline-First** - Full offline capability with SQLite
+- **Bi-directional Sync** - Push/pull sync with conflict resolution
+- **Customizable Styling** - Default styles + full customization support
+- **Translations** - Load Frappe translations by language; map to field labels and doctype labels in forms and lists
+- **Workflows** - Show workflow state and transition actions on forms when the DocType has a workflow (see [Workflows](docs/WORKFLOWS.md))
 
-## 📋 Prerequisites
+## Prerequisites
 
 ### Server-Side Setup (Required)
 
@@ -617,7 +617,7 @@ Before using this SDK, you need to install the **Frappe Mobile Control** app on 
 
 **Repository**: [https://github.com/dhwani-ris/frappe_mobile_control](https://github.com/dhwani-ris/frappe_mobile_control)
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Installation
 
@@ -689,7 +689,7 @@ The SDK includes automatic app status checking via `FrappeAppGuard`. This widget
 - Shows force update screen if package name or version mismatch detected
 - Automatically redirects to Play Store (Android) or App Store (iOS) for updates
 
-**Note**: Requires [Frappe Mobile Control](https://github.com/dhwani-ris/frappe_mobile_control) app installed on your Frappe server (see [Prerequisites](#-prerequisites) above).
+**Note**: Requires [Frappe Mobile Control](https://github.com/dhwani-ris/frappe_mobile_control) app installed on your Frappe server (see [Prerequisites](#prerequisites-1) above).
 
 **Required**: Wrap your app's root widget with `FrappeAppGuard`:
 ```dart
@@ -969,7 +969,7 @@ loginConfig: LoginConfig(
 
 Flow: User taps "Login with OAuth" → browser opens → user authorizes → app reopens automatically with tokens. Tokens are stored in secure storage. On 401, refresh token is used automatically; if refresh fails, user must re-login.
 
-## 🔐 Stateless Login & Keep User Logged In
+## Stateless Login & Keep User Logged In
 
 The SDK uses **stateless login** via `mobile_auth.login` API. Tokens are automatically stored in the database and persist across app restarts.
 
@@ -1002,10 +1002,10 @@ if (isAuthenticated) {
 ```
 
 **How it works:**
-- ✅ **Login**: Tokens stored in database automatically
-- ✅ **App restart**: `restoreSession()` finds tokens → user stays logged in
-- ✅ **Token expiry**: On 401 error, automatically refreshes using `refresh_token`
-- ✅ **Logout**: Clears tokens from database → user must login again
+- **Login**: Tokens stored in database automatically
+- **App restart**: `restoreSession()` finds tokens → user stays logged in
+- **Token expiry**: On 401 error, automatically refreshes using `refresh_token`
+- **Logout**: Clears tokens from database → user must login again
 
 **Priority order** (in `restoreSession()`):
 1. Mobile auth tokens (from database) - **Primary method**
@@ -1041,7 +1041,7 @@ LoginScreen(
 
 **OAuth and 401:** If you get *401 Invalid authentication token* on `mobile_auth.configuration` after OAuth login, the server may only accept tokens from `mobile_auth.login`. Ensure the backend accepts the OAuth-issued Bearer token for v2 methods (see [DOCUMENTATION.md §6.6](DOCUMENTATION.md#66-oauth-token-and-v2-apis-401-invalid-authentication-token)).
 
-## 📚 API Reference
+## API Reference
 
 ### AuthService (Stateless Login)
 
@@ -1124,7 +1124,7 @@ FrappeFormStyle(
 )
 ```
 
-## 🎨 Styling Options
+## Styling Options
 
 The package provides three default styles:
 
@@ -1134,7 +1134,7 @@ The package provides three default styles:
 
 You can also create fully custom styles using `FrappeFormStyle`.
 
-## 📖 Documentation
+## Documentation
 
 - **[DOCUMENTATION.md](DOCUMENTATION.md)** – **Full package docs**: API calling (FrappeClient, CRUD, QueryBuilder, attachments, custom methods), form rendering (FormScreen, FrappeFormBuilder, DoctypeListScreen, DocumentListScreen, child tables, images, **Button field type**), new APIs (requestHeaders, getMobileUuid, getMobileFormDoctypeNames, error helpers), auth, offline/sync, and quick reference.
 - **[SETUP.md](SETUP.md)** - Detailed setup instructions
@@ -1142,7 +1142,7 @@ You can also create fully custom styles using `FrappeFormStyle`.
 - **[TESTING.md](TESTING.md)** - Testing strategies
 - **[.github/PRE_COMMIT.md](.github/PRE_COMMIT.md)** - Pre-commit hooks & CI for contributors
 
-## 🏗️ Architecture
+## Architecture
 
 ```
 ┌─────────────────────────────────────────┐
@@ -1169,14 +1169,14 @@ You can also create fully custom styles using `FrappeFormStyle`.
 └─────────────────────────────────────────┘
 ```
 
-## 🎯 Use Cases
+## Use Cases
 
 1. **Direct API Access** - Use `FrappeClient` for custom implementations
 2. **Form Renderer** - Use `FrappeFormRenderer` for dynamic forms
 3. **Hybrid Approach** - Mix API calls with form renderer
 4. **Offline-First** - Use `OfflineRepository` + `SyncService`
 
-## 🤝 Contributing
+## Contributing
 
 Before committing, run pre-commit checks. See **[.github/PRE_COMMIT.md](.github/PRE_COMMIT.md)** for setup.
 
@@ -1192,13 +1192,8 @@ pre-commit run --all-files
 - **CI** – `flutter analyze`, `dart format`, `flutter test`
 - **Semantic commits** – validates Conventional Commits format
 
-## 📄 License
+## License
 
 MIT License - see [LICENSE](LICENSE) file
 
 **Copyright (c) 2026 Dhwani Rural Information System**
-
----
-
-**Designed by:** Bhushan Barbuddhe  
-**Technical Guidance:** Deepak Batra

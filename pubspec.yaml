@@ -1,6 +1,6 @@
 name: frappe_mobile_sdk
-description: Flutter package for Frappe integration with direct API access, dynamic form rendering, and offline-first architecture
-version: 1.0.0+1
+description: A Flutter SDK for building mobile applications powered by the Frappe Framework. Handles authentication, API communication, form rendering, and connectivity-aware data operations for field deployments.
+version: 1.0.0
 publish_to: 'none'
 homepage: https://github.com/dhwani-ris/frappe-mobile-sdk
 repository: https://github.com/dhwani-ris/frappe-mobile-sdk
