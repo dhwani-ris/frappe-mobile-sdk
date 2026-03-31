@@ -946,7 +946,14 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
     }
 
     // Then override with any form values (user input takes precedence)
-    completeFormData.addAll(formValues);
+    // But skip null values for Table fields — ChildTableField is not a
+    // FormBuilderField, so state.value returns null for Table fields even
+    // when _formData has the actual child row data.
+    for (final entry in formValues.entries) {
+      if (entry.value != null) {
+        completeFormData[entry.key] = entry.value;
+      }
+    }
 
     widget.onSubmit?.call(completeFormData);
   }
@@ -968,7 +975,11 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
             (field.fieldtype == 'Check' ? 0 : '');
       }
     }
-    complete.addAll(formValues);
+    for (final entry in formValues.entries) {
+      if (entry.value != null) {
+        complete[entry.key] = entry.value;
+      }
+    }
     return complete;
   }
 
