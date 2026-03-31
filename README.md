@@ -1197,3 +1197,7 @@ pre-commit run --all-files
 MIT License - see [LICENSE](LICENSE) file
 
 **Copyright (c) 2026 Dhwani Rural Information System**
+
+<p align="center">
+  <img src="logo.png" alt="Maintainers logo" width="120" />
+</p>

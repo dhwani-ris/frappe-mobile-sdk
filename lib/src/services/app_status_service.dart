@@ -7,6 +7,8 @@ class AppStatus {
   final String? appTitle;
   final String? version;
   final String? storeUrl;
+  final bool maintenanceMode;
+  final String? maintenanceMessage;
 
   const AppStatus({
     required this.enabled,
@@ -14,6 +16,8 @@ class AppStatus {
     this.appTitle,
     this.version,
     this.storeUrl,
+    this.maintenanceMode = false,
+    this.maintenanceMessage,
   });
 
   factory AppStatus.fromJson(Map<String, dynamic> json) {
@@ -23,6 +27,8 @@ class AppStatus {
       appTitle: json['app_title'] as String?,
       version: json['version'] as String?,
       storeUrl: json['store_url'] as String?,
+      maintenanceMode: json['maintenance_mode'] == true,
+      maintenanceMessage: json['maintenance_message'] as String?,
     );
   }
 }

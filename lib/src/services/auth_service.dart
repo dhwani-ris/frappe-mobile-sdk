@@ -109,7 +109,7 @@ class AuthService {
       );
 
       final response = result is Map<String, dynamic>
-          ? (result['message'] is Map ? result['message'] : result)
+          ? result
           : <String, dynamic>{};
 
       final accessToken = response['access_token'] as String?;
@@ -119,23 +119,13 @@ class AuthService {
       final mobileFormNamesJson =
           response['mobile_form_names'] as List<dynamic>?;
 
-      // Roles: top-level response['roles'] (new) or response['permissions']['roles'] (legacy)
       final rolesJson = response['roles'] as List<dynamic>?;
-      if (rolesJson != null && rolesJson.isNotEmpty) {
-        _roles = rolesJson
-            .map((r) => r.toString())
-            .where((r) => r.isNotEmpty)
-            .toList();
-      } else {
-        final permissionsMap = response['permissions'] as Map<String, dynamic>?;
-        final legacyRoles = permissionsMap?['roles'] as List<dynamic>?;
-        _roles =
-            legacyRoles
-                ?.map((r) => r.toString())
-                .where((r) => r.isNotEmpty)
-                .toList() ??
-            <String>[];
-      }
+      _roles =
+          rolesJson
+              ?.map((r) => r.toString())
+              .where((r) => r.isNotEmpty)
+              .toList() ??
+          <String>[];
 
       _language = response['language'] as String?;
 
@@ -177,7 +167,7 @@ class AuthService {
       args: {'mobile_no': mobileNo},
     );
     final response = result is Map<String, dynamic>
-        ? (result['message'] is Map ? result['message'] : result)
+        ? result
         : <String, dynamic>{};
     return response;
   }
@@ -199,7 +189,7 @@ class AuthService {
         args: {'tmp_id': tmpId, 'otp': otp},
       );
       final response = result is Map<String, dynamic>
-          ? (result['message'] is Map ? result['message'] : result)
+          ? result
           : <String, dynamic>{};
 
       final accessToken = response['access_token'] as String?;
@@ -220,23 +210,13 @@ class AuthService {
       }
       dev.log('access_token: $accessToken', name: 'Auth');
 
-      // Roles and language (same as login)
       final rolesJson = response['roles'] as List<dynamic>?;
-      if (rolesJson != null && rolesJson.isNotEmpty) {
-        _roles = rolesJson
-            .map((r) => r.toString())
-            .where((r) => r.isNotEmpty)
-            .toList();
-      } else {
-        final permissionsMap = response['permissions'] as Map<String, dynamic>?;
-        final legacyRoles = permissionsMap?['roles'] as List<dynamic>?;
-        _roles =
-            legacyRoles
-                ?.map((r) => r.toString())
-                .where((r) => r.isNotEmpty)
-                .toList() ??
-            <String>[];
-      }
+      _roles =
+          rolesJson
+              ?.map((r) => r.toString())
+              .where((r) => r.isNotEmpty)
+              .toList() ??
+          <String>[];
       _language = response['language'] as String?;
 
       await _processLoginResponse(
@@ -263,25 +243,15 @@ class AuthService {
     try {
       final result = await _client!.rest.get('/api/v2/method/mobile_auth.me');
       if (result is! Map<String, dynamic>) return null;
-      final data = result['data'] as Map<String, dynamic>? ?? result;
-      final message = data['message'] as Map<String, dynamic>? ?? data;
+      final message = result;
 
       final rolesJson = message['roles'] as List<dynamic>?;
-      if (rolesJson != null && rolesJson.isNotEmpty) {
-        _roles = rolesJson
-            .map((r) => r.toString())
-            .where((r) => r.isNotEmpty)
-            .toList();
-      } else {
-        final permissionsMap = message['permissions'] as Map<String, dynamic>?;
-        final legacyRoles = permissionsMap?['roles'] as List<dynamic>?;
-        _roles =
-            legacyRoles
-                ?.map((r) => r.toString())
-                .where((r) => r.isNotEmpty)
-                .toList() ??
-            <String>[];
-      }
+      _roles =
+          rolesJson
+              ?.map((r) => r.toString())
+              .where((r) => r.isNotEmpty)
+              .toList() ??
+          <String>[];
       _language = message['language'] as String?;
       return message;
     } catch (_) {
@@ -402,7 +372,10 @@ class AuthService {
         if (token != null && token.accessToken.isNotEmpty) {
           _client!.rest.setBearerToken(token.accessToken);
           _isAuthenticated = true;
-          _cachedUserInfo = (email: token.user, fullName: token.fullName ?? token.user);
+          _cachedUserInfo = (
+            email: token.user,
+            fullName: token.fullName ?? token.user,
+          );
           return true;
         }
       } catch (_) {
@@ -609,7 +582,7 @@ class AuthService {
                   args: {'refresh_token': token.refreshToken},
                 );
                 final response = result is Map<String, dynamic>
-                    ? (result['message'] is Map ? result['message'] : result)
+                    ? result
                     : <String, dynamic>{};
                 final newAccessToken = response['access_token'] as String?;
                 final newRefreshToken =
