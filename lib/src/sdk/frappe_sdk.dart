@@ -16,6 +16,7 @@ import '../services/translation_service.dart';
 /// Main SDK initialization class for easy setup
 class FrappeSDK {
   final String baseUrl;
+  final String? databaseAppName;
 
   FrappeClient? _client;
   AppDatabase? _database;
@@ -29,14 +30,14 @@ class FrappeSDK {
 
   bool _initialized = false;
 
-  FrappeSDK({required this.baseUrl});
+  FrappeSDK({required this.baseUrl, this.databaseAppName});
 
   /// Test-only constructor: accepts a pre-built [AppDatabase] (e.g. in-memory).
   /// Wires all services directly without calling [initialize()].
   /// Avoids FlutterSecureStorage (not available in unit/widget tests).
   @visibleForTesting
-  FrappeSDK.forTesting(String baseUrl, AppDatabase database)
-      : baseUrl = baseUrl {
+  FrappeSDK.forTesting(this.baseUrl, AppDatabase database)
+    : databaseAppName = null {
     _database = database;
     // Create FrappeClient directly — avoids AuthService.initialize() which
     // writes to FlutterSecureStorage and is unavailable in widget tests.
@@ -68,7 +69,7 @@ class FrappeSDK {
   Future<void> initialize([bool autoRestoreAndSync = false]) async {
     if (_initialized) return;
 
-    _database = await AppDatabase.getInstance();
+    _database = await AppDatabase.getInstance(appName: databaseAppName);
     _authService = AuthService();
     _authService!.initialize(baseUrl, database: _database);
 
@@ -174,7 +175,9 @@ class FrappeSDK {
   /// Logout and clear all local DB data (default). Set clearDatabase: false to keep DB.
   Future<void> logout({bool clearDatabase = true}) async {
     if (!_initialized) {
-      throw StateError('Cannot logout: SDK not initialized. Call initialize() first.');
+      throw StateError(
+        'Cannot logout: SDK not initialized. Call initialize() first.',
+      );
     }
     await _authService!.logout(clearDatabase: clearDatabase);
   }
