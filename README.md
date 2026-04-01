@@ -277,7 +277,7 @@ Server requirement for translations (handled by `frappe_mobile_control`):
       - Clean form + workflow → shows workflow actions instead of Save.
       - New document → Save only; workflow after first save.
     - Submitted documents (`docstatus == 1`) are read‑only.
-  - Details: `docs/WORKFLOWS.md`.
+  - Details: `doc/WORKFLOWS.md`.
 
 - **Styling & Customization**
   - Predefined styles: `DefaultFormStyle.standard`, `DefaultFormStyle.compact`, `DefaultFormStyle.material`.
@@ -515,19 +515,19 @@ The `example/` directory contains a complete Flutter app wiring these pieces tog
 
 ## Setup, Customization, and Testing
 
-This repository includes focused documents (under `docs/` unless noted):
+This repository includes focused documents (under `doc/` unless noted):
 
-- `docs/SETUP.md` – SDK setup, app config, Android/iOS configuration.
-- `docs/CUSTOMIZATION.md` – UI customization:
+- `doc/SETUP.md` – SDK setup, app config, Android/iOS configuration.
+- `doc/CUSTOMIZATION.md` – UI customization:
   - `FrappeFormStyle`, custom field factories, custom field widgets.
-- `docs/TESTING.md` – Testing strategies:
+- `doc/TESTING.md` – Testing strategies:
   - Running the example app.
   - Using local path vs Git dependency.
   - Automated and manual tests.
-- `docs/QUICK_TEST.md` – Short, practical instructions to quickly validate the SDK.
-- `docs/WORKFLOWS.md` – Detailed workflow behavior in the mobile SDK.
+- `doc/QUICK_TEST.md` – Short, practical instructions to quickly validate the SDK.
+- `doc/WORKFLOWS.md` – Detailed workflow behavior in the mobile SDK.
 
-For a full conceptual/API guide (installation, API calling, forms, auth, offline & sync, error handling, translations), see **`docs/DOCUMENTATION.md`**.
+For a full conceptual/API guide (installation, API calling, forms, auth, offline & sync, error handling, translations), see **`doc/DOCUMENTATION.md`**.
 
 ---
 
@@ -570,12 +570,12 @@ MIT License – see `LICENSE`.
 
 In‑repo documentation:
 
-- `docs/DOCUMENTATION.md` – Full SDK documentation.
-- `docs/SETUP.md` – Environment and platform setup.
-- `docs/CUSTOMIZATION.md` – UI customization guide.
-- `docs/TESTING.md` – Testing and verification guide.
-- `docs/QUICK_TEST.md` – Quick validation steps.
-- `docs/WORKFLOWS.md` – Workflow behavior.
+- `doc/DOCUMENTATION.md` – Full SDK documentation.
+- `doc/SETUP.md` – Environment and platform setup.
+- `doc/CUSTOMIZATION.md` – UI customization guide.
+- `doc/TESTING.md` – Testing and verification guide.
+- `doc/QUICK_TEST.md` – Quick validation steps.
+- `doc/WORKFLOWS.md` – Workflow behavior.
 - `.github/PRE_COMMIT.md` – Pre‑commit and CI details.
 
 # Frappe Mobile SDK
@@ -593,7 +593,7 @@ Flutter package for Frappe integration with direct API access, dynamic form rend
 - **Bi-directional Sync** - Push/pull sync with conflict resolution
 - **Customizable Styling** - Default styles + full customization support
 - **Translations** - Load Frappe translations by language; map to field labels and doctype labels in forms and lists
-- **Workflows** - Show workflow state and transition actions on forms when the DocType has a workflow (see [Workflows](docs/WORKFLOWS.md))
+- **Workflows** - Show workflow state and transition actions on forms when the DocType has a workflow (see [Workflows](doc/WORKFLOWS.md))
 
 ## Prerequisites
 

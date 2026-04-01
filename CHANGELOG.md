@@ -17,6 +17,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **App guard** — `FrappeAppGuard` for server-driven app status, versioning, and force-update flows (requires [Frappe Mobile Control](https://github.com/dhwani-ris/frappe_mobile_control) on the server).
 - **Translations** — load dictionaries from the server and apply to labels in forms and lists.
 - **Workflows** — workflow state and transitions on forms when configured on the DocType.
-- Example app under `example/` and in-repo docs under `docs/`.
+- Example app under `example/` and in-repo docs under `doc/`.
 
 [1.0.0]: https://github.com/dhwani-ris/frappe-mobile-sdk/releases/tag/v1.0.0
