@@ -36,10 +36,13 @@ class LoginScreen extends StatefulWidget {
   verifyLoginOtp;
 
   final AppDatabase? database;
+
   /// Pre-fill username (e.g. for demo automation)
   final String? initialUsername;
+
   /// Pre-fill password (e.g. for demo automation)
   final String? initialPassword;
+
   /// When true, automatically trigger login after first frame if credentials are pre-filled
   final bool autoLogin;
 

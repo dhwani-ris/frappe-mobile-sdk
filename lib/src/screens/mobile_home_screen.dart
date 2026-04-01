@@ -22,13 +22,17 @@ class MobileHomeScreen extends StatefulWidget {
   /// Optional builder to replace the default group header.
   /// Renders inside the tinted header row of each group card.
   final Widget Function(BuildContext context, String groupName, int formsCount)?
-      groupHeaderBuilder;
+  groupHeaderBuilder;
 
   /// Optional builder to replace the default doctype tile.
   /// Renders as a child in a Column with dividers (no need to add dividers).
   final Widget Function(
-          BuildContext context, String doctype, int count, int dirtyCount)?
-      tileBuilder;
+    BuildContext context,
+    String doctype,
+    int count,
+    int dirtyCount,
+  )?
+  tileBuilder;
 
   const MobileHomeScreen({
     super.key,
@@ -77,11 +81,14 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
     setState(() => _loading = true);
     try {
       // Fire connectivity check without blocking — update UI when it resolves
-      widget.sdk.sync.isOnline().then((online) {
-        if (mounted) setState(() => _isOnline = online);
-      }).catchError((_) {
-        if (mounted) setState(() => _isOnline = false);
-      });
+      widget.sdk.sync
+          .isOnline()
+          .then((online) {
+            if (mounted) setState(() => _isOnline = online);
+          })
+          .catchError((_) {
+            if (mounted) setState(() => _isOnline = false);
+          });
 
       final groups = await widget.sdk.meta.getMobileFormGroups();
       final counts = <String, int>{};
@@ -89,11 +96,11 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
 
       for (final doctype in groups.values.expand((l) => l)) {
         try {
-          final docs =
-              await widget.sdk.repository.getDocumentsByDoctype(doctype);
+          final docs = await widget.sdk.repository.getDocumentsByDoctype(
+            doctype,
+          );
           counts[doctype] = docs.length;
-          dirtyCounts[doctype] =
-              docs.where((d) => d.status == 'dirty').length;
+          dirtyCounts[doctype] = docs.where((d) => d.status == 'dirty').length;
         } catch (_) {
           counts[doctype] = 0;
           dirtyCounts[doctype] = 0;
@@ -164,8 +171,10 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
               padding: const EdgeInsets.only(right: 4),
               child: Center(
                 child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 3,
+                  ),
                   decoration: BoxDecoration(
                     color: const Color(0xFFFFF3E0),
                     borderRadius: BorderRadius.circular(12),
@@ -173,8 +182,11 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      const Icon(Icons.arrow_upward,
-                          size: 12, color: Color(0xFFE65100)),
+                      const Icon(
+                        Icons.arrow_upward,
+                        size: 12,
+                        color: Color(0xFFE65100),
+                      ),
                       const SizedBox(width: 2),
                       Text(
                         '$_totalDirty',
@@ -222,8 +234,8 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
         child: _loading
             ? const Center(child: CircularProgressIndicator())
             : _groups.isEmpty
-                ? _buildEmptyState()
-                : _buildGroupedList(),
+            ? _buildEmptyState()
+            : _buildGroupedList(),
       ),
     );
   }
@@ -381,8 +393,10 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Logout',
-                style: TextStyle(color: Color(0xFFD32F2F))),
+            child: const Text(
+              'Logout',
+              style: TextStyle(color: Color(0xFFD32F2F)),
+            ),
           ),
         ],
       ),
@@ -402,7 +416,9 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Logout warning: ${e.toString().split(':').last.trim()}'),
+            content: Text(
+              'Logout warning: ${e.toString().split(':').last.trim()}',
+            ),
             backgroundColor: const Color(0xFFE65100),
           ),
         );
@@ -419,13 +435,12 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
 
   Future<void> _navigateToDoctype(String doctype) async {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Loading...')),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('Loading...')));
     try {
       final meta = await widget.sdk.meta.getMeta(doctype);
-      final docs =
-          await widget.sdk.repository.getDocumentsByDoctype(doctype);
+      final docs = await widget.sdk.repository.getDocumentsByDoctype(doctype);
       try {
         await widget.sdk.sync.pullSync(doctype: doctype);
       } catch (_) {}
@@ -456,10 +471,12 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).hideCurrentSnackBar();
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Error: ${e.toString().split(':').last.trim()}'),
-          backgroundColor: Colors.red,
-        ));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error: ${e.toString().split(':').last.trim()}'),
+            backgroundColor: Colors.red,
+          ),
+        );
       }
     }
   }
@@ -510,14 +527,18 @@ class _GroupCardState extends State<_GroupCard> {
             InkWell(
               onTap: () => setState(() => _expanded = !_expanded),
               child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 11,
+                ),
                 decoration: BoxDecoration(
                   color: cs.primaryContainer,
                   border: _expanded
                       ? Border(
                           bottom: BorderSide(
-                              color: cs.outline.withValues(alpha: 0.2)))
+                            color: cs.outline.withValues(alpha: 0.2),
+                          ),
+                        )
                       : null,
                 ),
                 child: widget.groupHeaderBuilder != null
@@ -525,7 +546,10 @@ class _GroupCardState extends State<_GroupCard> {
                         children: [
                           Expanded(
                             child: widget.groupHeaderBuilder!(
-                                context, widget.groupName, formsCount),
+                              context,
+                              widget.groupName,
+                              formsCount,
+                            ),
                           ),
                           _chevron(cs),
                         ],
@@ -546,7 +570,9 @@ class _GroupCardState extends State<_GroupCard> {
                                 const SizedBox(width: 8),
                                 Container(
                                   padding: const EdgeInsets.symmetric(
-                                      horizontal: 7, vertical: 1),
+                                    horizontal: 7,
+                                    vertical: 1,
+                                  ),
                                   decoration: BoxDecoration(
                                     color: cs.primary,
                                     borderRadius: BorderRadius.circular(10),
@@ -590,13 +616,12 @@ class _GroupCardState extends State<_GroupCard> {
                                 )
                               : _DoctypeTile(
                                   doctype: widget.doctypes[i],
-                                  count:
-                                      widget.counts[widget.doctypes[i]] ?? 0,
-                                  dirtyCount: widget
-                                          .dirtyCounts[widget.doctypes[i]] ??
+                                  count: widget.counts[widget.doctypes[i]] ?? 0,
+                                  dirtyCount:
+                                      widget.dirtyCounts[widget.doctypes[i]] ??
                                       0,
-                                  onTap: () => widget
-                                      .onDoctypeTap(widget.doctypes[i]),
+                                  onTap: () =>
+                                      widget.onDoctypeTap(widget.doctypes[i]),
                                 ),
                         ],
                       ],
@@ -659,8 +684,8 @@ class _DoctypeTile extends StatelessWidget {
     final chipTextColor = hasUnsynced
         ? const Color(0xFFE65100)
         : count > 0
-            ? cs.onSurface
-            : cs.onSurface.withValues(alpha: 0.4);
+        ? cs.onSurface
+        : cs.onSurface.withValues(alpha: 0.4);
 
     return InkWell(
       onTap: onTap,
@@ -693,8 +718,7 @@ class _DoctypeTile extends StatelessWidget {
               ),
             ),
             Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
               decoration: BoxDecoration(
                 color: chipColor,
                 borderRadius: BorderRadius.circular(14),
@@ -729,8 +753,9 @@ class _ConnectivityBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final color = isOnline ? const Color(0xFF388E3C) : const Color(0xFFD32F2F);
-    final bgColor =
-        isOnline ? const Color(0xFFE8F5E9) : const Color(0xFFFFEBEE);
+    final bgColor = isOnline
+        ? const Color(0xFFE8F5E9)
+        : const Color(0xFFFFEBEE);
     final label = isOnline ? 'Online' : 'Offline';
 
     return Container(

@@ -27,8 +27,16 @@ class AppDatabase {
       doctypePermissionDao = DoctypePermissionDao(database);
 
   /// Get database name from app name (sanitized for filesystem)
-  static Future<String> _getDatabaseName() async {
+  static Future<String> _getDatabaseName({String? appNameOverride}) async {
     if (_databaseName != null) return _databaseName!;
+
+    if (appNameOverride != null && appNameOverride.trim().isNotEmpty) {
+      final sanitized = _sanitizeName(appNameOverride);
+      _databaseName = sanitized.isEmpty
+          ? 'frappe_mobile_sdk.db'
+          : '${sanitized}_frappe.db';
+      return _databaseName!;
+    }
 
     try {
       final packageInfo = await PackageInfo.fromPlatform();
@@ -43,12 +51,7 @@ class AppDatabase {
         return _databaseName!;
       }
 
-      // Sanitize app name for use as filename (remove spaces, special chars)
-      final sanitized = appName
-          .toLowerCase()
-          .replaceAll(RegExp(r'[^a-z0-9_-]'), '_')
-          .replaceAll(RegExp(r'_+'), '_')
-          .replaceAll(RegExp(r'^_|_$'), '');
+      final sanitized = _sanitizeName(appName);
 
       // If sanitization resulted in empty string, use fallback
       if (sanitized.isEmpty) {
@@ -65,13 +68,21 @@ class AppDatabase {
     }
   }
 
+  static String _sanitizeName(String value) {
+    return value
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^a-z0-9_-]'), '_')
+        .replaceAll(RegExp(r'_+'), '_')
+        .replaceAll(RegExp(r'^_|_$'), '');
+  }
+
   /// Get database instance (singleton)
-  static Future<AppDatabase> getInstance() async {
+  static Future<AppDatabase> getInstance({String? appName}) async {
     if (_instance != null) return _instance!;
 
     if (_database == null) {
       final documentsDirectory = await getDatabasesPath();
-      final dbName = await _getDatabaseName();
+      final dbName = await _getDatabaseName(appNameOverride: appName);
       final path = join(documentsDirectory, dbName);
       _database = await openDatabase(
         path,
@@ -101,7 +112,11 @@ class AppDatabase {
   }
 
   /// Migrate database schema on upgrade
-  static Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
+  static Future<void> _onUpgrade(
+    Database db,
+    int oldVersion,
+    int newVersion,
+  ) async {
     if (oldVersion < 2) {
       await db.execute('ALTER TABLE doctype_meta ADD COLUMN groupName TEXT');
       await db.execute('ALTER TABLE doctype_meta ADD COLUMN sortOrder INTEGER');

@@ -26,7 +26,8 @@ class LinkOptionService {
   }
 
   void _putCache(String key, List<LinkOptionEntity> options) {
-    if (_memoryCache.length >= _kLinkOptionCacheMaxEntries && !_memoryCache.containsKey(key)) {
+    if (_memoryCache.length >= _kLinkOptionCacheMaxEntries &&
+        !_memoryCache.containsKey(key)) {
       if (_cacheKeys.isNotEmpty) {
         final evict = _cacheKeys.removeAt(0);
         _memoryCache.remove(evict);
@@ -92,7 +93,13 @@ class LinkOptionService {
         label = docMap[titleField].toString();
       }
       // Fall back to common label fields if title field is not available or empty
-      for (final k in ['title', 'full_name', 'customer_name', 'supplier_name', 'label']) {
+      for (final k in [
+        'title',
+        'full_name',
+        'customer_name',
+        'supplier_name',
+        'label',
+      ]) {
         if (label != null && label.isNotEmpty) break;
         if (docMap.containsKey(k) && docMap[k] != null) {
           label = docMap[k].toString();
@@ -148,7 +155,9 @@ class LinkOptionService {
     if (linkFiltersJson == null || linkFiltersJson.isEmpty) return [];
     try {
       final decoded = jsonDecode(linkFiltersJson) as dynamic;
-      final filters = decoded is List ? List<dynamic>.from(decoded) : <dynamic>[];
+      final filters = decoded is List
+          ? List<dynamic>.from(decoded)
+          : <dynamic>[];
       final names = <String>[];
       for (final filter in filters) {
         if (filter is! List) continue;
@@ -156,7 +165,8 @@ class LinkOptionService {
           if (elem is! String) continue;
           // Prefer the evaluator helper (supports "eval: doc.x" and variations)
           final extracted = DependsOnEvaluator.extractEvalDocField(elem);
-          final fieldName = extracted ??
+          final fieldName =
+              extracted ??
               (elem.startsWith('eval:doc.') ? elem.substring(9).trim() : null);
           if (fieldName != null && fieldName.isNotEmpty) {
             if (!names.contains(fieldName)) names.add(fieldName);
@@ -180,7 +190,9 @@ class LinkOptionService {
     if (linkFiltersJson == null || linkFiltersJson.isEmpty) return null;
     try {
       final decoded = jsonDecode(linkFiltersJson) as dynamic;
-      final filters = decoded is List ? List<dynamic>.from(decoded) : <dynamic>[];
+      final filters = decoded is List
+          ? List<dynamic>.from(decoded)
+          : <dynamic>[];
       final result = <List<dynamic>>[];
       for (final filter in filters) {
         if (filter is! List || filter.length < 4) continue;

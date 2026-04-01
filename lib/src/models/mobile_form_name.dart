@@ -14,7 +14,7 @@ class MobileFormName {
 
   factory MobileFormName.fromJson(Map<String, dynamic> json) {
     return MobileFormName(
-      mobileDoctype: json['mobile_doctype'] as String? ?? '',
+      mobileDoctype: json['mobile_workspace_item'] as String? ?? '',
       groupName: json['group_name'] as String?,
       doctypeMetaModifiedAt: json['doctype_meta_modifed_at'] as String?,
       doctypeIcon: json['doctype_icon'] as String?,

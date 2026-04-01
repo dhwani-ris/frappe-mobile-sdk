@@ -1,9 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:frappe_mobile_sdk/frappe_mobile_sdk.dart';
-import 'package:frappe_mobile_sdk/src/database/app_database.dart';
-import 'package:frappe_mobile_sdk/src/database/entities/doctype_meta_entity.dart';
-import 'package:frappe_mobile_sdk/src/sdk/frappe_sdk.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 void main() {
@@ -35,9 +32,11 @@ void main() {
   });
 
   testWidgets('shows empty state when no groups configured', (tester) async {
-    await tester.pumpWidget(MaterialApp(
-      home: MobileHomeScreen(sdk: emptySdk, appTitle: 'TestApp'),
-    ));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MobileHomeScreen(sdk: emptySdk, appTitle: 'TestApp'),
+      ),
+    );
     // pumpAndSettle() cannot be used here: MobileHomeScreen._load() calls
     // sqflite_ffi which runs on real OS isolates outside Flutter's test
     // scheduler. pumpAndSettle() only drains microtasks/timers managed by
@@ -52,9 +51,11 @@ void main() {
   });
 
   testWidgets('renders group name and doctype name', (tester) async {
-    await tester.pumpWidget(MaterialApp(
-      home: MobileHomeScreen(sdk: sdkWithSurvey, appTitle: 'TestApp'),
-    ));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MobileHomeScreen(sdk: sdkWithSurvey, appTitle: 'TestApp'),
+      ),
+    );
     // pumpAndSettle() cannot be used here: MobileHomeScreen._load() calls
     // sqflite_ffi which runs on real OS isolates outside Flutter's test
     // scheduler and would cause pumpAndSettle to hang indefinitely.
@@ -74,17 +75,21 @@ void main() {
   });
 
   testWidgets('shows app title in AppBar', (tester) async {
-    await tester.pumpWidget(MaterialApp(
-      home: MobileHomeScreen(sdk: emptySdk, appTitle: 'My App'),
-    ));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MobileHomeScreen(sdk: emptySdk, appTitle: 'My App'),
+      ),
+    );
     await tester.pump();
     expect(find.text('My App'), findsOneWidget);
   });
 
   testWidgets('renders group as card with chevron', (tester) async {
-    await tester.pumpWidget(MaterialApp(
-      home: MobileHomeScreen(sdk: sdkWithSurvey, appTitle: 'TestApp'),
-    ));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MobileHomeScreen(sdk: sdkWithSurvey, appTitle: 'TestApp'),
+      ),
+    );
     await tester.runAsync(() async {
       final groups = await sdkWithSurvey.meta.getMobileFormGroups();
       for (final doctype in groups.values.expand((l) => l)) {
@@ -100,9 +105,11 @@ void main() {
   });
 
   testWidgets('shows profile avatar in AppBar', (tester) async {
-    await tester.pumpWidget(MaterialApp(
-      home: MobileHomeScreen(sdk: emptySdk, appTitle: 'TestApp'),
-    ));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MobileHomeScreen(sdk: emptySdk, appTitle: 'TestApp'),
+      ),
+    );
     await tester.pump();
 
     // CircleAvatar used for the profile button
@@ -110,9 +117,11 @@ void main() {
   });
 
   testWidgets('shows sync button in AppBar', (tester) async {
-    await tester.pumpWidget(MaterialApp(
-      home: MobileHomeScreen(sdk: emptySdk, appTitle: 'TestApp'),
-    ));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MobileHomeScreen(sdk: emptySdk, appTitle: 'TestApp'),
+      ),
+    );
     await tester.pump();
 
     expect(find.byIcon(Icons.sync), findsOneWidget);

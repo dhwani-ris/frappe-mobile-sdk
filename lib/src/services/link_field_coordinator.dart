@@ -32,7 +32,7 @@ class LinkFieldCoordinator {
   static const int _maxConcurrent = 1; // Sequential for predictable ordering
   int _inFlight = 0;
   final List<_PendingRequest> _queue = [];
-  bool _useCoordinator = true;
+  final bool _useCoordinator;
 
   LinkFieldCoordinator({
     required this.meta,
@@ -61,8 +61,7 @@ class LinkFieldCoordinator {
         .toList();
 
     for (final f in linkFields) {
-      final parents =
-          LinkOptionService.getDependentFieldNames(f.linkFilters);
+      final parents = LinkOptionService.getDependentFieldNames(f.linkFilters);
       if (f.fieldname != null) {
         _parentsOf[f.fieldname!] = parents;
         for (final p in parents) {
@@ -155,9 +154,7 @@ class LinkFieldCoordinator {
   }
 
   int getTier(DocField field) {
-    return field.fieldname != null
-        ? (_fieldTier[field.fieldname!] ?? 0)
-        : 0;
+    return field.fieldname != null ? (_fieldTier[field.fieldname!] ?? 0) : 0;
   }
 
   List<DocField> getChildrenOf(String parentFieldname) {
@@ -172,7 +169,9 @@ class LinkFieldCoordinator {
 
   void _emitProgress(bool loading, [String? message]) {
     if (!_progressController.isClosed) {
-      _progressController.add(LinkLoadProgress(loading: loading, message: message));
+      _progressController.add(
+        LinkLoadProgress(loading: loading, message: message),
+      );
     }
   }
 
@@ -266,7 +265,10 @@ class LinkFieldCoordinator {
       return;
     }
 
-    final filters = LinkOptionService.parseLinkFilters(field.linkFilters, formData);
+    final filters = LinkOptionService.parseLinkFilters(
+      field.linkFilters,
+      formData,
+    );
     if (tier > 0 && filters == null) {
       return;
     }
@@ -301,7 +303,10 @@ class LinkFieldCoordinator {
       if (field.fieldname == null || field.options == null) continue;
       requestFetch(
         field.options!,
-        filters: LinkOptionService.parseLinkFilters(field.linkFilters, _formData),
+        filters: LinkOptionService.parseLinkFilters(
+          field.linkFilters,
+          _formData,
+        ),
         fieldLabel: field.displayLabel,
         fieldname: field.fieldname,
       );
@@ -310,7 +315,10 @@ class LinkFieldCoordinator {
     for (final field in sortedDependent) {
       if (field.fieldname == null || field.options == null) continue;
       if (!canFetchNow(field, _formData)) continue;
-      final filters = LinkOptionService.parseLinkFilters(field.linkFilters, _formData);
+      final filters = LinkOptionService.parseLinkFilters(
+        field.linkFilters,
+        _formData,
+      );
       if (filters == null) continue;
       requestFetch(
         field.options!,

@@ -82,7 +82,8 @@ class LinkField extends BaseField {
     }
 
     // If field.options contains a DocType name, fetch from service or coordinator
-    final effectiveService = linkOptionService ?? linkFieldCoordinator?.linkOptionService;
+    final effectiveService =
+        linkOptionService ?? linkFieldCoordinator?.linkOptionService;
     if (field.options != null &&
         field.options!.isNotEmpty &&
         effectiveService != null) {
@@ -184,10 +185,12 @@ class _LinkFieldDropdownState extends State<_LinkFieldDropdown> {
     });
     if (options.length == 1) {
       final currentVal = widget.value?.toString();
-      final hasValidSelection = currentVal != null &&
+      final hasValidSelection =
+          currentVal != null &&
           currentVal.isNotEmpty &&
-          options.any((o) =>
-              o.name == currentVal || (o.label ?? o.name) == currentVal);
+          options.any(
+            (o) => o.name == currentVal || (o.label ?? o.name) == currentVal,
+          );
       if (!hasValidSelection) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted) widget.onChanged?.call(options.first.name);
@@ -202,7 +205,9 @@ class _LinkFieldDropdownState extends State<_LinkFieldDropdown> {
       _loadOptions();
       return;
     }
-    final docField = widget.field is DocField ? widget.field as DocField : _docFieldFromDynamic(widget.field);
+    final docField = widget.field is DocField
+        ? widget.field as DocField
+        : _docFieldFromDynamic(widget.field);
     if (docField == null) {
       _loadOptions();
       return;
@@ -216,12 +221,18 @@ class _LinkFieldDropdownState extends State<_LinkFieldDropdown> {
         _options = [];
         _isLoading = false;
         _waitingForDependent = true;
-        _dependentFieldName = dependentNames.isNotEmpty ? dependentNames.first : '';
+        _dependentFieldName = dependentNames.isNotEmpty
+            ? dependentNames.first
+            : '';
       });
       return;
     }
     setState(() => _isLoading = true);
-    coordinator.registerField(docField, widget.formData, _applyOptionsAndAutoSelect);
+    coordinator.registerField(
+      docField,
+      widget.formData,
+      _applyOptionsAndAutoSelect,
+    );
   }
 
   DocField? _docFieldFromDynamic(dynamic f) {
@@ -278,7 +289,8 @@ class _LinkFieldDropdownState extends State<_LinkFieldDropdown> {
   @override
   void didUpdateWidget(_LinkFieldDropdown oldWidget) {
     super.didUpdateWidget(oldWidget);
-    final useCoordinator = widget.linkFieldCoordinator != null &&
+    final useCoordinator =
+        widget.linkFieldCoordinator != null &&
         widget.linkFieldCoordinator!.useCoordinator;
     final loadFn = useCoordinator ? _loadOptionsViaCoordinator : _loadOptions;
 

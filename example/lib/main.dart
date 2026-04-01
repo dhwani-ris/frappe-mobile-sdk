@@ -4,6 +4,25 @@ import 'package:frappe_mobile_sdk/frappe_mobile_sdk.dart';
 
 import 'config/app_config.dart' as config;
 
+HomeScreenLayout _homeLayoutFromConfig(String value) {
+  switch (value.toLowerCase().trim()) {
+    case 'folder':
+    case 'folder view':
+      return HomeScreenLayout.folder;
+    case 'list':
+    case 'list view':
+    default:
+      return HomeScreenLayout.list;
+  }
+}
+
+class _HomeDoctypeData {
+  final List<String> doctypes;
+  final Map<String, List<String>> groups;
+
+  const _HomeDoctypeData({required this.doctypes, required this.groups});
+}
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   runApp(const MyApp());
@@ -15,13 +34,15 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Frappe Mobile SDK Demo',
+      title: config.AppConstants.appName,
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
         useMaterial3: true,
       ),
       home: FrappeAppGuard(
         baseUrl: config.AppConstants.baseUrl,
+        currentPackageName: config.AppConstants.packageName,
+        currentVersion: config.AppConstants.appVersion,
         child: const HomeScreen(),
       ),
     );
@@ -47,6 +68,9 @@ class _HomeScreenState extends State<HomeScreen> {
   LinkOptionService? _linkOptionService;
 
   AppConfig? _appConfig;
+  final HomeScreenLayout _homeScreenLayout = _homeLayoutFromConfig(
+    config.AppConstants.homeScreenLayout,
+  );
   bool _isInitialized = false;
   bool _isAuthenticated = false;
   String? _errorMessage;
@@ -82,7 +106,10 @@ class _HomeScreenState extends State<HomeScreen> {
       );
 
       // Initialize SDK and auto-restore session + initial meta/data sync
-      final sdk = FrappeSDK(baseUrl: _appConfig!.baseUrl);
+      final sdk = FrappeSDK(
+        baseUrl: _appConfig!.baseUrl,
+        databaseAppName: config.AppConstants.appName,
+      );
       await sdk.initialize(true);
 
       _sdk = sdk;
@@ -192,6 +219,23 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
+  Future<_HomeDoctypeData> _loadHomeDoctypeData() async {
+    if (_metaService == null) {
+      return const _HomeDoctypeData(doctypes: <String>[], groups: {});
+    }
+
+    if (_homeScreenLayout == HomeScreenLayout.folder) {
+      final groups = await _metaService!.getMobileFormGroups();
+      final doctypes = groups.values.expand((e) => e).toList();
+      if (doctypes.isNotEmpty) {
+        return _HomeDoctypeData(doctypes: doctypes, groups: groups);
+      }
+    }
+
+    final doctypes = await _metaService!.getMobileFormDoctypeNames();
+    return _HomeDoctypeData(doctypes: doctypes, groups: const {});
+  }
+
   @override
   Widget build(BuildContext context) {
     if (!_isInitialized) {
@@ -291,7 +335,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Frappe Mobile SDK'),
+        title: Text(config.AppConstants.appName),
         actions: [
           // Sync status button with badge
           if (_syncService != null && _repository != null)
@@ -353,16 +397,20 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ],
       ),
-      body: FutureBuilder<List<String>>(
-        future:
-            _metaService?.getMobileFormDoctypeNames() ??
-            Future.value(<String>[]),
+      body: FutureBuilder<_HomeDoctypeData>(
+        future: _loadHomeDoctypeData(),
         builder: (context, snapshot) {
-          final doctypes = snapshot.data ?? [];
+          final homeData =
+              snapshot.data ??
+              const _HomeDoctypeData(doctypes: <String>[], groups: {});
           return DoctypeListScreen(
             appConfig: _appConfig!,
             repository: _repository!,
-            doctypes: doctypes.isNotEmpty ? doctypes : null,
+            homeScreenLayout: _homeScreenLayout,
+            groupedDoctypes: homeData.groups.isNotEmpty
+                ? homeData.groups
+                : null,
+            doctypes: homeData.doctypes.isNotEmpty ? homeData.doctypes : null,
             onDoctypeSelected: (doctype) async {
               // Navigate to document list for this doctype
               if (_repository == null ||
@@ -493,6 +541,16 @@ class _HomeScreenState extends State<HomeScreen> {
             },
           );
         },
+      ),
+      bottomNavigationBar: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(8.0),
+          child: Text(
+            '${config.AppConstants.packageName}  v${config.AppConstants.appVersion}',
+            textAlign: TextAlign.center,
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        ),
       ),
     );
   }

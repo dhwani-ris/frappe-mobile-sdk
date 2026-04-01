@@ -239,7 +239,9 @@ class MetaService {
     final list = await _database.doctypeMetaDao.findMobileFormDoctypes();
     final groups = <String, List<String>>{};
     for (final entity in list) {
-      final group = (entity.groupName?.isNotEmpty == true) ? entity.groupName! : 'Other';
+      final group = (entity.groupName?.isNotEmpty == true)
+          ? entity.groupName!
+          : 'Other';
       groups.putIfAbsent(group, () => []).add(entity.doctype);
     }
     return groups;

@@ -31,6 +31,16 @@ class FrappeAppGuard extends StatefulWidget {
   /// Child widget to show if app status check passes
   final Widget child;
 
+  /// Optional: Override current package identifier used for comparison.
+  ///
+  /// If not provided, the guard uses `PackageInfo.fromPlatform().packageName`.
+  final String? currentPackageName;
+
+  /// Optional: Override current app version used for comparison.
+  ///
+  /// If not provided, the guard uses `PackageInfo.fromPlatform().version`.
+  final String? currentVersion;
+
   /// Optional: Custom message for "app not configured" screen
   final String? appNotConfiguredMessage;
 
@@ -41,6 +51,8 @@ class FrappeAppGuard extends StatefulWidget {
     super.key,
     required this.baseUrl,
     required this.child,
+    this.currentPackageName,
+    this.currentVersion,
     this.appNotConfiguredMessage,
     this.forceUpdateTitle,
   });
@@ -53,6 +65,7 @@ class _FrappeAppGuardState extends State<FrappeAppGuard> {
   bool _isChecking = true;
   bool _isAppBlocked = false;
   bool _forceUpdateRequired = false;
+  bool _maintenanceMode = false;
   String? _errorMessage;
   String? _storeUrl;
   String? _updateTitle;
@@ -72,7 +85,10 @@ class _FrappeAppGuardState extends State<FrappeAppGuard> {
     try {
       final service = AppStatusService(widget.baseUrl);
       final status = await service.fetchAppStatus();
-      final info = await PackageInfo.fromPlatform();
+      final info =
+          (widget.currentPackageName == null || widget.currentVersion == null)
+          ? await PackageInfo.fromPlatform()
+          : null;
 
       if (!status.enabled) {
         if (!mounted) return;
@@ -86,10 +102,24 @@ class _FrappeAppGuardState extends State<FrappeAppGuard> {
         return;
       }
 
+      if (status.maintenanceMode) {
+        if (!mounted) return;
+        setState(() {
+          _maintenanceMode = true;
+          _errorMessage =
+              (status.maintenanceMessage != null &&
+                  status.maintenanceMessage!.trim().isNotEmpty)
+              ? status.maintenanceMessage
+              : 'This app is temporarily down for maintenance. Please try again later.';
+          _isChecking = false;
+        });
+        return;
+      }
+
       final expectedPackage = status.packageName;
       final expectedVersion = status.version;
-      final currentPackage = info.packageName;
-      final currentVersion = info.version;
+      final currentPackage = widget.currentPackageName ?? info!.packageName;
+      final currentVersion = widget.currentVersion ?? info!.version;
 
       final packageMismatch =
           expectedPackage != null &&
@@ -192,6 +222,35 @@ class _FrappeAppGuardState extends State<FrappeAppGuard> {
                 ElevatedButton(
                   onPressed: _openStore,
                   child: const Text('Open Store'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    if (_maintenanceMode) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Maintenance')),
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24.0),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Icon(Icons.build, size: 80, color: Colors.orange),
+                const SizedBox(height: 24),
+                const Text(
+                  'Under maintenance',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  _errorMessage ?? 'Please try again later.',
+                  textAlign: TextAlign.center,
                 ),
               ],
             ),
