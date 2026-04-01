@@ -9,7 +9,7 @@ Participation is governed by our [Code of Conduct](CODE_OF_CONDUCT.md). By contr
 ## What to contribute
 
 - Bug fixes and regressions tests
-- Documentation improvements (`README.md`, `docs/`, examples)
+- Documentation improvements (`README.md`, `doc/`, examples)
 - Features that fit the scope of the SDK (Frappe integration, forms, offline/sync, auth)
 - Test coverage and example app updates
 
@@ -80,11 +80,11 @@ Maintainers will review as time allows; feedback may request tests, docs, or sma
 
 | Topic | Location |
 |--------|----------|
-| Full SDK API and concepts | [`docs/DOCUMENTATION.md`](docs/DOCUMENTATION.md) |
-| Environment and platform setup | [`docs/SETUP.md`](docs/SETUP.md) |
-| UI customization | [`docs/CUSTOMIZATION.md`](docs/CUSTOMIZATION.md) |
-| Testing | [`docs/TESTING.md`](docs/TESTING.md) |
-| Workflows | [`docs/WORKFLOWS.md`](docs/WORKFLOWS.md) |
+| Full SDK API and concepts | [`doc/DOCUMENTATION.md`](doc/DOCUMENTATION.md) |
+| Environment and platform setup | [`doc/SETUP.md`](doc/SETUP.md) |
+| UI customization | [`doc/CUSTOMIZATION.md`](doc/CUSTOMIZATION.md) |
+| Testing | [`doc/TESTING.md`](doc/TESTING.md) |
+| Workflows | [`doc/WORKFLOWS.md`](doc/WORKFLOWS.md) |
 | Pre-commit and CI details | [`.github/PRE_COMMIT.md`](.github/PRE_COMMIT.md) |
 
 ## Security
