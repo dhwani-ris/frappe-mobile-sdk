@@ -1,5 +1,3 @@
-import 'dart:developer' as dev;
-
 import '../api/client.dart';
 import '../api/oauth2_helper.dart';
 import '../database/app_database.dart';
@@ -138,8 +136,6 @@ class AuthService {
       if (user == null || user.isEmpty) {
         throw Exception('Login response missing user');
       }
-      dev.log('access_token: $accessToken', name: 'Auth');
-
       await _processLoginResponse(
         response,
         accessToken,
@@ -208,8 +204,6 @@ class AuthService {
       if (user == null || user.isEmpty) {
         throw Exception('Verify OTP response missing user');
       }
-      dev.log('access_token: $accessToken', name: 'Auth');
-
       final rolesJson = response['roles'] as List<dynamic>?;
       _roles =
           rolesJson
@@ -465,10 +459,6 @@ class AuthService {
         code: code,
         codeVerifier: codeVerifier,
         clientSecret: clientSecret,
-      );
-      dev.log(
-        'loginWithOAuth success: access_token length=${tokens.accessToken.length}, refresh_token=${tokens.refreshToken != null ? "set" : "null"}, expires_in=${tokens.expiresIn}',
-        name: 'Auth',
       );
       final accessToken = tokens.accessToken.trim();
       if (accessToken.isEmpty) {
