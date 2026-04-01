@@ -13,9 +13,9 @@ dependencies:
   frappe_mobile_sdk: ^1.0.0
 
 # For local development in this repository, uncomment this override:
-# dependency_overrides:
-#   frappe_mobile_sdk:
-#     path: ../
+dependency_overrides:
+  frappe_mobile_sdk:
+    path: ../
 
 dev_dependencies:
   flutter_test:
