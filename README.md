@@ -57,14 +57,14 @@ To run apps built with this SDK you **must** install the companion **Frappe Mobi
 
 Server repo (install & server‑side documentation):
 
-- `https://github.com/dhwani-ris/frappe_mobile_control`
+- `https://github.com/dhwani-ris/frappe-mobile-control`
 
 Install via bench:
 
 ```bash
 cd /path/to/your/frappe-bench
-bench get-app https://github.com/dhwani-ris/frappe_mobile_control
-bench install-app frappe_mobile_control
+bench get-app https://github.com/dhwani-ris/frappe-mobile-control
+bench install-app frappe-mobile-control
 bench migrate
 ```
 
@@ -75,6 +75,24 @@ All **server‑side configuration, workflows, and mobile control documentation**
 ## Installation
 
 Add the SDK to your Flutter app’s `pubspec.yaml`:
+
+From pub.dev:
+
+```bash
+flutter pub add frappe_mobile_sdk
+```
+
+Or:
+
+```yaml
+dependencies:
+  # Pick the latest version from pub.dev
+  frappe_mobile_sdk: ^<latest>
+```
+
+Package page: `https://pub.dev/packages/frappe_mobile_sdk`
+
+From Git:
 
 ```yaml
 dependencies:
@@ -105,10 +123,26 @@ flutter pub get
 
 ## Configuration
 
-Create a centralized config file to store your app constants (base URL, OAuth credentials, doctypes, etc.). The example app uses `example/lib/config/app_config.dart`:
+Create a centralized config file to store your app constants (app name/version, package id, home layout, base URL, OAuth credentials, etc.). The example app uses `example/lib/config/app_config.dart` (generated from `example/lib/config/app_config.example.dart`):
+
+```bash
+cp example/lib/config/app_config.example.dart example/lib/config/app_config.dart
+```
 
 ```dart
-class AppConstants {
+class AppConfig {
+  /// App name shown in UI.
+  static const String appName = 'Frappe Mobile SDK Demo';
+
+  /// App version shown in UI.
+  static const String appVersion = '1.0.0';
+
+  /// Android/iOS package identifier.
+  static const String packageName = 'com.example.frappe_mobile_sdk_demo';
+
+  /// Home screen layout mode. Allowed values: 'list' or 'folder'.
+  static const String homeScreenLayout = 'list';
+
   /// Frappe server base URL (with trailing slash)
   static const String baseUrl = 'https://your-site.com/';
 
@@ -128,13 +162,13 @@ import 'package:frappe_mobile_sdk/frappe_mobile_sdk.dart';
 
 MaterialApp(
   home: FrappeAppGuard(
-    baseUrl: config.AppConstants.baseUrl,
+    baseUrl: config.AppConfig.baseUrl,
     child: YourHomeWidget(),
   ),
 );
 ```
 
-> Note: your own `app_config.dart` should typically be git‑ignored; only an example template should be committed.
+> Note: your `app_config.dart` should typically be git‑ignored; only `app_config.example.dart` should be committed.
 
 ---
 
@@ -186,7 +220,7 @@ import 'package:frappe_mobile_sdk/frappe_mobile_sdk.dart';
 
 MaterialApp(
   home: FrappeAppGuard(
-    baseUrl: config.AppConstants.baseUrl,
+    baseUrl: config.AppConfig.baseUrl,
     child: const HomeScreen(),
   ),
 );
@@ -531,42 +565,10 @@ For a full conceptual/API guide (installation, API calling, forms, auth, offline
 
 ---
 
-## Contribution & CI
-
-Before committing, run pre‑commit checks (see `.github/PRE_COMMIT.md`):
-
-```bash
-# Flutter pre-commit (recommended)
-dart run flutter_pre_commit
-
-# Or pre-commit framework
-pre-commit run --all-files
-```
-
-GitHub Actions workflows:
-
-- **CI (`ci.yml`)** – `flutter analyze`, `dart format --set-exit-if-changed`, `flutter test`.
-- **Semantic commit messages (`semantic-commits.yml`)** – validates Conventional Commits format.
-
-Commit message format:
-
-- `type(scope)?: subject`  
-  Types: `feat`, `fix`, `docs`, `style`, `refactor`, `test`, `chore`, `ci`, `build`, `perf`, `revert`.
-
----
-
-## License
-
-MIT License – see `LICENSE`.
-
-© 2026 Dhwani Rural Information System
-
----
-
 ## Links & Further Documentation
 
 - SDK repo: `https://github.com/dhwani-ris/frappe-mobile-sdk`
-- Server companion app (required): `https://github.com/dhwani-ris/frappe_mobile_control`
+- Server companion app (required): `https://github.com/dhwani-ris/frappe-mobile-control`
 
 In‑repo documentation:
 
@@ -606,16 +608,16 @@ Before using this SDK, you need to install the **Frappe Mobile Control** app on 
 1. **Install via Git** (recommended):
    ```bash
    cd /path/to/your/frappe-bench
-   bench get-app https://github.com/dhwani-ris/frappe_mobile_control
-   bench install-app frappe_mobile_control
+   bench get-app https://github.com/dhwani-ris/frappe-mobile-control
+   bench install-app frappe-mobile-control
    bench migrate
    ```
 
 2. **Or install manually**:
-   - Clone the repository: `git clone https://github.com/dhwani-ris/frappe_mobile_control`
+   - Clone the repository: `git clone https://github.com/dhwani-ris/frappe-mobile-control`
    - Follow the installation instructions in the repository
 
-**Repository**: [https://github.com/dhwani-ris/frappe_mobile_control](https://github.com/dhwani-ris/frappe_mobile_control)
+**Repository**: [https://github.com/dhwani-ris/frappe-mobile-control](https://github.com/dhwani-ris/frappe-mobile-control)
 
 ## Quick Start
 
@@ -635,12 +637,12 @@ Create a centralized config file to store your app constants (base URL, OAuth cr
 
 1. **Create config file**: Copy the example template:
    ```bash
-   cp lib/config/app_config.example.dart lib/config/app_config.dart
+   cp example/lib/config/app_config.example.dart example/lib/config/app_config.dart
    ```
 
-2. **Update config values** in `lib/config/app_config.dart`:
+2. **Update config values** in `example/lib/config/app_config.dart`:
    ```dart
-   class AppConstants {
+   class AppConfig {
      /// Frappe server base URL (with trailing slash)
      static const String baseUrl = 'https://your-site.com/';
      
@@ -662,19 +664,19 @@ Create a centralized config file to store your app constants (base URL, OAuth cr
    // Wrap your app with FrappeAppGuard (checks app status on launch)
    MaterialApp(
      home: FrappeAppGuard(
-       baseUrl: config.AppConstants.baseUrl,
+       baseUrl: config.AppConfig.baseUrl,
        child: YourHomeWidget(),
      ),
    )
    
    // Use in AppConfig
    AppConfig(
-     baseUrl: config.AppConstants.baseUrl,
-     doctypes: config.AppConstants.doctypes,
+     baseUrl: config.AppConfig.baseUrl,
+     doctypes: config.AppConfig.doctypes,
      loginConfig: LoginConfig(
        enableOAuth: true,
-       oauthClientId: config.AppConstants.oauthClientId,
-       oauthClientSecret: config.AppConstants.oauthClientSecret,
+       oauthClientId: config.AppConfig.oauthClientId,
+       oauthClientSecret: config.AppConfig.oauthClientSecret,
      ),
    )
    ```
@@ -695,7 +697,7 @@ The SDK includes automatic app status checking via `FrappeAppGuard`. This widget
 ```dart
 MaterialApp(
   home: FrappeAppGuard(
-    baseUrl: config.AppConstants.baseUrl,
+    baseUrl: config.AppConfig.baseUrl,
     child: YourHomeWidget(),
   ),
 )
@@ -931,8 +933,8 @@ class AppConstants {
 // Use in AppConfig
 loginConfig: LoginConfig(
   enableOAuth: true,
-  oauthClientId: config.AppConstants.oauthClientId,
-  oauthClientSecret: config.AppConstants.oauthClientSecret, // Required for confidential clients
+  oauthClientId: config.AppConfig.oauthClientId,
+  oauthClientSecret: config.AppConfig.oauthClientSecret, // Required for confidential clients
 ),
 ```
 

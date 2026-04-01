@@ -542,16 +542,6 @@ class _HomeScreenState extends State<HomeScreen> {
           );
         },
       ),
-      bottomNavigationBar: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(8.0),
-          child: Text(
-            '${config.AppConstants.packageName}  v${config.AppConstants.appVersion}',
-            textAlign: TextAlign.center,
-            style: Theme.of(context).textTheme.bodySmall,
-          ),
-        ),
-      ),
     );
   }
 }
