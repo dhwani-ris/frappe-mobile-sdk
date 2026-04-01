@@ -68,7 +68,8 @@ class FieldFactory {
     Map<String, String>? imageHeaders,
     Future<DocTypeMeta> Function(String doctype)? getMeta,
     ChildTableFormBuilder? childTableFormBuilder,
-    Future<void> Function(DocField field, Map<String, dynamic> formData)? onButtonPressed,
+    Future<void> Function(DocField field, Map<String, dynamic> formData)?
+    onButtonPressed,
   }) {
     if (field.hidden) {
       return null;
@@ -180,7 +181,9 @@ class FieldFactory {
 
       case 'Table':
         if (getMeta == null || childTableFormBuilder == null) return null;
-        final listValue = value is List ? List<dynamic>.from(value) : <dynamic>[];
+        final listValue = value is List
+            ? List<dynamic>.from(value)
+            : <dynamic>[];
         return _TableFieldBase(
           field: field,
           value: listValue,
@@ -251,7 +254,12 @@ class FieldFactory {
         );
 
       case FieldTypes.html:
-        return HtmlField(field: field, value: value, enabled: enabled, style: fieldStyle);
+        return HtmlField(
+          field: field,
+          value: value,
+          enabled: enabled,
+          style: fieldStyle,
+        );
 
       case FieldTypes.button:
         return ButtonField(
@@ -298,7 +306,9 @@ class _TableFieldBase extends BaseField {
     return ChildTableField(
       field: field,
       value: value,
-      onChanged: onChanged != null ? (List<dynamic> v) => onChanged!.call(v) : null,
+      onChanged: onChanged != null
+          ? (List<dynamic> v) => onChanged!.call(v)
+          : null,
       enabled: enabled,
       getMeta: getMeta,
       formBuilder: formBuilder,

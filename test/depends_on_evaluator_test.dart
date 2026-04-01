@@ -6,27 +6,24 @@ void main() {
     group('existing operators still work', () {
       test('== comparison', () {
         expect(
-          DependsOnEvaluator.evaluate(
-            "eval:doc.status == 'Yes'",
-            {'status': 'Yes'},
-          ),
+          DependsOnEvaluator.evaluate("eval:doc.status == 'Yes'", {
+            'status': 'Yes',
+          }),
           isTrue,
         );
         expect(
-          DependsOnEvaluator.evaluate(
-            "eval:doc.status == 'Yes'",
-            {'status': 'No'},
-          ),
+          DependsOnEvaluator.evaluate("eval:doc.status == 'Yes'", {
+            'status': 'No',
+          }),
           isFalse,
         );
       });
 
       test('!= comparison', () {
         expect(
-          DependsOnEvaluator.evaluate(
-            "eval:doc.status != 'Yes'",
-            {'status': 'No'},
-          ),
+          DependsOnEvaluator.evaluate("eval:doc.status != 'Yes'", {
+            'status': 'No',
+          }),
           isTrue,
         );
       });
@@ -72,10 +69,7 @@ void main() {
           DependsOnEvaluator.evaluate('eval:doc.active', {'active': ''}),
           isFalse,
         );
-        expect(
-          DependsOnEvaluator.evaluate('eval:doc.active', {}),
-          isFalse,
-        );
+        expect(DependsOnEvaluator.evaluate('eval:doc.active', {}), isFalse);
       });
     });
 
@@ -149,10 +143,9 @@ void main() {
 
       test('empty array always false', () {
         expect(
-          DependsOnEvaluator.evaluate(
-            "eval:[].includes(doc.field)",
-            {'field': 'anything'},
-          ),
+          DependsOnEvaluator.evaluate("eval:[].includes(doc.field)", {
+            'field': 'anything',
+          }),
           isFalse,
         );
       });
