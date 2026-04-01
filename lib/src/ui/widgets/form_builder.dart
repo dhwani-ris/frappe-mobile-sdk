@@ -198,27 +198,25 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
       }
     }
 
-    if (widget.linkOptionService != null &&
-        widget.useLinkFieldCoordinator) {
+    if (widget.linkOptionService != null && widget.useLinkFieldCoordinator) {
       _linkFieldCoordinator = LinkFieldCoordinator(
         meta: widget.meta,
         linkOptionService: widget.linkOptionService!,
         useCoordinator: true,
       );
       _linkFieldCoordinator!.prefetchInitial(_formData);
-      _progressSubscription = _linkFieldCoordinator!.progressStream.listen(
-        (p) {
-          if (mounted) {
-            setState(() {
-              _linkOptionsLoading = p.loading;
-              _linkOptionsLoadingMessage = p.message;
-            });
-          }
-        },
-      );
+      _progressSubscription = _linkFieldCoordinator!.progressStream.listen((p) {
+        if (mounted) {
+          setState(() {
+            _linkOptionsLoading = p.loading;
+            _linkOptionsLoadingMessage = p.message;
+          });
+        }
+      });
     }
 
-    _fieldFactory = widget.customFieldFactory ??
+    _fieldFactory =
+        widget.customFieldFactory ??
         FieldFactory(
           linkOptionService: widget.linkOptionService,
           linkFieldCoordinator: _linkFieldCoordinator,
@@ -858,24 +856,23 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
           _formData[field.fieldname!] ??= field.defaultValue;
         }
       }
-      if (widget.linkOptionService != null &&
-          widget.useLinkFieldCoordinator) {
+      if (widget.linkOptionService != null && widget.useLinkFieldCoordinator) {
         _linkFieldCoordinator = LinkFieldCoordinator(
           meta: widget.meta,
           linkOptionService: widget.linkOptionService!,
           useCoordinator: true,
         );
         _linkFieldCoordinator!.prefetchInitial(_formData);
-        _progressSubscription = _linkFieldCoordinator!.progressStream.listen(
-          (p) {
-            if (mounted) {
-              setState(() {
-                _linkOptionsLoading = p.loading;
-                _linkOptionsLoadingMessage = p.message;
-              });
-            }
-          },
-        );
+        _progressSubscription = _linkFieldCoordinator!.progressStream.listen((
+          p,
+        ) {
+          if (mounted) {
+            setState(() {
+              _linkOptionsLoading = p.loading;
+              _linkOptionsLoadingMessage = p.message;
+            });
+          }
+        });
       }
       _fieldFactory.linkFieldCoordinator = _linkFieldCoordinator;
       _buildFormStructure();
@@ -1005,7 +1002,10 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
               elevation: 0,
               child: Container(
                 width: double.infinity,
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 8,
+                ),
                 child: Row(
                   children: [
                     SizedBox(

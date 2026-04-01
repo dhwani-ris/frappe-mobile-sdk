@@ -47,7 +47,8 @@ class DocumentListScreen extends StatefulWidget {
     String fieldName,
     dynamic newValue,
     Map<String, dynamic> formData,
-  )? onFieldChange;
+  )?
+  onFieldChange;
 
   const DocumentListScreen({
     super.key,
@@ -87,11 +88,14 @@ class _DocumentListScreenState extends State<DocumentListScreen> {
   bool? _permDelete;
 
   bool get _canCreate =>
-      _permCreate ?? widget.meta.hasPermission('create', userRoles: widget.userRoles);
+      _permCreate ??
+      widget.meta.hasPermission('create', userRoles: widget.userRoles);
   bool get _canWrite =>
-      _permWrite ?? widget.meta.hasPermission('write', userRoles: widget.userRoles);
+      _permWrite ??
+      widget.meta.hasPermission('write', userRoles: widget.userRoles);
   bool get _canDelete =>
-      _permDelete ?? widget.meta.hasPermission('delete', userRoles: widget.userRoles);
+      _permDelete ??
+      widget.meta.hasPermission('delete', userRoles: widget.userRoles);
 
   @override
   void initState() {
@@ -146,12 +150,21 @@ class _DocumentListScreenState extends State<DocumentListScreen> {
 
   String _docTitle(Document doc) {
     final titleFieldName = widget.meta.titleField;
-    if (titleFieldName != null && titleFieldName.isNotEmpty && doc.data[titleFieldName] != null) {
+    if (titleFieldName != null &&
+        titleFieldName.isNotEmpty &&
+        doc.data[titleFieldName] != null) {
       return doc.data[titleFieldName].toString().trim();
     }
-    final t = doc.data['title']?.toString() ?? doc.data['name']?.toString() ?? '';
+    final t =
+        doc.data['title']?.toString() ?? doc.data['name']?.toString() ?? '';
     if (t.isNotEmpty) return t;
-    for (final fn in ['full_name', 'customer_name', 'supplier_name', 'item_name', 'item_code']) {
+    for (final fn in [
+      'full_name',
+      'customer_name',
+      'supplier_name',
+      'item_name',
+      'item_code',
+    ]) {
       final v = doc.data[fn]?.toString();
       if (v != null && v.isNotEmpty) return v;
     }
@@ -192,11 +205,15 @@ class _DocumentListScreenState extends State<DocumentListScreen> {
       if (isOnline) {
         await widget.syncService.pullSync(doctype: widget.doctype);
       }
-      final docs = await widget.repository.getDocumentsByDoctype(widget.doctype);
+      final docs = await widget.repository.getDocumentsByDoctype(
+        widget.doctype,
+      );
       setState(() => _documents = docs);
     } catch (e) {
       try {
-        final docs = await widget.repository.getDocumentsByDoctype(widget.doctype);
+        final docs = await widget.repository.getDocumentsByDoctype(
+          widget.doctype,
+        );
         setState(() => _documents = docs);
       } catch (_) {}
     } finally {
@@ -230,7 +247,8 @@ class _DocumentListScreenState extends State<DocumentListScreen> {
             },
             itemBuilder: (context) {
               final sortableFields = <String>{};
-              if (widget.meta.titleField != null && widget.meta.titleField!.isNotEmpty) {
+              if (widget.meta.titleField != null &&
+                  widget.meta.titleField!.isNotEmpty) {
                 sortableFields.add(widget.meta.titleField!);
               }
               for (final field in widget.meta.listViewFields) {
@@ -252,7 +270,9 @@ class _DocumentListScreenState extends State<DocumentListScreen> {
                         Expanded(child: Text(_getFieldLabel(f))),
                         if (_sortField == f)
                           Icon(
-                            _sortAsc ? Icons.arrow_upward : Icons.arrow_downward,
+                            _sortAsc
+                                ? Icons.arrow_upward
+                                : Icons.arrow_downward,
                             size: 18,
                             color: Theme.of(context).colorScheme.primary,
                           ),
@@ -288,13 +308,18 @@ class _DocumentListScreenState extends State<DocumentListScreen> {
               child: Column(
                 children: [
                   Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 8,
+                    ),
                     child: TextField(
                       controller: _searchController,
                       decoration: InputDecoration(
                         hintText: 'Search...',
                         prefixIcon: const Icon(Icons.search),
-                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
                         isDense: true,
                       ),
                     ),
@@ -304,7 +329,10 @@ class _DocumentListScreenState extends State<DocumentListScreen> {
               ),
             ),
       floatingActionButton: _canCreate
-          ? FloatingActionButton(onPressed: () => _openForm(null), child: const Icon(Icons.add))
+          ? FloatingActionButton(
+              onPressed: () => _openForm(null),
+              child: const Icon(Icons.add),
+            )
           : null,
     );
   }
@@ -358,12 +386,20 @@ class _DocumentListScreenState extends State<DocumentListScreen> {
             itemCount: pageList.length,
             itemBuilder: (context, index) {
               final doc = pageList[index];
-              final titleText = _docTitle(doc).isEmpty ? 'Untitled' : _docTitle(doc);
-              final idText = doc.serverId != null ? 'ID: ${doc.serverId}' : 'Local (not synced)';
+              final titleText = _docTitle(doc).isEmpty
+                  ? 'Untitled'
+                  : _docTitle(doc);
+              final idText = doc.serverId != null
+                  ? 'ID: ${doc.serverId}'
+                  : 'Local (not synced)';
               final hasStatusField = widget.meta.getField('status') != null;
-              final statusValue = hasStatusField ? doc.data['status']?.toString() : null;
+              final statusValue = hasStatusField
+                  ? doc.data['status']?.toString()
+                  : null;
               final showStatus =
-                  statusValue != null && statusValue.isNotEmpty && statusValue != 'null';
+                  statusValue != null &&
+                  statusValue.isNotEmpty &&
+                  statusValue != 'null';
 
               return ListTile(
                 title: Text(titleText),
@@ -375,13 +411,21 @@ class _DocumentListScreenState extends State<DocumentListScreen> {
                       Padding(
                         padding: const EdgeInsets.only(right: 8),
                         child: Chip(
-                          label: Text(statusValue, style: Theme.of(context).textTheme.labelSmall),
+                          label: Text(
+                            statusValue,
+                            style: Theme.of(context).textTheme.labelSmall,
+                          ),
                           padding: EdgeInsets.zero,
-                          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          materialTapTargetSize:
+                              MaterialTapTargetSize.shrinkWrap,
                         ),
                       ),
                     if (doc.status == 'dirty')
-                      const Icon(Icons.cloud_upload, color: Colors.orange, size: 20),
+                      const Icon(
+                        Icons.cloud_upload,
+                        color: Colors.orange,
+                        size: 20,
+                      ),
                     const Icon(Icons.chevron_right),
                   ],
                 ),
@@ -406,7 +450,9 @@ class _DocumentListScreenState extends State<DocumentListScreen> {
                 ),
                 IconButton(
                   icon: const Icon(Icons.chevron_right),
-                  onPressed: _page < totalPages - 1 ? () => setState(() => _page++) : null,
+                  onPressed: _page < totalPages - 1
+                      ? () => setState(() => _page++)
+                      : null,
                 ),
               ],
             ),
@@ -426,7 +472,10 @@ class _DocumentListScreenState extends State<DocumentListScreen> {
     if (!isNew && doc.serverId != null && widget.api != null) {
       setState(() => _isSyncing = true);
       try {
-        final freshData = await widget.api!.doctype.getByName(widget.doctype, doc.serverId!);
+        final freshData = await widget.api!.doctype.getByName(
+          widget.doctype,
+          doc.serverId!,
+        );
         // Update local repo with fresh server data so it's available offline too.
         final updated = await widget.repository.saveServerDocument(
           doctype: widget.doctype,

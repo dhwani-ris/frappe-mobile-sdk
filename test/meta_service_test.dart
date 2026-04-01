@@ -106,18 +106,20 @@ void main() {
       expect(result?.sortOrder, isNull);
     });
 
-    test('onUpgrade adds groupName and sortOrder to existing v1 database', () async {
-      const dbPath = 'v1_migration_test.db';
-      // Delete any leftover DB from a previous run to ensure a clean slate
-      await databaseFactoryFfi.deleteDatabase(dbPath);
+    test(
+      'onUpgrade adds groupName and sortOrder to existing v1 database',
+      () async {
+        const dbPath = 'v1_migration_test.db';
+        // Delete any leftover DB from a previous run to ensure a clean slate
+        await databaseFactoryFfi.deleteDatabase(dbPath);
 
-      final rawDb = await databaseFactoryFfi.openDatabase(
-        dbPath,
-        options: OpenDatabaseOptions(
-          version: 1,
-          singleInstance: false,
-          onCreate: (db, v) async {
-            await db.execute('''
+        final rawDb = await databaseFactoryFfi.openDatabase(
+          dbPath,
+          options: OpenDatabaseOptions(
+            version: 1,
+            singleInstance: false,
+            onCreate: (db, v) async {
+              await db.execute('''
               CREATE TABLE doctype_meta (
                 doctype TEXT PRIMARY KEY,
                 modified TEXT,
@@ -126,33 +128,51 @@ void main() {
                 metaJson TEXT NOT NULL
               )
             ''');
-          },
-        ),
-      );
-      await rawDb.insert('doctype_meta', {
-        'doctype': 'OldDoc',
-        'modified': '2025-01-01',
-        'serverModifiedAt': null,
-        'isMobileForm': 1,
-        'metaJson': '{}',
-      });
-      // Simulate onUpgrade 1→2
-      await rawDb.execute('ALTER TABLE doctype_meta ADD COLUMN groupName TEXT');
-      await rawDb.execute('ALTER TABLE doctype_meta ADD COLUMN sortOrder INTEGER');
-      final rows = await rawDb.query('doctype_meta', where: 'doctype = ?', whereArgs: ['OldDoc']);
-      expect(rows.length, 1);
-      expect(rows.first['groupName'], isNull);
-      expect(rows.first['sortOrder'], isNull);
-      await rawDb.insert('doctype_meta', {
-        'doctype': 'NewDoc', 'modified': null, 'serverModifiedAt': null,
-        'isMobileForm': 1, 'metaJson': '{}', 'groupName': 'MyGroup', 'sortOrder': 0,
-      });
-      final newRows = await rawDb.query('doctype_meta', where: 'doctype = ?', whereArgs: ['NewDoc']);
-      expect(newRows.first['groupName'], 'MyGroup');
-      await rawDb.close();
-      // Clean up
-      await databaseFactoryFfi.deleteDatabase(dbPath);
-    });
+            },
+          ),
+        );
+        await rawDb.insert('doctype_meta', {
+          'doctype': 'OldDoc',
+          'modified': '2025-01-01',
+          'serverModifiedAt': null,
+          'isMobileForm': 1,
+          'metaJson': '{}',
+        });
+        // Simulate onUpgrade 1→2
+        await rawDb.execute(
+          'ALTER TABLE doctype_meta ADD COLUMN groupName TEXT',
+        );
+        await rawDb.execute(
+          'ALTER TABLE doctype_meta ADD COLUMN sortOrder INTEGER',
+        );
+        final rows = await rawDb.query(
+          'doctype_meta',
+          where: 'doctype = ?',
+          whereArgs: ['OldDoc'],
+        );
+        expect(rows.length, 1);
+        expect(rows.first['groupName'], isNull);
+        expect(rows.first['sortOrder'], isNull);
+        await rawDb.insert('doctype_meta', {
+          'doctype': 'NewDoc',
+          'modified': null,
+          'serverModifiedAt': null,
+          'isMobileForm': 1,
+          'metaJson': '{}',
+          'groupName': 'MyGroup',
+          'sortOrder': 0,
+        });
+        final newRows = await rawDb.query(
+          'doctype_meta',
+          where: 'doctype = ?',
+          whereArgs: ['NewDoc'],
+        );
+        expect(newRows.first['groupName'], 'MyGroup');
+        await rawDb.close();
+        // Clean up
+        await databaseFactoryFfi.deleteDatabase(dbPath);
+      },
+    );
   });
 
   group('DoctypeMetaDao.findMobileFormDoctypes ordering', () {
@@ -182,16 +202,31 @@ void main() {
 
       // Insert in reverse sortOrder to confirm ordering is explicit, not insertion-based
       await rawDb.insert('doctype_meta', {
-        'doctype': 'FormC', 'modified': null, 'serverModifiedAt': null,
-        'isMobileForm': 1, 'metaJson': '{}', 'groupName': 'G1', 'sortOrder': 2,
+        'doctype': 'FormC',
+        'modified': null,
+        'serverModifiedAt': null,
+        'isMobileForm': 1,
+        'metaJson': '{}',
+        'groupName': 'G1',
+        'sortOrder': 2,
       });
       await rawDb.insert('doctype_meta', {
-        'doctype': 'FormA', 'modified': null, 'serverModifiedAt': null,
-        'isMobileForm': 1, 'metaJson': '{}', 'groupName': 'G1', 'sortOrder': 0,
+        'doctype': 'FormA',
+        'modified': null,
+        'serverModifiedAt': null,
+        'isMobileForm': 1,
+        'metaJson': '{}',
+        'groupName': 'G1',
+        'sortOrder': 0,
       });
       await rawDb.insert('doctype_meta', {
-        'doctype': 'FormB', 'modified': null, 'serverModifiedAt': null,
-        'isMobileForm': 1, 'metaJson': '{}', 'groupName': 'G2', 'sortOrder': 1,
+        'doctype': 'FormB',
+        'modified': null,
+        'serverModifiedAt': null,
+        'isMobileForm': 1,
+        'metaJson': '{}',
+        'groupName': 'G2',
+        'sortOrder': 1,
       });
 
       final dao = DoctypeMetaDao(rawDb);
@@ -205,52 +240,83 @@ void main() {
   });
 
   group('_updateMobileFormDoctypes loop behaviour', () {
-    test('loop 2 writes groupName and sortOrder from MobileFormName list', () async {
-      final db = await AppDatabase.inMemoryDatabase();
-      final client = FrappeClient('https://fake.test');
-      final metaService = MetaService(client, db);
+    test(
+      'loop 2 writes groupName and sortOrder from MobileFormName list',
+      () async {
+        final db = await AppDatabase.inMemoryDatabase();
+        final client = FrappeClient('https://fake.test');
+        final metaService = MetaService(client, db);
 
-      final forms = [
-        MobileFormName(mobileDoctype: 'Form A', groupName: 'Group1', doctypeMetaModifiedAt: null, doctypeIcon: null),
-        MobileFormName(mobileDoctype: 'Form B', groupName: 'Group2', doctypeMetaModifiedAt: null, doctypeIcon: null),
-        MobileFormName(mobileDoctype: 'Form C', groupName: 'Group1', doctypeMetaModifiedAt: null, doctypeIcon: null),
-      ];
+        final forms = [
+          const MobileFormName(
+            mobileDoctype: 'Form A',
+            groupName: 'Group1',
+            doctypeMetaModifiedAt: null,
+            doctypeIcon: null,
+          ),
+          const MobileFormName(
+            mobileDoctype: 'Form B',
+            groupName: 'Group2',
+            doctypeMetaModifiedAt: null,
+            doctypeIcon: null,
+          ),
+          const MobileFormName(
+            mobileDoctype: 'Form C',
+            groupName: 'Group1',
+            doctypeMetaModifiedAt: null,
+            doctypeIcon: null,
+          ),
+        ];
 
-      await metaService.updateMobileFormDoctypesForTest(forms);
+        await metaService.updateMobileFormDoctypesForTest(forms);
 
-      final a = await db.doctypeMetaDao.findByDoctype('Form A');
-      final b = await db.doctypeMetaDao.findByDoctype('Form B');
-      final c = await db.doctypeMetaDao.findByDoctype('Form C');
+        final a = await db.doctypeMetaDao.findByDoctype('Form A');
+        final b = await db.doctypeMetaDao.findByDoctype('Form B');
+        final c = await db.doctypeMetaDao.findByDoctype('Form C');
 
-      expect(a?.groupName, 'Group1');
-      expect(a?.sortOrder, 0);
-      expect(b?.groupName, 'Group2');
-      expect(b?.sortOrder, 1);
-      expect(c?.groupName, 'Group1');
-      expect(c?.sortOrder, 2);
-    });
+        expect(a?.groupName, 'Group1');
+        expect(a?.sortOrder, 0);
+        expect(b?.groupName, 'Group2');
+        expect(b?.sortOrder, 1);
+        expect(c?.groupName, 'Group1');
+        expect(c?.sortOrder, 2);
+      },
+    );
 
-    test('loop 1 preserves groupName and sortOrder when marking isMobileForm=false', () async {
-      final db = await AppDatabase.inMemoryDatabase();
-      final client = FrappeClient('https://fake.test');
-      final metaService = MetaService(client, db);
+    test(
+      'loop 1 preserves groupName and sortOrder when marking isMobileForm=false',
+      () async {
+        final db = await AppDatabase.inMemoryDatabase();
+        final client = FrappeClient('https://fake.test');
+        final metaService = MetaService(client, db);
 
-      // First call: set up a row with groupName
-      await metaService.updateMobileFormDoctypesForTest([
-        MobileFormName(mobileDoctype: 'Survey', groupName: 'Survey Group', doctypeMetaModifiedAt: null, doctypeIcon: null),
-      ]);
+        // First call: set up a row with groupName
+        await metaService.updateMobileFormDoctypesForTest([
+          const MobileFormName(
+            mobileDoctype: 'Survey',
+            groupName: 'Survey Group',
+            doctypeMetaModifiedAt: null,
+            doctypeIcon: null,
+          ),
+        ]);
 
-      // Second call with different set — loop 1 marks 'Survey' as isMobileForm=false
-      // It must NOT null out groupName/sortOrder during that step
-      await metaService.updateMobileFormDoctypesForTest([
-        MobileFormName(mobileDoctype: 'Assessment', groupName: 'Assessment Group', doctypeMetaModifiedAt: null, doctypeIcon: null),
-      ]);
+        // Second call with different set — loop 1 marks 'Survey' as isMobileForm=false
+        // It must NOT null out groupName/sortOrder during that step
+        await metaService.updateMobileFormDoctypesForTest([
+          const MobileFormName(
+            mobileDoctype: 'Assessment',
+            groupName: 'Assessment Group',
+            doctypeMetaModifiedAt: null,
+            doctypeIcon: null,
+          ),
+        ]);
 
-      final survey = await db.doctypeMetaDao.findByDoctype('Survey');
-      expect(survey?.groupName, 'Survey Group');
-      expect(survey?.sortOrder, 0);
-      expect(survey?.isMobileForm, isFalse);
-    });
+        final survey = await db.doctypeMetaDao.findByDoctype('Survey');
+        expect(survey?.groupName, 'Survey Group');
+        expect(survey?.sortOrder, 0);
+        expect(survey?.isMobileForm, isFalse);
+      },
+    );
   });
 
   group('MetaService.getMobileFormGroups', () {
@@ -259,18 +325,39 @@ void main() {
       final client = FrappeClient('https://fake.test');
       final metaService = MetaService(client, db);
 
-      await db.doctypeMetaDao.insertDoctypeMeta(DoctypeMetaEntity(
-        doctype: 'Z Form', modified: null, serverModifiedAt: null,
-        isMobileForm: true, metaJson: '{}', groupName: 'ZGroup', sortOrder: 2,
-      ));
-      await db.doctypeMetaDao.insertDoctypeMeta(DoctypeMetaEntity(
-        doctype: 'A Form', modified: null, serverModifiedAt: null,
-        isMobileForm: true, metaJson: '{}', groupName: 'AGroup', sortOrder: 0,
-      ));
-      await db.doctypeMetaDao.insertDoctypeMeta(DoctypeMetaEntity(
-        doctype: 'M Form', modified: null, serverModifiedAt: null,
-        isMobileForm: true, metaJson: '{}', groupName: 'MGroup', sortOrder: 1,
-      ));
+      await db.doctypeMetaDao.insertDoctypeMeta(
+        DoctypeMetaEntity(
+          doctype: 'Z Form',
+          modified: null,
+          serverModifiedAt: null,
+          isMobileForm: true,
+          metaJson: '{}',
+          groupName: 'ZGroup',
+          sortOrder: 2,
+        ),
+      );
+      await db.doctypeMetaDao.insertDoctypeMeta(
+        DoctypeMetaEntity(
+          doctype: 'A Form',
+          modified: null,
+          serverModifiedAt: null,
+          isMobileForm: true,
+          metaJson: '{}',
+          groupName: 'AGroup',
+          sortOrder: 0,
+        ),
+      );
+      await db.doctypeMetaDao.insertDoctypeMeta(
+        DoctypeMetaEntity(
+          doctype: 'M Form',
+          modified: null,
+          serverModifiedAt: null,
+          isMobileForm: true,
+          metaJson: '{}',
+          groupName: 'MGroup',
+          sortOrder: 1,
+        ),
+      );
 
       final groups = await metaService.getMobileFormGroups();
       expect(groups.keys.toList(), ['AGroup', 'MGroup', 'ZGroup']);
@@ -281,10 +368,16 @@ void main() {
       final client = FrappeClient('https://fake.test');
       final metaService = MetaService(client, db);
 
-      await db.doctypeMetaDao.insertDoctypeMeta(DoctypeMetaEntity(
-        doctype: 'Ungrouped Form', modified: null, serverModifiedAt: null,
-        isMobileForm: true, metaJson: '{}', sortOrder: 0,
-      ));
+      await db.doctypeMetaDao.insertDoctypeMeta(
+        DoctypeMetaEntity(
+          doctype: 'Ungrouped Form',
+          modified: null,
+          serverModifiedAt: null,
+          isMobileForm: true,
+          metaJson: '{}',
+          sortOrder: 0,
+        ),
+      );
 
       final groups = await metaService.getMobileFormGroups();
       expect(groups.containsKey('Other'), isTrue);
@@ -302,31 +395,40 @@ void main() {
   });
 
   group('DoctypeMetaDao preserves groupName on update', () {
-    test('updateDoctypeMeta preserves groupName and sortOrder from existing row', () async {
-      final db = await AppDatabase.inMemoryDatabase();
+    test(
+      'updateDoctypeMeta preserves groupName and sortOrder from existing row',
+      () async {
+        final db = await AppDatabase.inMemoryDatabase();
 
-      await db.doctypeMetaDao.insertDoctypeMeta(DoctypeMetaEntity(
-        doctype: 'My Form', modified: '2026-01-01', serverModifiedAt: '2026-01-01',
-        isMobileForm: true, metaJson: '{"fields":[]}',
-        groupName: 'My Group', sortOrder: 5,
-      ));
+        await db.doctypeMetaDao.insertDoctypeMeta(
+          DoctypeMetaEntity(
+            doctype: 'My Form',
+            modified: '2026-01-01',
+            serverModifiedAt: '2026-01-01',
+            isMobileForm: true,
+            metaJson: '{"fields":[]}',
+            groupName: 'My Group',
+            sortOrder: 5,
+          ),
+        );
 
-      final existing = await db.doctypeMetaDao.findByDoctype('My Form');
-      final refreshed = DoctypeMetaEntity(
-        doctype: 'My Form',
-        modified: '2026-01-02',
-        serverModifiedAt: existing?.serverModifiedAt,
-        isMobileForm: existing?.isMobileForm ?? false,
-        metaJson: '{"fields":[{"fieldname":"title"}]}',
-        groupName: existing?.groupName,
-        sortOrder: existing?.sortOrder,
-      );
-      await db.doctypeMetaDao.updateDoctypeMeta(refreshed);
+        final existing = await db.doctypeMetaDao.findByDoctype('My Form');
+        final refreshed = DoctypeMetaEntity(
+          doctype: 'My Form',
+          modified: '2026-01-02',
+          serverModifiedAt: existing?.serverModifiedAt,
+          isMobileForm: existing?.isMobileForm ?? false,
+          metaJson: '{"fields":[{"fieldname":"title"}]}',
+          groupName: existing?.groupName,
+          sortOrder: existing?.sortOrder,
+        );
+        await db.doctypeMetaDao.updateDoctypeMeta(refreshed);
 
-      final result = await db.doctypeMetaDao.findByDoctype('My Form');
-      expect(result?.groupName, 'My Group');
-      expect(result?.sortOrder, 5);
-      expect(result?.modified, '2026-01-02');
-    });
+        final result = await db.doctypeMetaDao.findByDoctype('My Form');
+        expect(result?.groupName, 'My Group');
+        expect(result?.sortOrder, 5);
+        expect(result?.modified, '2026-01-02');
+      },
+    );
   });
 }
