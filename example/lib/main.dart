@@ -100,6 +100,8 @@ class _HomeScreenState extends State<HomeScreen> {
           enableMobileLogin: true,
           enablePasswordLogin: true,
           enableOAuth: true,
+          enableSocialLogin: true,
+          autoDiscoverSocialProviders: true,
           oauthClientId: config.AppConstants.oauthClientId,
           oauthClientSecret: config.AppConstants.oauthClientSecret,
         ),

@@ -552,6 +552,7 @@ The `example/` directory contains a complete Flutter app wiring these pieces tog
 This repository includes focused documents (under `doc/` unless noted):
 
 - `doc/SETUP.md` – SDK setup, app config, Android/iOS configuration.
+  - Includes a dedicated "Social Login (OAuth) Configuration" guide (Frappe server + mobile deep-link setup).
 - `doc/CUSTOMIZATION.md` – UI customization:
   - `FrappeFormStyle`, custom field factories, custom field widgets.
 - `doc/TESTING.md` – Testing strategies:
@@ -970,6 +971,19 @@ loginConfig: LoginConfig(
 ```
 
 Flow: User taps "Login with OAuth" → browser opens → user authorizes → app reopens automatically with tokens. Tokens are stored in secure storage. On 401, refresh token is used automatically; if refresh fails, user must re-login.
+
+### One-tap social provider UX (Google/Microsoft/etc.)
+
+Enable provider-direct buttons in `LoginScreen`:
+
+- Set `enableSocialLogin: true` in `LoginConfig`.
+- Keep `autoDiscoverSocialProviders: true` to fetch providers from backend automatically.
+- Keep `enableOAuth: true` (social uses OAuth internally).
+- Implement backend methods in your mobile control app:
+  - `mobile_auth.get_social_login_providers` (reads enabled providers from Social Login Key)
+  - `mobile_auth.get_social_authorize_url` (returns provider-direct authorize URL)
+
+When available, users can tap `Continue with Google` directly from the app, instead of first opening a generic Frappe OAuth page and then choosing the provider.
 
 ## Stateless Login & Keep User Logged In
 
