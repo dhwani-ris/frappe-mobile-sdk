@@ -15,6 +15,15 @@ class AppConstants {
   /// Home screen layout mode. Allowed values: 'list' or 'folder'.
   static const String homeScreenLayout = 'list';
 
+  /// Document list layout mode. Allowed values: 'list' or 'card'.
+  static const String documentListLayout = 'list';
+
+  /// Form style preset. Allowed values: 'standard', 'compact', 'material'.
+  static const String formStylePreset = 'standard';
+
+  /// Multi-tab header layout for forms. Allowed values: 'tabbar' or 'stepper'.
+  static const String formTabHeaderLayout = 'tabbar';
+
   /// Frappe server base URL (with trailing slash)
   static const String baseUrl = 'https://your-site.com/';
 

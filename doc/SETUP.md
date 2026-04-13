@@ -73,6 +73,133 @@ MaterialApp(
 );
 ```
 
+## Social Login (OAuth) Configuration
+
+Frappe social login in this SDK is handled through OAuth 2.0 (authorization code + PKCE). In practice:
+
+- The mobile app starts OAuth.
+- Frappe shows its login page (including configured social providers like Google/GitHub/Microsoft).
+- Frappe redirects back to the app with an authorization code.
+- The SDK exchanges that code for tokens and signs the user in.
+
+### Important behavior in this SDK
+
+- Use `enableOAuth: true` for OAuth login.
+- Use `enableSocialLogin: true` to show provider-direct social buttons.
+- Social buttons use OAuth internally and can skip the extra provider click.
+- Provider list can be auto-discovered from backend.
+
+### 1) Configure Frappe server
+
+1. Install and configure the OAuth provider in Frappe.
+2. Create an OAuth client in Frappe.
+3. Set redirect URI exactly to:
+   - `frappemobilesdk://oauth/callback`
+4. Configure social providers in Frappe (Social Login Key) for OAuth-backed SSO.
+5. Expose backend methods in your mobile app server layer:
+   - `mobile_auth.get_social_login_providers`
+   - `mobile_auth.get_social_authorize_url`
+
+### 2) Configure Flutter app login config
+
+```dart
+final appConfig = AppConfig(
+  baseUrl: config.AppConstants.baseUrl,
+  doctypes: const [],
+  loginConfig: LoginConfig(
+    enablePasswordLogin: true, // optional
+    enableMobileLogin: true,   // optional
+    enableOAuth: true,         // required for SSO/social via Frappe
+    enableSocialLogin: true,   // enables provider-direct buttons
+    autoDiscoverSocialProviders: true,
+    socialProviders: [
+      SocialProviderConfig(id: 'google', label: 'Google'),
+      // optional fallback list if backend discovery is unavailable
+    ],
+    oauthClientId: config.AppConstants.oauthClientId,
+    oauthClientSecret: config.AppConstants.oauthClientSecret, // only if your OAuth client requires it
+  ),
+);
+```
+
+### 3) Wire LoginScreen
+
+```dart
+LoginScreen(
+  authService: sdk.auth,
+  database: sdk.database,
+  appConfig: appConfig,
+  onLoginSuccess: () async {
+    await sdk.checkAndSyncDoctypes();
+    await sdk.resyncMobileConfiguration();
+  },
+  passwordLogin: (u, p) => sdk.login(u, p),
+  sendLoginOtp: (m) => sdk.sendLoginOtp(m),
+  verifyLoginOtp: (t, o) => sdk.verifyLoginOtp(t, o),
+)
+```
+
+### 4) Android deep-link setup
+
+Add this inside your main activity in `AndroidManifest.xml`:
+
+```xml
+<intent-filter>
+  <action android:name="android.intent.action.VIEW" />
+  <category android:name="android.intent.category.DEFAULT" />
+  <category android:name="android.intent.category.BROWSABLE" />
+  <data
+      android:scheme="frappemobilesdk"
+      android:host="oauth"
+      android:pathPrefix="/callback" />
+</intent-filter>
+```
+
+For Android 11+, add browser visibility in `<queries>`:
+
+```xml
+<intent>
+  <action android:name="android.intent.action.VIEW" />
+  <data android:scheme="https" />
+</intent>
+```
+
+### 5) iOS deep-link setup
+
+Add to `Info.plist`:
+
+```xml
+<key>CFBundleURLTypes</key>
+<array>
+  <dict>
+    <key>CFBundleURLSchemes</key>
+    <array>
+      <string>frappemobilesdk</string>
+    </array>
+  </dict>
+</array>
+```
+
+### 6) End-to-end flow
+
+1. User taps `Continue with Google` (or another provider) or `Login with OAuth`.
+2. Browser opens Frappe authorize URL.
+3. User signs in using Frappe or a social provider configured in Frappe.
+4. Frappe redirects to `frappemobilesdk://oauth/callback?code=...`.
+5. SDK exchanges code for token and authenticates user.
+
+### Troubleshooting
+
+- `OAuth is enabled but oauth_client_id is not set in config`
+  - Set `oauthClientId` in `LoginConfig`.
+- App does not return from browser
+  - Verify Android/iOS deep-link configuration.
+- `401 Invalid authentication token` after OAuth
+  - Ensure your Frappe backend accepts OAuth bearer tokens for `mobile_auth.*` endpoints.
+- OAuth opens but social providers are missing
+  - Configure Social Login Key/provider settings on the Frappe server side.
+  - Verify backend `mobile_auth.get_social_login_providers` returns enabled providers.
+
 ## Quick start
 
 Basic initialization with `FrappeSDK`:

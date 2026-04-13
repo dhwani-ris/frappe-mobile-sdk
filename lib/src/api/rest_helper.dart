@@ -53,8 +53,12 @@ class RestHelper {
     _bearerToken = null;
   }
 
-  Map<String, String> _getHeaders() {
+  Map<String, String> _getHeaders({bool includeAuth = true}) {
     final headers = <String, String>{'Accept': 'application/json'};
+
+    if (!includeAuth) {
+      return headers;
+    }
 
     if (_bearerToken != null) {
       headers['Authorization'] = 'Bearer $_bearerToken';
@@ -80,9 +84,27 @@ class RestHelper {
     return _request('GET', endpoint, queryParams: queryParams);
   }
 
+  /// Performs a GET request without auth headers.
+  Future<dynamic> getPublic(
+    String endpoint, {
+    Map<String, dynamic>? queryParams,
+  }) async {
+    return _request(
+      'GET',
+      endpoint,
+      queryParams: queryParams,
+      includeAuth: false,
+    );
+  }
+
   /// Performs a POST request.
   Future<dynamic> post(String endpoint, {dynamic body}) async {
     return _request('POST', endpoint, body: body);
+  }
+
+  /// Performs a POST request without auth headers.
+  Future<dynamic> postPublic(String endpoint, {dynamic body}) async {
+    return _request('POST', endpoint, body: body, includeAuth: false);
   }
 
   /// Performs a PUT request.
@@ -100,6 +122,7 @@ class RestHelper {
     String endpoint, {
     Map<String, dynamic>? queryParams,
     dynamic body,
+    bool includeAuth = true,
   }) async {
     var uri = Uri.parse('$baseUrl$endpoint');
     if (queryParams != null) {
@@ -118,7 +141,7 @@ class RestHelper {
     int attempts = 0;
     while (attempts < 3) {
       try {
-        final headers = _getHeaders();
+        final headers = _getHeaders(includeAuth: includeAuth);
         if (method != 'GET' && body != null) {
           headers['Content-Type'] = 'application/json';
         }
@@ -237,6 +260,20 @@ class RestHelper {
       return get(endpoint, queryParams: args);
     } else {
       return post(endpoint, body: args);
+    }
+  }
+
+  /// Calls a Frappe API method without auth headers.
+  Future<dynamic> callPublic(
+    String method, {
+    Map<String, dynamic>? args,
+    String httpMethod = 'POST',
+  }) async {
+    final endpoint = '/api/method/$method';
+    if (httpMethod.toUpperCase() == 'GET') {
+      return getPublic(endpoint, queryParams: args);
+    } else {
+      return postPublic(endpoint, body: args);
     }
   }
 
