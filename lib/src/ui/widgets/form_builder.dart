@@ -27,6 +27,36 @@ typedef OnButtonPressedCallback =
       useDefault,
     );
 
+/// Layout mode for form tab headers.
+enum FormTabHeaderLayout { tabBar, stepper }
+
+/// Visual style for stepper tab header mode.
+class FormStepHeaderStyle {
+  final Color activeColor;
+  final Color inactiveColor;
+  final Color inactiveTextColor;
+  final Color textColor;
+  final double dotSize;
+  final double lineHeight;
+  final double labelsTopGap;
+  final double edgePadding;
+  final TextStyle? numberTextStyle;
+  final TextStyle? labelTextStyle;
+
+  const FormStepHeaderStyle({
+    this.activeColor = const Color(0xFF2DD4BF),
+    this.inactiveColor = const Color(0xFFD1D5DB),
+    this.inactiveTextColor = const Color(0xFF6B7280),
+    this.textColor = const Color(0xFF111827),
+    this.dotSize = 34.0,
+    this.lineHeight = 2.0,
+    this.labelsTopGap = 10.0,
+    this.edgePadding = 8.0,
+    this.numberTextStyle,
+    this.labelTextStyle,
+  });
+}
+
 /// Customization options for form styling
 class FrappeFormStyle {
   /// Custom InputDecoration builder for text fields
@@ -56,6 +86,21 @@ class FrappeFormStyle {
   /// Max lines for tab titles before ellipsis (default: 2)
   final int? tabTitleMaxLines;
 
+  /// Header layout used when there are multiple tabs.
+  final FormTabHeaderLayout tabHeaderLayout;
+
+  /// Optional style when [tabHeaderLayout] is [FormTabHeaderLayout.stepper].
+  final FormStepHeaderStyle? stepHeaderStyle;
+
+  /// Whether to show labels above each field widget.
+  final bool showFieldLabel;
+
+  /// Whether to show field descriptions below each field widget.
+  final bool showFieldDescription;
+
+  /// Optional section card color.
+  final Color? sectionCardColor;
+
   const FrappeFormStyle({
     this.fieldDecoration,
     this.labelStyle,
@@ -66,6 +111,11 @@ class FrappeFormStyle {
     this.fieldPadding,
     this.sectionTitleMaxLines,
     this.tabTitleMaxLines,
+    this.tabHeaderLayout = FormTabHeaderLayout.tabBar,
+    this.stepHeaderStyle,
+    this.showFieldLabel = true,
+    this.showFieldDescription = true,
+    this.sectionCardColor,
   });
 }
 
@@ -185,6 +235,14 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
   final List<_FormTab> _tabs = [];
   final Map<String, int> _fieldTabIndex = {};
 
+  void _attachTabControllerListener() {
+    _tabController.addListener(() {
+      if (!mounted) return;
+      // Rebuild to keep custom stepper header in sync with active tab.
+      setState(() {});
+    });
+  }
+
   @override
   void initState() {
     super.initState();
@@ -227,6 +285,7 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
       length: _tabs.isEmpty ? 1 : _tabs.length,
       vsync: this,
     );
+    _attachTabControllerListener();
   }
 
   String _formatDurationPatchedValue(int seconds) {
@@ -575,10 +634,10 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
     if (widget.translate != null && decoration != null) {
       final labelText = widget.translate!(field.label ?? field.fieldname ?? '');
       decoration = decoration.copyWith(
-        labelText: labelText,
+        labelText: formStyle.showFieldLabel ? labelText : null,
         hintText: field.placeholder != null
             ? widget.translate!(field.placeholder!)
-            : decoration.hintText,
+            : (formStyle.showFieldLabel ? decoration.hintText : labelText),
         helperText: field.description != null
             ? widget.translate!(field.description!)
             : decoration.helperText,
@@ -589,6 +648,8 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
       descriptionStyle: formStyle.descriptionStyle,
       decoration: decoration,
       translate: widget.translate,
+      showLabel: formStyle.showFieldLabel,
+      showDescription: formStyle.showFieldDescription,
     );
 
     final effectiveReqd = _isFieldRequired(field);
@@ -795,6 +856,7 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
 
     return Card(
       margin: formStyle.sectionMargin ?? const EdgeInsets.only(bottom: 16.0),
+      color: formStyle.sectionCardColor,
       child: Padding(
         padding: formStyle.sectionPadding ?? const EdgeInsets.all(16.0),
         child: Column(
@@ -833,6 +895,160 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
             .map((section) => _buildSection(section))
             .toList(),
       ),
+    );
+  }
+
+  Widget _buildStepHeader(FrappeFormStyle formStyle) {
+    final stepStyle = formStyle.stepHeaderStyle ?? const FormStepHeaderStyle();
+    final currentStep = _tabController.index + 1;
+    final titles = _tabs
+        .map(
+          (tab) => widget.translate != null
+              ? widget.translate!(tab.tabField.displayLabel)
+              : tab.tabField.displayLabel,
+        )
+        .toList();
+
+    Widget buildDot(int step) {
+      final isCompleted = step < currentStep;
+      final isActive = step == currentStep;
+      final bg = isCompleted || isActive ? stepStyle.activeColor : Colors.white;
+      final border = isCompleted || isActive
+          ? stepStyle.activeColor
+          : stepStyle.inactiveColor;
+      final fg = isCompleted
+          ? Colors.white
+          : (isActive ? Colors.white : stepStyle.inactiveTextColor);
+
+      final numberStyle =
+          stepStyle.numberTextStyle ??
+          TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.w700,
+            height: 1.0,
+            color: fg,
+          );
+      final child = isCompleted
+          ? const Icon(Icons.check, size: 18, color: Colors.white)
+          : Text('$step', style: numberStyle);
+
+      return InkWell(
+        onTap: () => _tabController.animateTo(step - 1),
+        customBorder: const CircleBorder(),
+        child: Container(
+          width: stepStyle.dotSize,
+          height: stepStyle.dotSize,
+          decoration: BoxDecoration(
+            color: bg,
+            shape: BoxShape.circle,
+            border: Border.all(color: border, width: 2),
+          ),
+          child: Center(child: child),
+        ),
+      );
+    }
+
+    Widget buildLabel(String text, bool active, int step) {
+      final mergedStyle =
+          stepStyle.labelTextStyle?.copyWith(
+            fontWeight: active ? FontWeight.w700 : FontWeight.w500,
+            color: active ? stepStyle.textColor : stepStyle.inactiveTextColor,
+          ) ??
+          TextStyle(
+            fontSize: 12,
+            height: 1.2,
+            fontWeight: active ? FontWeight.w700 : FontWeight.w500,
+            color: active ? stepStyle.textColor : stepStyle.inactiveTextColor,
+          );
+      return InkWell(
+        onTap: () => _tabController.animateTo(step - 1),
+        child: Text(
+          text,
+          textAlign: TextAlign.center,
+          maxLines: formStyle.tabTitleMaxLines ?? 2,
+          overflow: TextOverflow.ellipsis,
+          style: mergedStyle,
+        ),
+      );
+    }
+
+    return SizedBox(
+      height: stepStyle.dotSize + stepStyle.labelsTopGap + 34.0,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final w = constraints.maxWidth - (stepStyle.edgePadding * 2);
+          final stepCount = titles.length;
+          final dx = stepCount <= 1
+              ? 0.0
+              : (w - stepStyle.dotSize) / (stepCount - 1);
+
+          double leftForStep(int step) =>
+              stepStyle.edgePadding + (step - 1) * dx;
+          double centerXForStep(int step) =>
+              leftForStep(step) + stepStyle.dotSize / 2;
+
+          Widget lineSegment(int fromStep, int toStep, bool active) {
+            final left = centerXForStep(fromStep);
+            final right = centerXForStep(toStep);
+            return Positioned(
+              left: left,
+              top: stepStyle.dotSize / 2 - stepStyle.lineHeight / 2,
+              width: (right - left),
+              height: stepStyle.lineHeight,
+              child: Container(
+                color: active ? stepStyle.activeColor : stepStyle.inactiveColor,
+              ),
+            );
+          }
+
+          Widget labelAt(int step, String text, bool active) {
+            return Positioned(
+              left: leftForStep(step) - 18,
+              top: stepStyle.dotSize + stepStyle.labelsTopGap,
+              width: stepStyle.dotSize + 36,
+              child: buildLabel(text, active, step),
+            );
+          }
+
+          return Stack(
+            clipBehavior: Clip.none,
+            children: [
+              for (var i = 1; i < stepCount; i++)
+                lineSegment(i, i + 1, currentStep > i),
+              for (var i = 1; i <= stepCount; i++)
+                Positioned(left: leftForStep(i), top: 0, child: buildDot(i)),
+              for (var i = 1; i <= stepCount; i++)
+                labelAt(i, titles[i - 1], currentStep == i),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildTabHeader(FrappeFormStyle formStyle) {
+    if (_tabs.length <= 1) return const SizedBox.shrink();
+    if (formStyle.tabHeaderLayout == FormTabHeaderLayout.stepper) {
+      return _buildStepHeader(formStyle);
+    }
+    return TabBar(
+      controller: _tabController,
+      isScrollable: true,
+      tabs: _tabs
+          .map(
+            (tab) => Tab(
+              child: Text(
+                widget.translate != null
+                    ? widget.translate!(tab.tabField.displayLabel)
+                    : tab.tabField.displayLabel,
+                maxLines: formStyle.tabTitleMaxLines ?? 2,
+                overflow: TextOverflow.ellipsis,
+                softWrap: true,
+                textAlign: TextAlign.center,
+              ),
+            ),
+          )
+          .toList(),
     );
   }
 
@@ -881,6 +1097,7 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
         length: _tabs.isEmpty ? 1 : _tabs.length,
         vsync: this,
       );
+      _attachTabControllerListener();
     }
   }
 
@@ -1030,26 +1247,7 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
                 ),
               ),
             ),
-          if (_tabs.length > 1)
-            TabBar(
-              controller: _tabController,
-              isScrollable: true,
-              tabs: _tabs
-                  .map(
-                    (tab) => Tab(
-                      child: Text(
-                        widget.translate != null
-                            ? widget.translate!(tab.tabField.displayLabel)
-                            : tab.tabField.displayLabel,
-                        maxLines: formStyle.tabTitleMaxLines ?? 2,
-                        overflow: TextOverflow.ellipsis,
-                        softWrap: true,
-                        textAlign: TextAlign.center,
-                      ),
-                    ),
-                  )
-                  .toList(),
-            ),
+          _buildTabHeader(formStyle),
           Expanded(
             child: _tabs.length > 1
                 ? TabBarView(

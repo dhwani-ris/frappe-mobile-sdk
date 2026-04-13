@@ -386,8 +386,9 @@ class MetaService {
   /// Throws if not authenticated or API call fails.
   Future<void> resyncMobileConfiguration() async {
     try {
-      // Call mobile_auth.configuration API on v2 endpoint with auth headers
-      final result = await _client.rest.get(
+      // Guest endpoint: call without auth headers to avoid invalid-token 401
+      // when a stale/expired token is still present in memory.
+      final result = await _client.rest.getPublic(
         '/api/v2/method/mobile_auth.configuration',
       );
 

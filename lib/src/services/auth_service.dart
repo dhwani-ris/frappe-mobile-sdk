@@ -522,18 +522,17 @@ class AuthService {
 
   /// Fetches enabled social providers from backend.
   ///
-  /// Expected backend response shape:
-  /// `{ "providers": [ {"id":"google","label":"Google","icon_url":"..."} ] }`
+  /// Accepts either a plain payload or Frappe's `/api/method` envelope:
+  /// `{ "message": { "providers": [ ... ] } }`.
   Future<List<Map<String, dynamic>>> fetchSocialLoginProviders() async {
     if (_client == null) {
       throw Exception('AuthService not initialized. Call initialize() first.');
     }
-    final result = await _client!.rest.call(
+    final result = await _client!.rest.callPublic(
       'mobile_auth.get_social_login_providers',
       httpMethod: 'GET',
     );
-    final data = result is Map<String, dynamic> ? result : <String, dynamic>{};
-    final providersRaw = data['providers'] as List<dynamic>? ?? const [];
+    final providersRaw = _listFromFrappeResponse(result, 'providers');
     return providersRaw
         .whereType<Map<String, dynamic>>()
         .map((e) => Map<String, dynamic>.from(e))
@@ -558,7 +557,7 @@ class AuthService {
     final pkce = OAuth2Helper.generatePkce();
     final resolvedState =
         state ?? DateTime.now().millisecondsSinceEpoch.toString();
-    final result = await _client!.rest.call(
+    final result = await _client!.rest.callPublic(
       'mobile_auth.get_social_authorize_url',
       args: {
         'provider': provider,
@@ -569,10 +568,9 @@ class AuthService {
         'code_challenge': pkce.codeChallenge,
         'code_challenge_method': 'S256',
       },
-      httpMethod: 'GET',
+      httpMethod: 'POST',
     );
-    final data = result is Map<String, dynamic> ? result : <String, dynamic>{};
-    final authorizeUrl = data['authorize_url']?.toString();
+    final authorizeUrl = _stringFromFrappeResponse(result, 'authorize_url');
     if (authorizeUrl == null || authorizeUrl.isEmpty) {
       throw Exception(
         'Backend did not return authorize_url for social provider "$provider".',
@@ -724,6 +722,32 @@ class AuthService {
       await _clearOAuthTokens();
       return false;
     }
+  }
+
+  /// Reads [key] as a [List] from Frappe `/api/method` JSON (top-level or `message`).
+  static List<dynamic> _listFromFrappeResponse(dynamic result, String key) {
+    final root = result is Map<String, dynamic> ? result : <String, dynamic>{};
+    final direct = root[key];
+    if (direct is List) return direct;
+    final msg = root['message'];
+    if (msg is Map<String, dynamic>) {
+      final nested = msg[key];
+      if (nested is List) return nested;
+    }
+    return const [];
+  }
+
+  /// Reads [key] as a non-empty string from Frappe `/api/method` JSON.
+  static String? _stringFromFrappeResponse(dynamic result, String key) {
+    final root = result is Map<String, dynamic> ? result : <String, dynamic>{};
+    final v = root[key]?.toString();
+    if (v != null && v.isNotEmpty) return v;
+    final msg = root['message'];
+    if (msg is Map<String, dynamic>) {
+      final v2 = msg[key]?.toString();
+      if (v2 != null && v2.isNotEmpty) return v2;
+    }
+    return null;
   }
 
   Future<void> _clearOAuthTokens() async {

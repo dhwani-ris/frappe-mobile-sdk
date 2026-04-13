@@ -1,40 +1,132 @@
 # Customization
 
-This file is the primary reference for customization.
+This guide explains how to keep default UI or switch to configurable layouts/colors/typography.
 
-## Form styling
+## What is configurable now
 
-The SDK exposes three predefined styles:
+- **Document list layout**: `DocumentListLayout.list` (current/default) or `DocumentListLayout.card`.
+- **Document list visual style**: card color, title/subtitle text styles, button styles, FAB colors.
+- **Form tab header layout**: classic `TabBar` (default) or stepper-style header.
+- **Form section style**: section card color, padding/margins, fonts, field spacing.
+- **Field label rendering**: show/hide external label and description.
+- **Form action buttons**: save/delete button styling through `FormScreenStyle`.
 
-- `DefaultFormStyle.standard` (Material 3 style)
-- `DefaultFormStyle.compact` (reduced spacing)
-- `DefaultFormStyle.material` (classic Material underline inputs)
+## Material style label behavior (duplicate label fix)
 
-You can also provide a fully custom `FrappeFormStyle`.
+`DefaultFormStyle.material` now avoids duplicate label rendering:
 
-Example (from README):
+- external field label is hidden
+- input uses hint text (placeholder/label fallback)
+
+Use as-is:
 
 ```dart
-// Use predefined styles
-DefaultFormStyle.standard;  // Standard Material 3 style
-DefaultFormStyle.compact;   // Compact style
-DefaultFormStyle.material;  // Material Design style
+FormScreen(
+  meta: meta,
+  repository: sdk.repository,
+  syncService: sdk.sync,
+  style: DefaultFormStyle.material,
+)
+```
 
-// Or create custom style
+If you create your own style, use:
+
+```dart
 FrappeFormStyle(
-  labelStyle: TextStyle(fontSize: 16),
-  sectionPadding: EdgeInsets.all(20),
-  fieldDecoration: (field) => InputDecoration(...),
+  showFieldLabel: false,
+  fieldDecoration: (field) => InputDecoration(
+    hintText: field.placeholder ?? field.label ?? field.fieldname,
+    border: const UnderlineInputBorder(),
+  ),
+)
+```
+
+## Keep current tab layout vs stepper layout
+
+Current behavior (default):
+
+```dart
+final style = DefaultFormStyle.standard; // tab bar layout
+```
+
+Stepper layout:
+
+```dart
+final style = FrappeFormStyle(
+  tabHeaderLayout: FormTabHeaderLayout.stepper,
+  stepHeaderStyle: const FormStepHeaderStyle(
+    activeColor: Color(0xFF2DD4BF),
+    inactiveColor: Color(0xFFD1D5DB),
+  ),
 );
 ```
 
+Pass that style to `FormScreen(style: style)` or `FrappeFormBuilder(style: style)`.
+
+## List page layout customization
+
+```dart
+DocumentListScreen(
+  doctype: doctype,
+  meta: meta,
+  repository: sdk.repository,
+  syncService: sdk.sync,
+  metaService: sdk.meta,
+  style: const DocumentListStyle(
+    layout: DocumentListLayout.card, // or .list to keep current
+    cardColor: Color(0xFFF8FAFC),
+    titleStyle: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+    subtitleStyle: TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
+    fabBackgroundColor: Color(0xFF0EA5E9),
+    fabForegroundColor: Colors.white,
+  ),
+)
+```
+
+## Form screen button colors/styles
+
+```dart
+FormScreen(
+  meta: meta,
+  repository: sdk.repository,
+  syncService: sdk.sync,
+  screenStyle: FormScreenStyle(
+    appBarBackgroundColor: const Color(0xFF111827),
+    saveButtonStyle: TextButton.styleFrom(
+      foregroundColor: const Color(0xFF2DD4BF),
+    ),
+    deleteIconColor: const Color(0xFFEF4444),
+  ),
+)
+```
+
+You can also pass the same form style through `DocumentListScreen`:
+
+```dart
+DocumentListScreen(
+  // ...
+  formStyle: DefaultFormStyle.material,
+  formScreenStyle: const FormScreenStyle(
+    deleteIconColor: Color(0xFFEF4444),
+  ),
+)
+```
+
+## Full form style options
+
+`FrappeFormStyle` supports:
+
+- `fieldDecoration`
+- `labelStyle`, `descriptionStyle`, `sectionTitleStyle`
+- `sectionMargin`, `sectionPadding`, `fieldPadding`
+- `sectionTitleMaxLines`, `tabTitleMaxLines`
+- `tabHeaderLayout`, `stepHeaderStyle`
+- `showFieldLabel`, `showFieldDescription`
+- `sectionCardColor`
+
 ## Extensibility points
 
-- **Custom field factory**: provide your own field widget mapping for specific field types/fieldnames.
-- **Custom field widgets**: use your own widget implementations for specialized UI needs.
-- **Login styling**: customize login UI with `LoginScreenStyle`.
-
-- `FrappeFormStyle` / `DefaultFormStyle`
-- custom field factory widgets
-- `LoginScreenStyle`
+- Custom field factory mapping for specific field types/field names.
+- Custom field widgets for special behavior.
+- Login screen styling with `LoginScreenStyle`.
 

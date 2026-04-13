@@ -69,9 +69,9 @@ class DefaultFormStyle {
     sectionMargin: const EdgeInsets.symmetric(vertical: 6, horizontal: 6),
     sectionPadding: const EdgeInsets.all(20),
     fieldPadding: const EdgeInsets.only(bottom: 20),
+    showFieldLabel: false,
     fieldDecoration: (field) => InputDecoration(
-      labelText: field.label ?? field.fieldname,
-      hintText: field.placeholder,
+      hintText: field.placeholder ?? field.label ?? field.fieldname,
       border: const UnderlineInputBorder(),
       enabledBorder: const UnderlineInputBorder(
         borderSide: BorderSide(color: Colors.grey),

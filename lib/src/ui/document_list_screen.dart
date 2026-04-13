@@ -12,7 +12,32 @@ import '../services/offline_repository.dart';
 import '../services/permission_service.dart';
 import '../services/sync_service.dart';
 import 'form_screen.dart';
-import 'widgets/form_builder.dart' show OnButtonPressedCallback;
+import 'widgets/form_builder.dart'
+    show FrappeFormStyle, OnButtonPressedCallback;
+
+/// Layout variants for [DocumentListScreen].
+enum DocumentListLayout { list, card }
+
+/// Visual customization for [DocumentListScreen].
+class DocumentListStyle {
+  final DocumentListLayout layout;
+  final Color? cardColor;
+  final TextStyle? titleStyle;
+  final TextStyle? subtitleStyle;
+  final ButtonStyle? primaryButtonStyle;
+  final Color? fabBackgroundColor;
+  final Color? fabForegroundColor;
+
+  const DocumentListStyle({
+    this.layout = DocumentListLayout.list,
+    this.cardColor,
+    this.titleStyle,
+    this.subtitleStyle,
+    this.primaryButtonStyle,
+    this.fabBackgroundColor,
+    this.fabForegroundColor,
+  });
+}
 
 /// SDK document list screen with search, sort, and pagination.
 /// Uses [DocTypeMeta.titleField], [DocTypeMeta.sortField], [DocTypeMeta.sortOrder]
@@ -50,6 +75,15 @@ class DocumentListScreen extends StatefulWidget {
   )?
   onFieldChange;
 
+  /// Optional customization for list UI (layout, colors, typography, button style).
+  final DocumentListStyle? style;
+
+  /// Optional form style passed to opened [FormScreen].
+  final FrappeFormStyle? formStyle;
+
+  /// Optional form screen style passed to opened [FormScreen].
+  final FormScreenStyle? formScreenStyle;
+
   const DocumentListScreen({
     super.key,
     required this.doctype,
@@ -66,6 +100,9 @@ class DocumentListScreen extends StatefulWidget {
     this.translate,
     this.onButtonPressed,
     this.onFieldChange,
+    this.style,
+    this.formStyle,
+    this.formScreenStyle,
   });
 
   @override
@@ -223,6 +260,7 @@ class _DocumentListScreenState extends State<DocumentListScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final listStyle = widget.style ?? const DocumentListStyle();
     return Scaffold(
       appBar: AppBar(
         title: Text(
@@ -331,6 +369,8 @@ class _DocumentListScreenState extends State<DocumentListScreen> {
       floatingActionButton: _canCreate
           ? FloatingActionButton(
               onPressed: () => _openForm(null),
+              backgroundColor: listStyle.fabBackgroundColor,
+              foregroundColor: listStyle.fabForegroundColor,
               child: const Icon(Icons.add),
             )
           : null,
@@ -338,6 +378,7 @@ class _DocumentListScreenState extends State<DocumentListScreen> {
   }
 
   Widget _buildEmptyState() {
+    final listStyle = widget.style ?? const DocumentListStyle();
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
@@ -354,6 +395,7 @@ class _DocumentListScreenState extends State<DocumentListScreen> {
           const SizedBox(height: 16),
           ElevatedButton.icon(
             onPressed: _pullDocuments,
+            style: listStyle.primaryButtonStyle,
             icon: const Icon(Icons.refresh),
             label: const Text('Refresh from Server'),
           ),
@@ -361,6 +403,7 @@ class _DocumentListScreenState extends State<DocumentListScreen> {
             const SizedBox(height: 16),
             ElevatedButton.icon(
               onPressed: () => _openForm(null),
+              style: listStyle.primaryButtonStyle,
               icon: const Icon(Icons.add),
               label: const Text('Create New'),
             ),
@@ -371,6 +414,7 @@ class _DocumentListScreenState extends State<DocumentListScreen> {
   }
 
   Widget _buildList() {
+    final listStyle = widget.style ?? const DocumentListStyle();
     final full = _filteredAndSortedDocs();
     final total = full.length;
     final start = _page * _pageSize;
@@ -401,34 +445,51 @@ class _DocumentListScreenState extends State<DocumentListScreen> {
                   statusValue.isNotEmpty &&
                   statusValue != 'null';
 
-              return ListTile(
-                title: Text(titleText),
-                subtitle: Text(idText),
-                trailing: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (showStatus)
-                      Padding(
-                        padding: const EdgeInsets.only(right: 8),
-                        child: Chip(
-                          label: Text(
-                            statusValue,
-                            style: Theme.of(context).textTheme.labelSmall,
-                          ),
-                          padding: EdgeInsets.zero,
-                          materialTapTargetSize:
-                              MaterialTapTargetSize.shrinkWrap,
+              final trailing = Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (showStatus)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: Chip(
+                        label: Text(
+                          statusValue,
+                          style: Theme.of(context).textTheme.labelSmall,
                         ),
+                        padding: EdgeInsets.zero,
+                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                       ),
-                    if (doc.status == 'dirty')
-                      const Icon(
-                        Icons.cloud_upload,
-                        color: Colors.orange,
-                        size: 20,
-                      ),
-                    const Icon(Icons.chevron_right),
-                  ],
-                ),
+                    ),
+                  if (doc.status == 'dirty')
+                    const Icon(
+                      Icons.cloud_upload,
+                      color: Colors.orange,
+                      size: 20,
+                    ),
+                  const Icon(Icons.chevron_right),
+                ],
+              );
+
+              if (listStyle.layout == DocumentListLayout.card) {
+                return Card(
+                  color: listStyle.cardColor,
+                  margin: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 4,
+                  ),
+                  child: ListTile(
+                    title: Text(titleText, style: listStyle.titleStyle),
+                    subtitle: Text(idText, style: listStyle.subtitleStyle),
+                    trailing: trailing,
+                    onTap: () => _openForm(doc),
+                  ),
+                );
+              }
+
+              return ListTile(
+                title: Text(titleText, style: listStyle.titleStyle),
+                subtitle: Text(idText, style: listStyle.subtitleStyle),
+                trailing: trailing,
                 onTap: () => _openForm(doc),
               );
             },
@@ -511,6 +572,8 @@ class _DocumentListScreenState extends State<DocumentListScreen> {
           getMobileUuid: widget.getMobileUuid,
           onButtonPressed: widget.onButtonPressed,
           onFieldChange: widget.onFieldChange,
+          style: widget.formStyle,
+          screenStyle: widget.formScreenStyle,
           // Permissions
           readOnly: !isNew && !_canWrite,
           canSave: isNew ? _canCreate : _canWrite,
