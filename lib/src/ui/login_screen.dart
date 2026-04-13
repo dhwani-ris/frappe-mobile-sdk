@@ -81,8 +81,10 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _isLoading = false;
   String? _errorMessage;
   String? _oauthCodeVerifier;
+  String? _oauthState;
   String? _otpTmpId;
   bool _otpSent = false;
+  List<SocialProviderConfig> _socialProviders = const [];
 
   /// When true, mobile OTP section is expanded. When password login is disabled, starts true.
   bool _mobileSectionExpanded = false;
@@ -99,6 +101,7 @@ class _LoginScreenState extends State<LoginScreen> {
       widget.appConfig?.enablePasswordLogin ?? true;
 
   bool get _enableOAuth => widget.appConfig?.enableOAuth ?? false;
+  bool get _enableSocialLogin => widget.appConfig?.enableSocialLogin ?? false;
 
   bool get _enableMobileLogin => widget.appConfig?.enableMobileLogin ?? false;
 
@@ -108,6 +111,9 @@ class _LoginScreenState extends State<LoginScreen> {
   String? get _oauthClientId => widget.appConfig?.oauthClientId;
 
   String? get _oauthClientSecret => widget.appConfig?.oauthClientSecret;
+
+  bool get _autoDiscoverSocialProviders =>
+      widget.appConfig?.loginConfig?.autoDiscoverSocialProviders ?? true;
 
   @override
   void initState() {
@@ -123,7 +129,11 @@ class _LoginScreenState extends State<LoginScreen> {
     }
     // When password login is disabled, show mobile OTP section expanded by default
     _mobileSectionExpanded = !_enablePasswordLogin;
+    _socialProviders = List<SocialProviderConfig>.from(
+      widget.appConfig?.loginConfig?.socialProviders ?? const [],
+    );
     _checkInitialUri();
+    _loadSocialProviders();
     if (widget.autoLogin &&
         widget.initialUsername != null &&
         widget.initialUsername!.trim().isNotEmpty &&
@@ -132,6 +142,26 @@ class _LoginScreenState extends State<LoginScreen> {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) _handleLogin();
       });
+    }
+  }
+
+  Future<void> _loadSocialProviders() async {
+    if (!_enableSocialLogin || !_autoDiscoverSocialProviders) return;
+    final baseUrl = _baseUrl;
+    if (baseUrl.isEmpty) return;
+    try {
+      if (widget.authService.client == null) {
+        widget.authService.initialize(baseUrl, database: widget.database);
+      }
+      final providers = await widget.authService.fetchSocialLoginProviders();
+      final parsed = providers
+          .map(SocialProviderConfig.fromJson)
+          .where((e) => e.id.trim().isNotEmpty)
+          .toList();
+      if (!mounted || parsed.isEmpty) return;
+      setState(() => _socialProviders = parsed);
+    } catch (_) {
+      // Keep configured providers as fallback.
     }
   }
 
@@ -161,6 +191,18 @@ class _LoginScreenState extends State<LoginScreen> {
       return;
     }
     final code = uri.queryParameters['code'];
+    final incomingState = uri.queryParameters['state'];
+    if (_oauthState != null &&
+        incomingState != null &&
+        incomingState != _oauthState) {
+      if (mounted) {
+        setState(() {
+          _errorMessage = 'OAuth state mismatch. Please try again.';
+          _isLoading = false;
+        });
+      }
+      return;
+    }
     if (code == null || code.isEmpty || _oauthCodeVerifier == null) return;
     final clientId = _oauthClientId;
     if (clientId == null || clientId.isEmpty) return;
@@ -224,9 +266,11 @@ class _LoginScreenState extends State<LoginScreen> {
         baseUrl: baseUrl,
         clientId: clientId,
         redirectUri: oauthRedirectUri,
+        state: DateTime.now().millisecondsSinceEpoch.toString(),
       );
       final authorizeUrl = map['authorize_url']!;
       _oauthCodeVerifier = map['code_verifier'];
+      _oauthState = map['state'];
       _listenForOAuthRedirect();
       setState(() {
         _isLoading = true;
@@ -245,6 +289,54 @@ class _LoginScreenState extends State<LoginScreen> {
         _cancelOAuthListener();
       }
       if (!mounted) return;
+    } catch (e) {
+      _cancelOAuthListener();
+      setState(() {
+        _errorMessage = e.toString().replaceAll('Exception: ', '');
+        _isLoading = false;
+      });
+    }
+  }
+
+  Future<void> _startSocialOAuth(SocialProviderConfig provider) async {
+    final baseUrl = _baseUrl;
+    final clientId = _oauthClientId;
+    if (baseUrl.isEmpty || clientId == null || clientId.isEmpty) {
+      setState(() {
+        _errorMessage =
+            'OAuth is required for social login. Set oauth_client_id in config.';
+      });
+      return;
+    }
+    if (widget.authService.client == null) {
+      widget.authService.initialize(baseUrl, database: widget.database);
+    }
+    try {
+      final map = await widget.authService.prepareSocialOAuthLogin(
+        provider: provider.id,
+        clientId: clientId,
+        redirectUri: oauthRedirectUri,
+      );
+      final authorizeUrl = map['authorize_url']!;
+      _oauthCodeVerifier = map['code_verifier'];
+      _oauthState = map['state'];
+      _listenForOAuthRedirect();
+      setState(() {
+        _isLoading = true;
+        _errorMessage = null;
+      });
+      final uri = Uri.parse(authorizeUrl);
+      final canLaunch = await canLaunchUrl(uri);
+      if (canLaunch) {
+        await launchUrl(uri, mode: LaunchMode.externalApplication);
+      } else {
+        setState(() {
+          _errorMessage =
+              'Cannot open browser. Add https intent to AndroidManifest queries.';
+          _isLoading = false;
+        });
+        _cancelOAuthListener();
+      }
     } catch (e) {
       _cancelOAuthListener();
       setState(() {
@@ -360,6 +452,7 @@ class _LoginScreenState extends State<LoginScreen> {
     final hasAnyLogin =
         _enablePasswordLogin ||
         _enableOAuth ||
+        _enableSocialLogin ||
         (_enableMobileLogin && _hasMobileOtpCallbacks);
     if (!hasAnyLogin) {
       return Scaffold(
@@ -632,6 +725,35 @@ class _LoginScreenState extends State<LoginScreen> {
                       label: const Text('Login with OAuth'),
                     ),
                   ),
+                if (_enableSocialLogin && _socialProviders.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  ..._socialProviders.map((provider) {
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: SizedBox(
+                        width: double.infinity,
+                        child: OutlinedButton.icon(
+                          onPressed: _isLoading
+                              ? null
+                              : () => _startSocialOAuth(provider),
+                          style: style?.socialButtonStyle,
+                          icon:
+                              provider.iconUrl != null &&
+                                  provider.iconUrl!.trim().isNotEmpty
+                              ? Image.network(
+                                  provider.iconUrl!,
+                                  width: 18,
+                                  height: 18,
+                                  errorBuilder: (_, error, stackTrace) =>
+                                      const Icon(Icons.public),
+                                )
+                              : const Icon(Icons.public),
+                          label: Text('Continue with ${provider.label}'),
+                        ),
+                      ),
+                    );
+                  }),
+                ],
                 if (_errorMessage != null) ...[
                   const SizedBox(height: 16),
                   Container(

@@ -16,6 +16,62 @@ HomeScreenLayout _homeLayoutFromConfig(String value) {
   }
 }
 
+DocumentListLayout _documentListLayoutFromConfig(String value) {
+  switch (value.toLowerCase().trim()) {
+    case 'card':
+    case 'cards':
+    case 'card view':
+      return DocumentListLayout.card;
+    case 'list':
+    case 'list view':
+    default:
+      return DocumentListLayout.list;
+  }
+}
+
+FormTabHeaderLayout _formTabHeaderLayoutFromConfig(String value) {
+  switch (value.toLowerCase().trim()) {
+    case 'stepper':
+    case 'step':
+    case 'steps':
+      return FormTabHeaderLayout.stepper;
+    case 'tabbar':
+    case 'tabs':
+    default:
+      return FormTabHeaderLayout.tabBar;
+  }
+}
+
+FrappeFormStyle _formStyleFromConfig() {
+  final preset = config.AppConstants.formStylePreset.toLowerCase().trim();
+  final tabHeaderLayout = _formTabHeaderLayoutFromConfig(
+    config.AppConstants.formTabHeaderLayout,
+  );
+
+  final baseStyle = switch (preset) {
+    'compact' => DefaultFormStyle.compact,
+    'material' => DefaultFormStyle.material,
+    _ => DefaultFormStyle.standard,
+  };
+
+  return FrappeFormStyle(
+    fieldDecoration: baseStyle.fieldDecoration,
+    labelStyle: baseStyle.labelStyle,
+    descriptionStyle: baseStyle.descriptionStyle,
+    sectionTitleStyle: baseStyle.sectionTitleStyle,
+    sectionMargin: baseStyle.sectionMargin,
+    sectionPadding: baseStyle.sectionPadding,
+    fieldPadding: baseStyle.fieldPadding,
+    sectionTitleMaxLines: baseStyle.sectionTitleMaxLines,
+    tabTitleMaxLines: baseStyle.tabTitleMaxLines,
+    showFieldLabel: baseStyle.showFieldLabel,
+    showFieldDescription: baseStyle.showFieldDescription,
+    sectionCardColor: baseStyle.sectionCardColor,
+    stepHeaderStyle: baseStyle.stepHeaderStyle,
+    tabHeaderLayout: tabHeaderLayout,
+  );
+}
+
 class _HomeDoctypeData {
   final List<String> doctypes;
   final Map<String, List<String>> groups;
@@ -71,6 +127,13 @@ class _HomeScreenState extends State<HomeScreen> {
   final HomeScreenLayout _homeScreenLayout = _homeLayoutFromConfig(
     config.AppConstants.homeScreenLayout,
   );
+  final DocumentListStyle _documentListStyle = DocumentListStyle(
+    layout: _documentListLayoutFromConfig(
+      config.AppConstants.documentListLayout,
+    ),
+  );
+  final FrappeFormStyle _formStyle = _formStyleFromConfig();
+  final FormScreenStyle _formScreenStyle = const FormScreenStyle();
   bool _isInitialized = false;
   bool _isAuthenticated = false;
   String? _errorMessage;
@@ -100,6 +163,8 @@ class _HomeScreenState extends State<HomeScreen> {
           enableMobileLogin: true,
           enablePasswordLogin: true,
           enableOAuth: true,
+          enableSocialLogin: true,
+          autoDiscoverSocialProviders: true,
           oauthClientId: config.AppConstants.oauthClientId,
           oauthClientSecret: config.AppConstants.oauthClientSecret,
         ),
@@ -466,6 +531,9 @@ class _HomeScreenState extends State<HomeScreen> {
                         translate: _translationService != null
                             ? (s) => _translationService!.translate(s)
                             : null,
+                        style: _documentListStyle,
+                        formStyle: _formStyle,
+                        formScreenStyle: _formScreenStyle,
                       ),
                     ),
                   );
@@ -518,7 +586,8 @@ class _HomeScreenState extends State<HomeScreen> {
                         onSaveSuccess: () => Navigator.pop(ctx),
                         getMobileUuid: () =>
                             _authService!.getOrCreateMobileUuid(),
-                        // style: DefaultFormStyle.material,
+                        style: _formStyle,
+                        screenStyle: _formScreenStyle,
                       ),
                     ),
                   );

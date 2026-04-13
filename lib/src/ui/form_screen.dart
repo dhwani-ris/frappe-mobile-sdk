@@ -16,6 +16,19 @@ import 'sync_status_screen.dart';
 import 'widgets/form_builder.dart'
     show FrappeFormBuilder, FrappeFormStyle, OnButtonPressedCallback;
 
+/// Visual customization for [FormScreen] action area.
+class FormScreenStyle {
+  final Color? appBarBackgroundColor;
+  final ButtonStyle? saveButtonStyle;
+  final Color? deleteIconColor;
+
+  const FormScreenStyle({
+    this.appBarBackgroundColor,
+    this.saveButtonStyle,
+    this.deleteIconColor,
+  });
+}
+
 /// Screen for displaying and editing a Frappe document form.
 /// When [api] is set, CRUD is done directly on the server then local repo is updated.
 class FormScreen extends StatefulWidget {
@@ -65,6 +78,9 @@ class FormScreen extends StatefulWidget {
   /// When true (default), use LinkFieldCoordinator for sequenced link option loading.
   final bool useLinkFieldCoordinator;
 
+  /// Optional visual customization for AppBar/action buttons.
+  final FormScreenStyle? screenStyle;
+
   const FormScreen({
     super.key,
     required this.meta,
@@ -85,6 +101,7 @@ class FormScreen extends StatefulWidget {
     this.onButtonPressed,
     this.onFieldChange,
     this.useLinkFieldCoordinator = true,
+    this.screenStyle,
   });
 
   @override
@@ -764,6 +781,7 @@ class _FormScreenState extends State<FormScreen> {
 
     return Scaffold(
       appBar: AppBar(
+        backgroundColor: widget.screenStyle?.appBarBackgroundColor,
         title: Text(
           widget.translate != null
               ? widget.translate!(widget.meta.label ?? widget.meta.name)
@@ -773,6 +791,7 @@ class _FormScreenState extends State<FormScreen> {
           if (showSave)
             TextButton.icon(
               key: const Key('form_save_button'),
+              style: widget.screenStyle?.saveButtonStyle,
               onPressed: _isSaving ? null : () => _triggerSubmit?.call(),
               icon: _isSaving
                   ? const SizedBox(
@@ -785,7 +804,10 @@ class _FormScreenState extends State<FormScreen> {
             ),
           if (allowDelete)
             IconButton(
-              icon: const Icon(Icons.delete),
+              icon: Icon(
+                Icons.delete,
+                color: widget.screenStyle?.deleteIconColor,
+              ),
               onPressed: _isSaving ? null : _handleDelete,
               tooltip: 'Delete',
             ),

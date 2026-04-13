@@ -1,7 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:frappe_mobile_sdk/frappe_mobile_sdk.dart';
-import 'package:frappe_mobile_sdk/src/database/app_database.dart';
-import 'package:frappe_mobile_sdk/src/sdk/frappe_sdk.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 void main() {

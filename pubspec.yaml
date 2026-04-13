@@ -1,5 +1,5 @@
 name: frappe_mobile_sdk
-description: A Flutter SDK for building mobile applications powered by the Frappe Framework. Handles authentication, API communication, form rendering, and connectivity-aware data operations for field deployments.
+description: Flutter SDK for offline-first Frappe/ERPNext mobile apps with auth, API access, dynamic forms, and sync-aware local data operations.
 version: 1.0.0
 homepage: https://github.com/dhwani-ris/frappe-mobile-sdk
 repository: https://github.com/dhwani-ris/frappe-mobile-sdk
@@ -29,19 +29,19 @@ dependencies:
   provider: ^6.1.1
 
   # Form building
-  flutter_form_builder: ^9.1.1
+  flutter_form_builder: ^10.3.0+2
 
   # Date formatting
-  intl: ^0.19.0
+  intl: ^0.20.2
 
   # Connectivity check
-  connectivity_plus: ^6.0.5
+  connectivity_plus: ^7.1.1
 
   # Path provider for database location
   path_provider: ^2.1.2
 
   # Secure storage for tokens
-  flutter_secure_storage: ^9.0.0
+  flutter_secure_storage: ^10.0.0
 
   # OAuth PKCE
   crypto: ^3.0.3
@@ -59,13 +59,13 @@ dependencies:
   uuid: ^4.3.3
 
   # File picker for attachments
-  file_picker: ^8.0.0+1
+  file_picker: ^11.0.2
 
   # Image picker for image fields
   image_picker: ^1.1.2
 
   # HTML rendering for HTML field type
-  flutter_widget_from_html: ^0.15.0
+  flutter_widget_from_html: ^0.17.2
 
   # GPS location for Geolocation field type
   geolocator: ^13.0.2

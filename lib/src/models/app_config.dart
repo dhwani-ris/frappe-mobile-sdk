@@ -1,4 +1,30 @@
 /// Login method configuration (password, OAuth, social, mobile OTP).
+class SocialProviderConfig {
+  final String id;
+  final String label;
+  final String? iconUrl;
+
+  const SocialProviderConfig({
+    required this.id,
+    required this.label,
+    this.iconUrl,
+  });
+
+  factory SocialProviderConfig.fromJson(Map<String, dynamic> json) {
+    return SocialProviderConfig(
+      id: (json['id'] ?? json['provider'] ?? '').toString(),
+      label: (json['label'] ?? json['name'] ?? json['provider'] ?? '')
+          .toString(),
+      iconUrl: (json['iconUrl'] ?? json['icon'] ?? json['icon_url'])
+          ?.toString(),
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {'id': id, 'label': label, if (iconUrl != null) 'iconUrl': iconUrl};
+  }
+}
+
 class LoginConfig {
   final bool enablePasswordLogin;
   final bool enableOAuth;
@@ -8,6 +34,8 @@ class LoginConfig {
   final bool enableMobileLogin;
   final String? oauthClientId;
   final String? oauthClientSecret;
+  final List<SocialProviderConfig> socialProviders;
+  final bool autoDiscoverSocialProviders;
 
   const LoginConfig({
     this.enablePasswordLogin = true,
@@ -16,6 +44,8 @@ class LoginConfig {
     this.enableMobileLogin = false,
     this.oauthClientId,
     this.oauthClientSecret,
+    this.socialProviders = const [],
+    this.autoDiscoverSocialProviders = true,
   });
 
   factory LoginConfig.fromJson(Map<String, dynamic> json) {
@@ -26,6 +56,12 @@ class LoginConfig {
       enableMobileLogin: json['enableMobileLogin'] as bool? ?? false,
       oauthClientId: json['oauthClientId'] as String?,
       oauthClientSecret: json['oauthClientSecret'] as String?,
+      socialProviders: (json['socialProviders'] as List<dynamic>? ?? const [])
+          .whereType<Map<String, dynamic>>()
+          .map(SocialProviderConfig.fromJson)
+          .toList(),
+      autoDiscoverSocialProviders:
+          json['autoDiscoverSocialProviders'] as bool? ?? true,
     );
   }
 
@@ -37,6 +73,8 @@ class LoginConfig {
       'enableMobileLogin': enableMobileLogin,
       if (oauthClientId != null) 'oauthClientId': oauthClientId,
       if (oauthClientSecret != null) 'oauthClientSecret': oauthClientSecret,
+      'socialProviders': socialProviders.map((e) => e.toJson()).toList(),
+      'autoDiscoverSocialProviders': autoDiscoverSocialProviders,
     };
   }
 }
@@ -76,6 +114,10 @@ class AppConfig {
     final login = json['login_config'] ?? json['loginConfig'];
     LoginConfig? loginConfig;
     if (login is Map<String, dynamic>) {
+      final socialProvidersJson =
+          (login['social_providers'] ?? login['socialProviders'])
+              as List<dynamic>? ??
+          const <dynamic>[];
       loginConfig = LoginConfig(
         enablePasswordLogin:
             login['enable_password_login'] as bool? ??
@@ -99,6 +141,14 @@ class AppConfig {
         oauthClientSecret:
             login['oauth_client_secret'] as String? ??
             login['oauthClientSecret'] as String?,
+        socialProviders: socialProvidersJson
+            .whereType<Map<String, dynamic>>()
+            .map(SocialProviderConfig.fromJson)
+            .toList(),
+        autoDiscoverSocialProviders:
+            login['auto_discover_social_providers'] as bool? ??
+            login['autoDiscoverSocialProviders'] as bool? ??
+            true,
       );
     }
     return AppConfig(

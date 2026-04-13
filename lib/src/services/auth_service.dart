@@ -1,3 +1,5 @@
+import 'dart:developer' as dev;
+
 import '../api/client.dart';
 import '../api/oauth2_helper.dart';
 import '../database/app_database.dart';
@@ -136,6 +138,8 @@ class AuthService {
       if (user == null || user.isEmpty) {
         throw Exception('Login response missing user');
       }
+      dev.log('access_token: $accessToken', name: 'Auth');
+
       await _processLoginResponse(
         response,
         accessToken,
@@ -204,6 +208,8 @@ class AuthService {
       if (user == null || user.isEmpty) {
         throw Exception('Verify OTP response missing user');
       }
+      dev.log('access_token: $accessToken', name: 'Auth');
+
       final rolesJson = response['roles'] as List<dynamic>?;
       _roles =
           rolesJson
@@ -460,6 +466,10 @@ class AuthService {
         codeVerifier: codeVerifier,
         clientSecret: clientSecret,
       );
+      dev.log(
+        'loginWithOAuth success: access_token length=${tokens.accessToken.length}, refresh_token=${tokens.refreshToken != null ? "set" : "null"}, expires_in=${tokens.expiresIn}',
+        name: 'Auth',
+      );
       final accessToken = tokens.accessToken.trim();
       if (accessToken.isEmpty) {
         throw Exception('OAuth returned empty access token');
@@ -493,15 +503,84 @@ class AuthService {
     String? state,
   }) async {
     final pkce = OAuth2Helper.generatePkce();
+    final resolvedState =
+        state ?? DateTime.now().millisecondsSinceEpoch.toString();
     final url = OAuth2Helper.getAuthorizeUrl(
       baseUrl: baseUrl,
       clientId: clientId,
       redirectUri: redirectUri,
       scope: scope,
-      state: state ?? DateTime.now().millisecondsSinceEpoch.toString(),
+      state: resolvedState,
       codeChallenge: pkce.codeChallenge,
     );
-    return {'authorize_url': url, 'code_verifier': pkce.codeVerifier};
+    return {
+      'authorize_url': url,
+      'code_verifier': pkce.codeVerifier,
+      'state': resolvedState,
+    };
+  }
+
+  /// Fetches enabled social providers from backend.
+  ///
+  /// Accepts either a plain payload or Frappe's `/api/method` envelope:
+  /// `{ "message": { "providers": [ ... ] } }`.
+  Future<List<Map<String, dynamic>>> fetchSocialLoginProviders() async {
+    if (_client == null) {
+      throw Exception('AuthService not initialized. Call initialize() first.');
+    }
+    final result = await _client!.rest.callPublic(
+      'mobile_auth.get_social_login_providers',
+      httpMethod: 'GET',
+    );
+    final providersRaw = _listFromFrappeResponse(result, 'providers');
+    return providersRaw
+        .whereType<Map<String, dynamic>>()
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList();
+  }
+
+  /// Builds a provider-direct authorize URL using backend Social Login Key metadata.
+  ///
+  /// Backend should return:
+  /// `{ "authorize_url": "..." }`
+  /// and optionally can return provider metadata as passthrough.
+  Future<Map<String, String>> prepareSocialOAuthLogin({
+    required String provider,
+    required String clientId,
+    required String redirectUri,
+    String scope = 'openid all',
+    String? state,
+  }) async {
+    if (_client == null) {
+      throw Exception('AuthService not initialized. Call initialize() first.');
+    }
+    final pkce = OAuth2Helper.generatePkce();
+    final resolvedState =
+        state ?? DateTime.now().millisecondsSinceEpoch.toString();
+    final result = await _client!.rest.callPublic(
+      'mobile_auth.get_social_authorize_url',
+      args: {
+        'provider': provider,
+        'client_id': clientId,
+        'redirect_uri': redirectUri,
+        'scope': scope,
+        'state': resolvedState,
+        'code_challenge': pkce.codeChallenge,
+        'code_challenge_method': 'S256',
+      },
+      httpMethod: 'POST',
+    );
+    final authorizeUrl = _stringFromFrappeResponse(result, 'authorize_url');
+    if (authorizeUrl == null || authorizeUrl.isEmpty) {
+      throw Exception(
+        'Backend did not return authorize_url for social provider "$provider".',
+      );
+    }
+    return {
+      'authorize_url': authorizeUrl,
+      'code_verifier': pkce.codeVerifier,
+      'state': resolvedState,
+    };
   }
 
   /// Logs out and clears stored credentials.
@@ -643,6 +722,32 @@ class AuthService {
       await _clearOAuthTokens();
       return false;
     }
+  }
+
+  /// Reads [key] as a [List] from Frappe `/api/method` JSON (top-level or `message`).
+  static List<dynamic> _listFromFrappeResponse(dynamic result, String key) {
+    final root = result is Map<String, dynamic> ? result : <String, dynamic>{};
+    final direct = root[key];
+    if (direct is List) return direct;
+    final msg = root['message'];
+    if (msg is Map<String, dynamic>) {
+      final nested = msg[key];
+      if (nested is List) return nested;
+    }
+    return const [];
+  }
+
+  /// Reads [key] as a non-empty string from Frappe `/api/method` JSON.
+  static String? _stringFromFrappeResponse(dynamic result, String key) {
+    final root = result is Map<String, dynamic> ? result : <String, dynamic>{};
+    final v = root[key]?.toString();
+    if (v != null && v.isNotEmpty) return v;
+    final msg = root['message'];
+    if (msg is Map<String, dynamic>) {
+      final v2 = msg[key]?.toString();
+      if (v2 != null && v2.isNotEmpty) return v2;
+    }
+    return null;
   }
 
   Future<void> _clearOAuthTokens() async {
