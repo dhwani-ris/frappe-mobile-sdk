@@ -402,11 +402,15 @@ class _FormScreenState extends State<FormScreen> {
   }
 
   Future<void> _handleSubmit(Map<String, dynamic> formData) async {
-    // Normalize multi-select: Frappe expects comma-separated string
+    // Normalize multi-select: Frappe expects comma-separated string for plain
+    // multi-select fields, but Table / Table MultiSelect fields must remain as
+    // List<Map> so Frappe can create child-table rows.
     final payload = Map<String, dynamic>.from(formData);
     for (final f in widget.meta.fields) {
       final name = f.fieldname;
       if (f.allowMultiple && name != null && payload[name] is List) {
+        final ft = f.fieldtype;
+        if (ft == 'Table' || ft == 'Table MultiSelect') continue;
         payload[name] = (payload[name] as List)
             .map((e) => e.toString())
             .join(',');

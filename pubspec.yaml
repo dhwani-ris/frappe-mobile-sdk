@@ -67,6 +67,9 @@ dependencies:
   # HTML rendering for HTML field type
   flutter_widget_from_html: ^0.17.2
 
+  # GPS location for Geolocation field type
+  geolocator: ^13.0.2
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

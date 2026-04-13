@@ -48,6 +48,30 @@ class DependsOnEvaluator {
         return values.contains(actual.toString());
       }
 
+      // Handle === comparison (JS strict equality — semantically same as == in Dart).
+      // Must be checked BEFORE == since === contains == as a substring.
+      if (expr.contains(' === ')) {
+        final parts = expr.split(' === ');
+        if (parts.length == 2) {
+          final fieldName = _extractFieldName(parts[0]);
+          final expectedValue = _extractValue(parts[1]);
+          final actualValue = formData[fieldName];
+          return _compareValues(actualValue, expectedValue, '==');
+        }
+      }
+
+      // Handle !== comparison (JS strict inequality — semantically same as != in Dart).
+      // Must be checked BEFORE != since !== contains != as a substring.
+      if (expr.contains(' !== ')) {
+        final parts = expr.split(' !== ');
+        if (parts.length == 2) {
+          final fieldName = _extractFieldName(parts[0]);
+          final expectedValue = _extractValue(parts[1]);
+          final actualValue = formData[fieldName];
+          return _compareValues(actualValue, expectedValue, '!=');
+        }
+      }
+
       // Handle == comparison
       if (expr.contains(' == ')) {
         final parts = expr.split(' == ');
@@ -201,9 +225,13 @@ class DependsOnEvaluator {
   ) {
     switch (operator) {
       case '==':
-        return actual == expected;
+        if (actual == expected) return true;
+        // Fallback: compare as strings to handle type mismatches
+        // (e.g. int 1 vs String "1" from Frappe form data)
+        return actual?.toString() == expected?.toString();
       case '!=':
-        return actual != expected;
+        if (actual == expected) return false;
+        return actual?.toString() != expected?.toString();
       case '>':
         if (actual is num && expected is num) {
           return actual > expected;
