@@ -29,4 +29,5 @@ class FieldTypes {
   static const String image = 'Image';
   static const String fold = 'Fold';
   static const String heading = 'Heading';
+  static const String geolocation = 'Geolocation';
 }

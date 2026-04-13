@@ -227,6 +227,26 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
       length: _tabs.isEmpty ? 1 : _tabs.length,
       vsync: this,
     );
+
+    _triggerFetchFromForPrefilledLinks();
+  }
+
+  /// Trigger fetch_from for Link fields that already have values in _formData
+  /// so dependent fields (e.g. patient_name from patient) get populated.
+  /// Called from both initState and didUpdateWidget.
+  void _triggerFetchFromForPrefilledLinks() {
+    if (widget.fetchLinkedDocument == null) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      for (final field in widget.meta.fields) {
+        if (field.fieldtype == 'Link' && field.fieldname != null) {
+          final val = _formData[field.fieldname];
+          if (val != null && val.toString().trim().isNotEmpty) {
+            _handleFetchFrom(field.fieldname!, val);
+          }
+        }
+      }
+    });
   }
 
   String _formatDurationPatchedValue(int seconds) {
@@ -703,6 +723,8 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
             );
             if (patches != null && patches.isNotEmpty) {
               _formData.addAll(patches);
+              // Sync UI state so visible fields reflect computed values.
+              _formKey.currentState?.patchValue(patches);
             }
           }
 
@@ -881,6 +903,8 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
         length: _tabs.isEmpty ? 1 : _tabs.length,
         vsync: this,
       );
+
+      _triggerFetchFromForPrefilledLinks();
     }
   }
 
@@ -938,7 +962,12 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
             formValues[field.fieldname] ??
             widget.initialData?[field.fieldname] ??
             field.defaultValue ??
-            (field.fieldtype == 'Check' ? 0 : '');
+            (field.fieldtype == 'Check'
+                ? 0
+                : (field.fieldtype == 'Table' ||
+                      field.fieldtype == 'Table MultiSelect')
+                ? <dynamic>[]
+                : '');
       }
     }
 
@@ -969,7 +998,12 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
             formValues[field.fieldname] ??
             widget.initialData?[field.fieldname] ??
             field.defaultValue ??
-            (field.fieldtype == 'Check' ? 0 : '');
+            (field.fieldtype == 'Check'
+                ? 0
+                : (field.fieldtype == 'Table' ||
+                      field.fieldtype == 'Table MultiSelect')
+                ? <dynamic>[]
+                : '');
       }
     }
     for (final entry in formValues.entries) {
