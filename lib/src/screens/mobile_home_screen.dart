@@ -34,6 +34,21 @@ class MobileHomeScreen extends StatefulWidget {
   )?
   tileBuilder;
 
+  /// Optional resolver that returns a per-doctype onFieldChange callback.
+  /// Use this to inject app-level form event logic (e.g. cascading clears)
+  /// without subclassing. Return null for doctypes that need no custom handling.
+  ///
+  /// Example:
+  /// ```dart
+  /// getFieldChangeHandler: (doctype) =>
+  ///     SnfFormHandlers.forDoctype(doctype)?.onFieldChange,
+  /// ```
+  final Map<String, dynamic>? Function(
+    String fieldName,
+    dynamic newValue,
+    Map<String, dynamic> formData,
+  )? Function(String doctype)? getFieldChangeHandler;
+
   const MobileHomeScreen({
     super.key,
     required this.sdk,
@@ -42,6 +57,7 @@ class MobileHomeScreen extends StatefulWidget {
     this.onSyncPressed,
     this.groupHeaderBuilder,
     this.tileBuilder,
+    this.getFieldChangeHandler,
   });
 
   @override
@@ -463,6 +479,7 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
               userRoles: widget.sdk.roles,
               permissionService: widget.sdk.permissions,
               translate: (s) => widget.sdk.translations.translate(s),
+              onFieldChange: widget.getFieldChangeHandler?.call(doctype),
             ),
           ),
         );

@@ -188,6 +188,7 @@ class MetaService {
       final doctypesToSync = <String>[];
 
       for (final meta in mobileFormMetas) {
+        if (meta.doctype.isEmpty) continue;
         final serverModifiedAt = meta.serverModifiedAt;
 
         if (serverModifiedAt == null || serverModifiedAt.isEmpty) {
@@ -227,7 +228,7 @@ class MetaService {
   /// Returns doctype names marked as mobile form (from login response, stored in doctype_meta).
   Future<List<String>> getMobileFormDoctypeNames() async {
     final list = await _database.doctypeMetaDao.findMobileFormDoctypes();
-    return list.map((e) => e.doctype).toList();
+    return list.map((e) => e.doctype).where((d) => d.isNotEmpty).toList();
   }
 
   /// Returns doctypes grouped by group name, ordered by server-defined sort order.
@@ -320,6 +321,7 @@ class MetaService {
     for (int i = 0; i < mobileFormNames.length; i++) {
       final mfn = mobileFormNames[i];
       final doctype = mfn.mobileDoctype;
+      if (doctype.isEmpty) continue;
       final existing = await _database.doctypeMetaDao.findByDoctype(doctype);
 
       if (existing != null) {
