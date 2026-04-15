@@ -252,7 +252,16 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
 
     for (final field in widget.meta.fields) {
       if (field.fieldname != null && !_formData.containsKey(field.fieldname)) {
-        _formData[field.fieldname!] ??= field.defaultValue;
+        final defVal = field.defaultValue;
+        if (defVal != null &&
+            field.fieldtype == 'Date' &&
+            defVal.toLowerCase() == 'today') {
+          final now = DateTime.now();
+          _formData[field.fieldname!] =
+              '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+        } else {
+          _formData[field.fieldname!] ??= defVal;
+        }
       }
     }
 
@@ -819,6 +828,17 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
     );
   }
 
+  /// Returns true if at least one data field in the section is currently visible.
+  /// Matches Frappe Desk behavior: a section header is hidden when all its fields
+  /// are hidden by their own depends_on, even if the section's own depends_on passes.
+  bool _hasAnyVisibleField(_FormSection section) {
+    return section.columns.any(
+      (col) => col.fields.any(
+        (field) => field.isDataField && !field.hidden && _shouldShowField(field),
+      ),
+    );
+  }
+
   Widget _buildSection(_FormSection section) {
     final formStyle = widget.style ?? DefaultFormStyle.standard;
 
@@ -826,6 +846,12 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
 
     // Evaluate section-level depends_on — hide entire section if condition is false
     if (!_shouldShowField(section.sectionField)) {
+      return const SizedBox.shrink();
+    }
+
+    // Hide section header when all its fields are hidden (matches Frappe Desk behavior).
+    // This covers cases where the section's depends_on passes but no field inside is visible.
+    if (!_hasAnyVisibleField(section)) {
       return const SizedBox.shrink();
     }
 
