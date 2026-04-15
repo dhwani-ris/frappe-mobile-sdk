@@ -41,7 +41,7 @@ class MobileHomeScreen extends StatefulWidget {
   /// Example:
   /// ```dart
   /// getFieldChangeHandler: (doctype) =>
-  ///     SnfFormHandlers.forDoctype(doctype)?.onFieldChange,
+  ///     FormHandlers.forDoctype(doctype)?.onFieldChange,
   /// ```
   final Map<String, dynamic>? Function(
     String fieldName,
