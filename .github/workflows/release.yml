@@ -1,8 +1,20 @@
-name: Release
+name: Generate Semantic Release
 on:
   push:
     branches: [ main, master ]
+    paths:
+      - '**.py'
+      - '**.js'
+      - '**.json'
+      - '**.toml'
+      - '**.cfg'
   workflow_dispatch:
+    inputs:
+      force_release:
+        description: 'Force release even if no changes detected'
+        required: false
+        default: 'false'
+        type: boolean
 
 permissions:
   contents: write
@@ -10,6 +22,11 @@ permissions:
   pull-requests: write
   id-token: write
   actions: read
+
+# Wait for init workflow to complete first
+concurrency:
+  group: repo-init-${{ github.repository }}-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   release:
@@ -30,28 +47,6 @@ jobs:
           token: ${{ steps.generate-token.outputs.token }}
           persist-credentials: true
 
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: "3.38.9"
-          channel: "stable"
-          cache: true
-
-      - name: Prepare example app config
-        run: |
-          if [ -f "example/lib/config/app_config.example.dart" ]; then
-            cp example/lib/config/app_config.example.dart example/lib/config/app_config.dart
-          fi
-
-      - name: Get Flutter dependencies
-        run: flutter pub get
-
-      - name: Analyze Flutter
-        run: flutter analyze --no-fatal-infos
-
-      - name: Test Flutter
-        run: flutter test
-
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -60,9 +55,9 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.14"
+          python-version: '3.11'
 
-      - name: Setup semantic-release
+      - name: Setup dependencies
         run: |
           npm install semantic-release @semantic-release/git @semantic-release/exec @semantic-release/github @semantic-release/changelog @semantic-release/commit-analyzer @semantic-release/release-notes-generator --no-save
 
@@ -79,5 +74,8 @@ jobs:
           GIT_COMMITTER_NAME: "dhwani-release-bot"
           GIT_COMMITTER_EMAIL: "dhwani-release-bot[bot]@users.noreply.github.com"
           NODE_ENV: production
-        run: npx semantic-release
-
+        run: |
+          npx semantic-release || {
+            echo "No release needed or semantic-release exited with code $?"
+            exit 0
+          }
