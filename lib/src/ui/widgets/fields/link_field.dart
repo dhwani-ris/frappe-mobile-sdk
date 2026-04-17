@@ -5,6 +5,7 @@ import '../../../models/doc_field.dart';
 import '../../../services/link_option_service.dart';
 import '../../../services/link_field_coordinator.dart';
 import '../../../database/entities/link_option_entity.dart';
+import 'searchable_select.dart';
 
 /// Widget for Link field type with cached options
 class LinkField extends BaseField {
@@ -390,88 +391,32 @@ class _LinkFieldDropdownState extends State<_LinkFieldDropdown> {
       );
     }
 
-    // Resolve initial value: match from options by name or label; if not in list, keep value so it still displays
-    final initialValueStr = widget.value?.toString();
-    String? validInitialValue;
-    if (initialValueStr != null && initialValueStr.isNotEmpty) {
-      if (_options.isNotEmpty) {
-        try {
-          final matchingOption = _options.firstWhere(
-            (opt) => opt.name == initialValueStr,
-          );
-          validInitialValue = matchingOption.name;
-        } catch (_) {
-          try {
-            final matchingOption = _options.firstWhere(
-              (opt) => opt.label == initialValueStr,
-            );
-            validInitialValue = matchingOption.name;
-          } catch (_) {
-            validInitialValue = null;
-          }
-        }
-      } else {
-        validInitialValue = initialValueStr;
-      }
+    // Resolve current value from options
+    final currentVal = widget.value?.toString();
+    final selected = <String>[];
+    if (currentVal != null && currentVal.isNotEmpty) {
+      // Match by name or label
+      final match = _options.any((o) => o.name == currentVal)
+          ? currentVal
+          : _options
+                .where((o) => o.label == currentVal)
+                .map((o) => o.name)
+                .firstOrNull;
+      if (match != null) selected.add(match);
+      // Keep unknown values so existing docs still display
+      if (match == null) selected.add(currentVal);
     }
 
-    final placeholder =
-        widget.field.placeholder ?? 'Select ${widget.field.displayLabel}';
-    final allItems = <DropdownMenuItem<String>>[
-      DropdownMenuItem<String>(
-        value: _kBlankValue,
-        child: Text(placeholder, style: TextStyle(color: Colors.grey[600])),
-      ),
-      // If current value is not in options (e.g. existing doc), add it so selected value shows
-      if (validInitialValue != null &&
-          validInitialValue != _kBlankValue &&
-          !_options.any((opt) => opt.name == validInitialValue))
-        DropdownMenuItem<String>(
-          value: validInitialValue,
-          child: Text(validInitialValue),
-        ),
-      ..._options.map(
-        (option) => DropdownMenuItem<String>(
-          value: option.name,
-          child: Text(option.label ?? option.name),
-        ),
-      ),
-    ];
-    final initialVal = validInitialValue ?? _kBlankValue;
-
-    return FormBuilderDropdown<String>(
-      key: ValueKey(
-        'link_dropdown_${widget.field.fieldname}_${_options.length}',
-      ),
-      name: widget.field.fieldname ?? '',
-      initialValue: initialVal,
+    return SearchableSelect(
+      options: _options,
+      selected: selected,
+      multiSelect: false,
       enabled: widget.enabled && !widget.field.readOnly,
-      decoration:
-          widget.style?.decoration ??
-          InputDecoration(
-            hintText: placeholder,
-            border: const OutlineInputBorder(),
-            filled: widget.field.readOnly,
-            fillColor: widget.field.readOnly ? Colors.grey[200] : null,
-            suffixIcon: IconButton(
-              icon: const Icon(Icons.refresh),
-              onPressed: _loadOptions,
-              tooltip: 'Refresh options',
-            ),
-          ),
-      items: allItems,
-      validator: widget.field.reqd
-          ? (value) {
-              if (value == null ||
-                  value.toString().isEmpty ||
-                  value == _kBlankValue) {
-                return '${widget.field.displayLabel} is required';
-              }
-              return null;
-            }
-          : null,
-      onChanged: (val) =>
-          widget.onChanged?.call(val == _kBlankValue ? null : val),
+      hintText:
+          widget.field.placeholder ?? 'Search ${widget.field.displayLabel}...',
+      onChanged: (values) {
+        widget.onChanged?.call(values.isEmpty ? null : values.first);
+      },
     );
   }
 }

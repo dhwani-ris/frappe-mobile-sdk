@@ -10,11 +10,19 @@ class FieldStyle {
   /// If set, used to translate field label and description (e.g. from Frappe translations).
   final String Function(String)? translate;
 
+  /// When false, hides the external label rendered above the field widget.
+  final bool showLabel;
+
+  /// When false, hides the external description rendered below the field widget.
+  final bool showDescription;
+
   const FieldStyle({
     this.labelStyle,
     this.descriptionStyle,
     this.decoration,
     this.translate,
+    this.showLabel = true,
+    this.showDescription = true,
   });
 }
 
@@ -45,7 +53,9 @@ abstract class BaseField extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        if (field.label != null && field.label!.isNotEmpty)
+        if (style?.showLabel != false &&
+            field.label != null &&
+            field.label!.isNotEmpty)
           Padding(
             padding: const EdgeInsets.only(bottom: 8.0),
             child: Row(
@@ -72,7 +82,9 @@ abstract class BaseField extends StatelessWidget {
             ),
           ),
         buildField(context),
-        if (field.description != null && field.description!.isNotEmpty)
+        if (style?.showDescription != false &&
+            field.description != null &&
+            field.description!.isNotEmpty)
           Padding(
             padding: const EdgeInsets.only(top: 4.0),
             child: Text(

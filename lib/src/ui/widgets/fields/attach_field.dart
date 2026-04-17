@@ -51,7 +51,7 @@ class AttachField extends BaseField {
             OutlinedButton.icon(
               onPressed: enabled && !field.readOnly
                   ? () async {
-                      final result = await FilePicker.platform.pickFiles();
+                      final result = await FilePicker.pickFiles();
                       if (result != null && result.files.single.path != null) {
                         final path = result.files.single.path!;
                         final file = File(path);

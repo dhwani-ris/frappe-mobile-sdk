@@ -188,6 +188,7 @@ class MetaService {
       final doctypesToSync = <String>[];
 
       for (final meta in mobileFormMetas) {
+        if (meta.doctype.isEmpty) continue;
         final serverModifiedAt = meta.serverModifiedAt;
 
         if (serverModifiedAt == null || serverModifiedAt.isEmpty) {
@@ -227,7 +228,7 @@ class MetaService {
   /// Returns doctype names marked as mobile form (from login response, stored in doctype_meta).
   Future<List<String>> getMobileFormDoctypeNames() async {
     final list = await _database.doctypeMetaDao.findMobileFormDoctypes();
-    return list.map((e) => e.doctype).toList();
+    return list.map((e) => e.doctype).where((d) => d.isNotEmpty).toList();
   }
 
   /// Returns doctypes grouped by group name, ordered by server-defined sort order.
@@ -320,6 +321,7 @@ class MetaService {
     for (int i = 0; i < mobileFormNames.length; i++) {
       final mfn = mobileFormNames[i];
       final doctype = mfn.mobileDoctype;
+      if (doctype.isEmpty) continue;
       final existing = await _database.doctypeMetaDao.findByDoctype(doctype);
 
       if (existing != null) {
@@ -386,8 +388,9 @@ class MetaService {
   /// Throws if not authenticated or API call fails.
   Future<void> resyncMobileConfiguration() async {
     try {
-      // Call mobile_auth.configuration API on v2 endpoint with auth headers
-      final result = await _client.rest.get(
+      // Guest endpoint: call without auth headers to avoid invalid-token 401
+      // when a stale/expired token is still present in memory.
+      final result = await _client.rest.getPublic(
         '/api/v2/method/mobile_auth.configuration',
       );
 

@@ -13,6 +13,7 @@ class LoginScreenStyle {
   final ButtonStyle? loginButtonStyle;
   final ButtonStyle? mobileButtonStyle;
   final ButtonStyle? oauthButtonStyle;
+  final ButtonStyle? socialButtonStyle;
   final TextStyle? orDividerTextStyle;
   final EdgeInsets? padding;
   final Color? errorBackgroundColor;
@@ -30,6 +31,7 @@ class LoginScreenStyle {
     this.loginButtonStyle,
     this.mobileButtonStyle,
     this.oauthButtonStyle,
+    this.socialButtonStyle,
     this.orDividerTextStyle,
     this.padding,
     this.errorBackgroundColor,

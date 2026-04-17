@@ -16,6 +16,7 @@ import 'data_field.dart';
 import 'date_field.dart';
 import 'datetime_field.dart';
 import 'duration_field.dart';
+import 'geolocation_field.dart';
 import 'html_field.dart';
 import 'image_field.dart';
 import 'link_field.dart';
@@ -25,6 +26,7 @@ import 'phone_field.dart';
 import 'rating_field.dart';
 import 'read_only_field.dart';
 import 'select_field.dart';
+import 'table_multi_select_field.dart';
 import 'text_field.dart';
 import 'time_field.dart';
 
@@ -108,13 +110,25 @@ class FieldFactory {
         );
 
       case FieldTypes.select:
-      case 'Table MultiSelect':
       case 'Multi Select':
         return SelectField(
           field: field,
           value: value,
           onChanged: onChanged,
           enabled: enabled,
+          style: fieldStyle,
+        );
+
+      case 'Table MultiSelect':
+        if (getMeta == null) return null;
+        final tmsRows = value is List ? List<dynamic>.from(value) : <dynamic>[];
+        return TableMultiSelectFieldBase(
+          field: field,
+          rows: tmsRows,
+          onChanged: onChanged,
+          enabled: enabled,
+          getMeta: getMeta,
+          linkOptionService: linkOptionService,
           style: fieldStyle,
         );
 
@@ -257,6 +271,15 @@ class FieldFactory {
         return HtmlField(
           field: field,
           value: value,
+          enabled: enabled,
+          style: fieldStyle,
+        );
+
+      case FieldTypes.geolocation:
+        return GeolocationField(
+          field: field,
+          value: value,
+          onChanged: onChanged,
           enabled: enabled,
           style: fieldStyle,
         );
