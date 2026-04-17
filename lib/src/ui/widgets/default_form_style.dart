@@ -21,8 +21,8 @@ class DefaultFormStyle {
     sectionMargin: const EdgeInsets.symmetric(vertical: 6, horizontal: 6),
     sectionPadding: const EdgeInsets.all(16),
     fieldPadding: const EdgeInsets.only(bottom: 16),
+    showFieldLabel: true,
     fieldDecoration: (field) => InputDecoration(
-      labelText: field.label ?? field.fieldname,
       hintText: field.placeholder,
       helperText: field.description,
       border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
@@ -53,8 +53,9 @@ class DefaultFormStyle {
     sectionMargin: const EdgeInsets.symmetric(vertical: 4, horizontal: 6),
     sectionPadding: const EdgeInsets.all(12),
     fieldPadding: const EdgeInsets.only(bottom: 12),
+    showFieldLabel: false,
     fieldDecoration: (field) => InputDecoration(
-      labelText: field.label ?? field.fieldname,
+      hintText: field.placeholder ?? field.label ?? field.fieldname,
       border: OutlineInputBorder(borderRadius: BorderRadius.circular(4)),
       contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
     ),
