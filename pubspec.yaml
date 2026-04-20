@@ -1,6 +1,6 @@
 name: frappe_mobile_sdk
 description: Flutter SDK for offline-first Frappe/ERPNext mobile apps with auth, API access, dynamic forms, and sync-aware local data operations.
-version: 1.0.0
+version: 1.1.0
 homepage: https://github.com/dhwani-ris/frappe-mobile-sdk
 repository: https://github.com/dhwani-ris/frappe-mobile-sdk
 issue_tracker: https://github.com/dhwani-ris/frappe-mobile-sdk/issues
