@@ -1,0 +1,108 @@
+name: Quality Checks
+
+on:
+  pull_request:
+    branches: [ main, master, develop, development ]
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - '**.py'
+      - '**.js'
+      - '**.css'
+      - '**.html'
+      - '**.json'
+      - '.pre-commit-config.yaml'
+      - 'commitlint.config.js'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Cancel previous quality check runs on the same PR
+concurrency:
+  group: quality-${{ github.repository }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  commit-lint:
+    name: 'Semantic Commits'
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 200
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Check commit titles
+        run: |
+          npm install @commitlint/cli @commitlint/config-conventional
+          npx commitlint --verbose --from ${{ github.event.pull_request.base.sha }} --to ${{ github.event.pull_request.head.sha }}
+
+  linter:
+    name: 'Semgrep Rules'
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+
+      - name: Cache Semgrep rules
+        uses: actions/cache@v4
+        with:
+          path: frappe-semgrep-rules
+          key: semgrep-rules-${{ github.run_id }}
+          restore-keys: semgrep-rules-
+
+      - name: Download Semgrep rules
+        run: |
+          if [ -d "frappe-semgrep-rules" ]; then
+            cd frappe-semgrep-rules && git pull --ff-only || true
+          else
+            git clone --depth 1 https://github.com/frappe/semgrep-rules.git frappe-semgrep-rules
+          fi
+
+      - name: Run Semgrep rules
+        run: |
+          pip install semgrep
+          semgrep ci --config ./frappe-semgrep-rules/rules --config r/python.lang.correctness
+
+  precommit:
+    name: 'Pre-Commit'
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+
+      - name: Check for pre-commit config
+        run: |
+          if [ ! -f .pre-commit-config.yaml ]; then
+            curl -s -o .pre-commit-config.yaml https://raw.githubusercontent.com/dhwani-ris/frappe-pre-commit/main/examples/.pre-commit-config.yaml
+          fi
+
+      - name: Cache pre-commit hooks
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}
+          restore-keys: pre-commit-
+
+      - name: Install and run pre-commit
+        run: |
+          pip install pre-commit
+          pre-commit install --install-hooks
+          SKIP=no-commit-to-branch pre-commit run --all-files --show-diff-on-failure || {
+            echo "❌ Pre-commit checks failed. Run 'pre-commit run --all-files' locally."
+            exit 1
+          }
