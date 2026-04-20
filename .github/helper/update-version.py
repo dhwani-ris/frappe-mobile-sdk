@@ -56,4 +56,8 @@ def main() -> None:
     if changed_any:
         print(f"Bumped versions to {new_version}")
     else:
-        print("No files were updated")
+        print("Versions already up to date")
+
+
+if __name__ == "__main__":
+    main()
