@@ -793,7 +793,11 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
             if (patches != null && patches.isNotEmpty) {
               _formData.addAll(patches);
               // Sync UI state so visible fields reflect computed values.
-              _formKey.currentState?.patchValue(patches);
+              // Normalize types (e.g. int → String for Int fields) so
+              // patchValue matches the FormBuilderField's expected type.
+              _formKey.currentState?.patchValue(
+                _normalizePatchValues(patches),
+              );
             }
           }
 

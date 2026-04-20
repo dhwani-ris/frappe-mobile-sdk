@@ -7,35 +7,11 @@ import '../models/doc_type_meta.dart';
 import '../utils/depends_on_evaluator.dart';
 import 'meta_service.dart';
 
-const int _kLinkOptionCacheMaxEntries = 30;
-
 /// Fetches link field options from API at runtime. Link filters are sent to the API; no DB table.
 class LinkOptionService {
   final FrappeClient _client;
-  final Map<String, List<LinkOptionEntity>> _memoryCache = {};
-  final List<String> _cacheKeys = [];
 
   LinkOptionService(this._client);
-
-  /// Cache of doctype -> title_field name, populated lazily from DB metadata.
-  final Map<String, String?> _titleFieldCache = {};
-
-  String _cacheKey(String doctype, List<List<dynamic>>? filters) {
-    if (filters == null || filters.isEmpty) return doctype;
-    return '$doctype|${filters.hashCode}';
-  }
-
-  void _putCache(String key, List<LinkOptionEntity> options) {
-    if (_memoryCache.length >= _kLinkOptionCacheMaxEntries &&
-        !_memoryCache.containsKey(key)) {
-      if (_cacheKeys.isNotEmpty) {
-        final evict = _cacheKeys.removeAt(0);
-        _memoryCache.remove(evict);
-      }
-    }
-    if (!_memoryCache.containsKey(key)) _cacheKeys.add(key);
-    _memoryCache[key] = options;
-  }
 
   /// Fetches link options from API (with optional filters). No DB; filters sent to server.
   Future<List<LinkOptionEntity>> getLinkOptions(
@@ -44,11 +20,6 @@ class LinkOptionService {
     List<List<dynamic>>? filters,
   }) async {
     final normalizedFilters = _normalizeFiltersForDoctype(doctype, filters);
-    final key = _cacheKey(doctype, normalizedFilters);
-    if (!forceRefresh && _memoryCache.containsKey(key)) {
-      return _memoryCache[key]!;
-    }
-
     final meta = await _getDocTypeMeta(doctype);
     final titleField = _resolveTitleField(doctype, meta);
 
@@ -119,7 +90,6 @@ class LinkOptionService {
       );
     }
 
-    _putCache(key, linkOptions);
     return linkOptions;
   }
 
@@ -212,26 +182,11 @@ class LinkOptionService {
     }
   }
 
-  void clearCache(String doctype) {
-    for (final k in _memoryCache.keys.toList()) {
-      if (k == doctype || k.startsWith('$doctype|')) {
-        _memoryCache.remove(k);
-        _cacheKeys.remove(k);
-      }
-    }
-    _titleFieldCache.remove(doctype);
-  }
-
   /// Resolves the display field for a doctype.
   /// Checks title_field first, then falls back to first search_field from meta
   /// (common for child doctypes where title_field is not set).
   String? _resolveTitleField(String doctype, DocTypeMeta? meta) {
-    if (_titleFieldCache.containsKey(doctype)) {
-      return _titleFieldCache[doctype];
-    }
-    final titleField = meta?.titleField;
-    _titleFieldCache[doctype] = titleField;
-    return titleField;
+    return meta?.titleField;
   }
 
   Future<DocTypeMeta?> _getDocTypeMeta(String doctype) async {
@@ -242,11 +197,5 @@ class LinkOptionService {
     } catch (_) {
       return null;
     }
-  }
-
-  void clearAllCache() {
-    _memoryCache.clear();
-    _cacheKeys.clear();
-    _titleFieldCache.clear();
   }
 }

@@ -7,6 +7,8 @@ import 'form_builder.dart' show FrappeFormStyle;
 /// Default form styling configuration
 class DefaultFormStyle {
   static FrappeFormStyle get standard => FrappeFormStyle(
+    showFieldLabel: false,
+    showFieldDescription: false,
     labelStyle: const TextStyle(
       fontSize: 14,
       fontWeight: FontWeight.w500,
@@ -22,7 +24,7 @@ class DefaultFormStyle {
     sectionPadding: const EdgeInsets.all(16),
     fieldPadding: const EdgeInsets.only(bottom: 16),
     fieldDecoration: (field) => InputDecoration(
-      labelText: field.label ?? field.fieldname,
+      labelText: '${field.label ?? field.fieldname}${field.reqd ? ' *' : ''}',
       hintText: field.placeholder,
       helperText: field.description,
       border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
