@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../../models/doc_field.dart';
 import '../../../models/doc_type_meta.dart';
+import '../../../models/link_filter_result.dart';
 import '../../../services/link_option_service.dart';
 import '../../../database/entities/link_option_entity.dart';
 import 'base_field.dart';
@@ -13,6 +14,10 @@ class TableMultiSelectFieldBase extends BaseField {
   final List<dynamic> rows;
   final Future<DocTypeMeta> Function(String doctype) getMeta;
   final LinkOptionService? linkOptionService;
+  final Map<String, dynamic> formData;
+  final Map<String, dynamic> parentFormData;
+  final LinkFilterBuilder? Function(String doctype, String fieldname)?
+      getLinkFilterBuilder;
 
   const TableMultiSelectFieldBase({
     super.key,
@@ -22,6 +27,9 @@ class TableMultiSelectFieldBase extends BaseField {
     required super.enabled,
     required this.getMeta,
     this.linkOptionService,
+    this.formData = const {},
+    this.parentFormData = const {},
+    this.getLinkFilterBuilder,
     super.style,
   }) : super(value: rows);
 
@@ -34,6 +42,9 @@ class TableMultiSelectFieldBase extends BaseField {
       enabled: enabled && !field.readOnly,
       getMeta: getMeta,
       linkOptionService: linkOptionService,
+      formData: formData,
+      parentFormData: parentFormData,
+      getLinkFilterBuilder: getLinkFilterBuilder,
     );
   }
 }
@@ -47,6 +58,9 @@ class _Loader extends StatefulWidget {
     required this.enabled,
     required this.getMeta,
     this.linkOptionService,
+    this.formData = const {},
+    this.parentFormData = const {},
+    this.getLinkFilterBuilder,
   });
 
   final DocField field;
@@ -55,6 +69,10 @@ class _Loader extends StatefulWidget {
   final bool enabled;
   final Future<DocTypeMeta> Function(String doctype) getMeta;
   final LinkOptionService? linkOptionService;
+  final Map<String, dynamic> formData;
+  final Map<String, dynamic> parentFormData;
+  final LinkFilterBuilder? Function(String doctype, String fieldname)?
+      getLinkFilterBuilder;
 
   @override
   State<_Loader> createState() => _LoaderState();
@@ -80,8 +98,23 @@ class _LoaderState extends State<_Loader> {
         if (f.fieldtype == 'Link' && f.options != null) {
           _linkFieldName = f.fieldname;
           if (widget.linkOptionService != null) {
+            // Hook registry and resolveFilters both key on the INNER Link
+            // field — the one whose options we actually query. Matches the
+            // plain LinkField convention: (linkedDoctype, linkFieldname).
+            final filters = LinkOptionService.resolveFilters(
+              field: f,
+              rowData: widget.formData,
+              parentFormData: widget.parentFormData.isNotEmpty
+                  ? widget.parentFormData
+                  : widget.formData,
+              hook: widget.getLinkFilterBuilder?.call(
+                f.options ?? '',
+                f.fieldname ?? '',
+              ),
+            );
             _options = await widget.linkOptionService!.getLinkOptions(
               f.options!,
+              filters: filters,
             );
           }
           break;

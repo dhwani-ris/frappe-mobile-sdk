@@ -23,9 +23,8 @@ class DefaultFormStyle {
     sectionMargin: const EdgeInsets.symmetric(vertical: 6, horizontal: 6),
     sectionPadding: const EdgeInsets.all(16),
     fieldPadding: const EdgeInsets.only(bottom: 16),
-    showFieldLabel: true,
     fieldDecoration: (field) => InputDecoration(
-      labelText: '${field.label ?? field.fieldname}${field.reqd ? ' *' : ''}',
+      labelText: field.label ?? field.fieldname,
       hintText: field.placeholder,
       helperText: field.description,
       border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),

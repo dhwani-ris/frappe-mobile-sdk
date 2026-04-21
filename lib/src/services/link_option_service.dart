@@ -3,11 +3,18 @@ import 'dart:convert';
 import '../api/client.dart';
 import '../database/app_database.dart';
 import '../database/entities/link_option_entity.dart';
+import '../models/doc_field.dart';
 import '../models/doc_type_meta.dart';
+import '../models/link_filter_result.dart';
 import '../utils/depends_on_evaluator.dart';
 import 'meta_service.dart';
 
 /// Fetches link field options from API at runtime. Link filters are sent to the API; no DB table.
+///
+/// No client-side result cache by design — matches Frappe Desk semantics
+/// (every dropdown re-queries) and avoids staleness when dependent fields
+/// mutate. Per-form dedupe lives in [LinkFieldCoordinator._resultsCache],
+/// which bounds cost to one API call per (doctype, filters) per form open.
 class LinkOptionService {
   final FrappeClient _client;
 
@@ -16,12 +23,11 @@ class LinkOptionService {
   /// Fetches link options from API (with optional filters). No DB; filters sent to server.
   Future<List<LinkOptionEntity>> getLinkOptions(
     String doctype, {
-    bool forceRefresh = false,
     List<List<dynamic>>? filters,
   }) async {
     final normalizedFilters = _normalizeFiltersForDoctype(doctype, filters);
     final meta = await _getDocTypeMeta(doctype);
-    final titleField = _resolveTitleField(doctype, meta);
+    final titleField = meta?.titleField;
 
     List<dynamic> documents;
 
@@ -182,11 +188,29 @@ class LinkOptionService {
     }
   }
 
-  /// Resolves the display field for a doctype.
-  /// Checks title_field first, then falls back to first search_field from meta
-  /// (common for child doctypes where title_field is not set).
-  String? _resolveTitleField(String doctype, DocTypeMeta? meta) {
-    return meta?.titleField;
+  /// Resolves filters for a link-option fetch.
+  ///
+  /// Precedence:
+  /// 1. If [hook] is provided and `field.fieldname` is non-null, invoke it.
+  ///    - Non-null result → use `result.filters` (empty list normalizes to null).
+  ///    - Null result → fall through to meta.
+  /// 2. Parse meta `linkFilters` via [parseLinkFilters] against [rowData].
+  static List<List<dynamic>>? resolveFilters({
+    required DocField field,
+    required Map<String, dynamic> rowData,
+    required Map<String, dynamic> parentFormData,
+    LinkFilterBuilder? hook,
+  }) {
+    final fieldName = field.fieldname;
+    if (hook != null && fieldName != null) {
+      final result = hook(field, fieldName, rowData, parentFormData);
+      if (result != null) {
+        final filters = result.filters;
+        if (filters == null || filters.isEmpty) return null;
+        return filters;
+      }
+    }
+    return parseLinkFilters(field.linkFilters, rowData);
   }
 
   Future<DocTypeMeta?> _getDocTypeMeta(String doctype) async {

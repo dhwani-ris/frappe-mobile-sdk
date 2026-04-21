@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_form_builder/flutter_form_builder.dart';
 import 'base_field.dart';
 import '../../../models/doc_field.dart';
+import '../../../models/link_filter_result.dart';
 import '../../../services/link_option_service.dart';
 import '../../../services/link_field_coordinator.dart';
 import '../../../database/entities/link_option_entity.dart';
@@ -13,6 +14,9 @@ class LinkField extends BaseField {
   final LinkFieldCoordinator? linkFieldCoordinator;
   final List<String>? options;
   final Map<String, dynamic>? formData;
+  final Map<String, dynamic> parentFormData;
+  final LinkFilterBuilder? Function(String doctype, String fieldname)?
+      getLinkFilterBuilder;
 
   const LinkField({
     super.key,
@@ -25,6 +29,8 @@ class LinkField extends BaseField {
     this.linkFieldCoordinator,
     this.options,
     this.formData,
+    this.parentFormData = const {},
+    this.getLinkFilterBuilder,
   });
 
   @override
@@ -98,6 +104,8 @@ class LinkField extends BaseField {
         linkedDoctype: field.options!,
         linkFilters: field.linkFilters,
         formData: formData ?? {},
+        parentFormData: parentFormData,
+        getLinkFilterBuilder: getLinkFilterBuilder,
         style: style,
       );
     }
@@ -139,6 +147,9 @@ class _LinkFieldDropdown extends StatefulWidget {
   final String linkedDoctype;
   final String? linkFilters;
   final Map<String, dynamic> formData;
+  final Map<String, dynamic> parentFormData;
+  final LinkFilterBuilder? Function(String doctype, String fieldname)?
+      getLinkFilterBuilder;
   final FieldStyle? style;
 
   const _LinkFieldDropdown({
@@ -151,6 +162,8 @@ class _LinkFieldDropdown extends StatefulWidget {
     required this.linkedDoctype,
     this.linkFilters,
     required this.formData,
+    this.parentFormData = const {},
+    this.getLinkFilterBuilder,
     this.style,
   });
 
@@ -253,9 +266,22 @@ class _LinkFieldDropdownState extends State<_LinkFieldDropdown> {
       _isLoading = true;
       _waitingForDependent = false;
     });
-    final filters = LinkOptionService.parseLinkFilters(
-      widget.linkFilters,
-      widget.formData,
+    final docField =
+        _docFieldFromDynamic(widget.field) ??
+        DocField(
+          fieldname: widget.field?.fieldname?.toString(),
+          fieldtype: 'Link',
+          options: widget.linkedDoctype,
+          linkFilters: widget.linkFilters,
+        );
+    final filters = LinkOptionService.resolveFilters(
+      field: docField,
+      rowData: widget.formData,
+      parentFormData: widget.parentFormData,
+      hook: widget.getLinkFilterBuilder?.call(
+        docField.options ?? '',
+        docField.fieldname ?? '',
+      ),
     );
     final dependentNames = LinkOptionService.getDependentFieldNames(
       widget.linkFilters,
