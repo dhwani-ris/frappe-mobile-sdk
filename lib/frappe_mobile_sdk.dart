@@ -15,6 +15,7 @@ export 'src/models/doc_field.dart';
 export 'src/models/document.dart';
 export 'src/models/mobile_form_name.dart';
 export 'src/models/workflow_transition.dart';
+export 'src/models/link_filter_result.dart';
 
 // Database
 export 'src/database/app_database.dart';

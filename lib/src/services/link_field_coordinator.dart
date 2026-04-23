@@ -1,6 +1,7 @@
 import 'dart:async';
 import '../models/doc_field.dart';
 import '../models/doc_type_meta.dart';
+import '../models/link_filter_result.dart';
 import '../constants/field_types.dart';
 import '../database/entities/link_option_entity.dart';
 import 'link_option_service.dart';
@@ -20,6 +21,9 @@ class LinkLoadProgress {
 class LinkFieldCoordinator {
   final DocTypeMeta meta;
   final LinkOptionService linkOptionService;
+  final Map<String, dynamic> parentFormData;
+  final LinkFilterBuilder? Function(String doctype, String fieldname)?
+      getLinkFilterBuilder;
   final Map<String, dynamic> _formData = {};
   final StreamController<LinkLoadProgress> _progressController =
       StreamController<LinkLoadProgress>.broadcast();
@@ -38,6 +42,8 @@ class LinkFieldCoordinator {
     required this.meta,
     required this.linkOptionService,
     bool useCoordinator = true,
+    this.parentFormData = const <String, dynamic>{},
+    this.getLinkFilterBuilder,
   }) : _useCoordinator = useCoordinator {
     _buildDependencyGraph();
   }
@@ -265,9 +271,14 @@ class LinkFieldCoordinator {
       return;
     }
 
-    final filters = LinkOptionService.parseLinkFilters(
-      field.linkFilters,
-      formData,
+    final filters = LinkOptionService.resolveFilters(
+      field: field,
+      rowData: formData,
+      parentFormData: parentFormData,
+      hook: getLinkFilterBuilder?.call(
+        field.options ?? '',
+        field.fieldname ?? '',
+      ),
     );
     if (tier > 0 && filters == null) {
       return;
@@ -303,9 +314,14 @@ class LinkFieldCoordinator {
       if (field.fieldname == null || field.options == null) continue;
       requestFetch(
         field.options!,
-        filters: LinkOptionService.parseLinkFilters(
-          field.linkFilters,
-          _formData,
+        filters: LinkOptionService.resolveFilters(
+          field: field,
+          rowData: _formData,
+          parentFormData: parentFormData,
+          hook: getLinkFilterBuilder?.call(
+            field.options ?? '',
+            field.fieldname ?? '',
+          ),
         ),
         fieldLabel: field.displayLabel,
         fieldname: field.fieldname,
@@ -315,9 +331,14 @@ class LinkFieldCoordinator {
     for (final field in sortedDependent) {
       if (field.fieldname == null || field.options == null) continue;
       if (!canFetchNow(field, _formData)) continue;
-      final filters = LinkOptionService.parseLinkFilters(
-        field.linkFilters,
-        _formData,
+      final filters = LinkOptionService.resolveFilters(
+        field: field,
+        rowData: _formData,
+        parentFormData: parentFormData,
+        hook: getLinkFilterBuilder?.call(
+          field.options ?? '',
+          field.fieldname ?? '',
+        ),
       );
       if (filters == null) continue;
       requestFetch(
