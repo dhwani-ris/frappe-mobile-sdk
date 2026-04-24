@@ -168,18 +168,22 @@ CREATE TABLE outbox (
   server_name      TEXT,                             -- filled after INSERT succeeds
   operation        TEXT    NOT NULL,                 -- INSERT|UPDATE|SUBMIT|CANCEL|DELETE
   payload          TEXT,                             -- JSON snapshot at enqueue time
-  state            TEXT    NOT NULL,                 -- pending|in_flight|done|failed|conflict|blocked
+  state            TEXT    NOT NULL,                 -- see state enum in 5.2
   retry_count      INTEGER NOT NULL DEFAULT 0,
   last_attempt_at  INTEGER,
   error_message    TEXT,
-  error_code       TEXT,                             -- NETWORK|TIMESTAMP_MISMATCH|LINK_EXISTS|
-                                                     -- PERMISSION|VALIDATION|MANDATORY|...
-  created_at       INTEGER NOT NULL,
-  idempotency_key  TEXT    NOT NULL,                 -- sha256(mobile_uuid|op|created_at)
-  depends_on       TEXT                              -- JSON list of outbox.id values
+  error_code       TEXT,                             -- see error_code enum below
+  created_at       INTEGER NOT NULL
 );
 CREATE INDEX ix_outbox_state ON outbox(state, created_at);
 CREATE INDEX ix_outbox_uuid  ON outbox(mobile_uuid);
+-- error_code enum: NETWORK | TIMEOUT | TIMESTAMP_MISMATCH | LINK_EXISTS |
+--                  PERMISSION_DENIED | VALIDATION | MANDATORY | UNKNOWN
+-- Idempotency: handled via `mobile_uuid` on INSERT (server-side dedup, §10)
+--   and via snapshot `modified` on UPDATE (Frappe's check_if_latest, §5.7).
+--   No client-generated idempotency key required.
+-- Dependency order: tiers computed in memory per run from current payload
+--   (§5.2); no persistent depends_on column.
 
 CREATE TABLE pending_attachments (
   id                INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -457,6 +461,18 @@ pending ──dispatch──▶ in_flight ──success──▶ done
                                  (user retry OR upstream ok) ──▶ pending
 ```
 
+**`docs__<doctype>.sync_status` ↔ `outbox.state` correspondence:**
+
+| `docs__<doctype>.sync_status` | Related `outbox.state` for the latest row of this mobile_uuid | When it's set |
+|---|---|---|
+| `dirty` | `pending` or `in_flight` | User save produced a write; outbox row enqueued (or picked up) |
+| `synced` | `done` (or no outbox row) | Push completed successfully and wrote-back |
+| `failed` | `failed` | Push exhausted retries or rejected by server |
+| `conflict` | `conflict` | TimestampMismatch auto-retry exhausted, OR pull saw server-advanced row while local was dirty/failed |
+| `blocked` | `blocked` | Upstream doc not yet synced, or attachment upload failed |
+
+The two stay synchronized: `WriteQueue[doctype].submit(...)` updates both in the same transaction whenever an outbox row changes state. UI reads `sync_status` directly from the parent table (indexed), while the outbox is the source of truth for retry metadata and the op queue.
+
 ### 5.3 Attachment sub-pipeline
 
 Runs as a prerequisite stage for any outbox row whose assembled payload references `pending:<attach_id>`.
@@ -681,7 +697,7 @@ Real-total progress (`42 of 500`) is opt-in via `SDKConfig(fetchCountBeforePull:
 - **`SyncProgressScreen`** — blocking initial-sync progress, `Pause` persists cursors; `Cancel` → logout+wipe confirmation.
 - **`LogoutGuardDialog`** — `Sync now` / `Log out anyway` / `Cancel`.
 - **`ForceLogoutConfirm`** — per-doctype unsynced counts; user types `LOGOUT` to confirm.
-- **`DeleteCascadePrompt`** — on `LINK_EXISTS` failure; shows linked docs per doctype with counts; `Delete all` enqueues cascade; `Fix manually` navigates to errors screen.
+- **`DeleteCascadePrompt`** — on `LINK_EXISTS` failure; shows linked docs per doctype with counts. `Delete all` enqueues DELETE outbox rows for every dependent with `created_at` strictly earlier than the original parent's DELETE row, so tier computation dispatches dependents first and the parent's DELETE is retried last (otherwise it would hit the same `LINK_EXISTS`). `Fix manually` navigates to errors screen.
 
 All widgets subscribe to `syncState$`. Consumer can disable SDK widgets entirely via `SDKConfig(showSDKWidgets: false)` and build their own on the same stream.
 
@@ -702,17 +718,17 @@ App resume: if online AND last pull > 60 s ago → fire incremental pull in back
 
 ### 7.4 Retry-all priority
 
-When user triggers `Retry all`, outbox rows re-queued in priority order (1 highest):
+When user triggers `Retry all`, outbox rows are re-queued in priority order (1 highest). Priority keyed on `(state, error_code)`:
 
-| # | Category | Rationale |
+| # | Match | Rationale |
 |---|---|---|
-| 1 | `NETWORK` / `TIMEOUT` | Transient; network is back now |
-| 2 | `BLOCKED_BY_UPSTREAM` | Releases dependents on parent success |
-| 3 | `CONFLICT` | Often succeeds after auto-merge retry |
-| 4 | `LINK_EXISTS` (failed DELETE) | Succeeds only if dependents now deleted |
-| 5 | `VALIDATION` / `MANDATORY` | Usually requires user fix |
-| 6 | `PERMISSION_DENIED` | Requires role change |
-| 7 | Unknown / other | Last |
+| 1 | `state=failed` AND `error_code IN (NETWORK, TIMEOUT)` | Transient; network is back now |
+| 2 | `state=blocked` (any error_code) | Releases dependents on parent success |
+| 3 | `state=conflict` | Often succeeds after auto-merge retry |
+| 4 | `state=failed` AND `error_code=LINK_EXISTS` | Succeeds only if dependents now deleted |
+| 5 | `state=failed` AND `error_code IN (VALIDATION, MANDATORY)` | Usually requires user fix |
+| 6 | `state=failed` AND `error_code=PERMISSION_DENIED` | Requires role change |
+| 7 | `state=failed` AND `error_code IN (UNKNOWN, null)` | Last |
 
 Within each priority bucket: topological tier order (dependencies before dependents), then `created_at`. Per-doc `Retry` buttons disabled during `Retry all`; header shows live `Retrying 23… 8 succeeded, 2 failed, 13 pending` + `Stop`.
 
@@ -815,7 +831,62 @@ abstract class SyncController {
 }
 ```
 
-### 9.4 `SDKConfig`
+### 9.4 Public types
+
+```dart
+class QueryResult<T> {
+  final List<T> rows;
+  final bool hasMore;                 // lastPageSize == pageSize
+  final int returnedCount;            // rows.length
+  final Map<RowOrigin, int> originBreakdown;   // {local: n, server: m}
+}
+
+enum RowOrigin { local, server }
+
+class Cursor {
+  final String? modified;             // ISO8601 from server
+  final String? name;                 // last name in page
+}
+
+enum ConflictAction {
+  pullAndOverwriteLocal,              // download server snapshot, overwrite local
+  keepLocalAndRetry,                  // refetch modified, re-send local payload
+}
+
+class OutboxRow {
+  final int id;
+  final String doctype;
+  final String mobileUuid;
+  final String? serverName;
+  final OutboxOperation operation;    // insert|update|submit|cancel|delete
+  final OutboxState state;            // pending|inFlight|done|failed|conflict|blocked
+  final int retryCount;
+  final DateTime? lastAttemptAt;
+  final String? errorMessage;
+  final ErrorCode? errorCode;         // NETWORK|TIMEOUT|TIMESTAMP_MISMATCH|
+                                      // LINK_EXISTS|PERMISSION_DENIED|
+                                      // VALIDATION|MANDATORY|UNKNOWN
+  final DateTime createdAt;
+}
+
+class DeleteCascadePlan {
+  final String rootDoctype;
+  final String rootMobileUuid;
+  final Map<String, List<String>> blockedBy;   // doctype → server names blocking the delete
+  final int totalDependents;
+}
+
+class SyncError {
+  final String doctype;
+  final String mobileUuid;
+  final OutboxOperation operation;
+  final ErrorCode code;
+  final String message;
+  final DateTime at;
+}
+```
+
+### 9.5 `SDKConfig`
 
 ```dart
 class SDKConfig {
@@ -889,6 +960,85 @@ Six independently mergeable plans. Dependencies: P2 ← P1; P3 ← P2; P4 ← P1
 
 Each phase gets: design reference, implementation, tests to the specified tier, user-facing docs, changelog, migration-guide snippet.
 
+### 12.1 v1.1.0 → v2 data migration (inside P1)
+
+Current SDK ships a single `documents` table at `lib/src/database/app_database.dart:135`: `(localId, doctype, serverId, dataJson, status, modified)`. Any consumer app that adopted v1.1.0 may have dirty rows on device that must survive the schema change.
+
+**Preconditions.** The device must have network connectivity to reach `mobile_control` for DocType metas; metas are required to map JSON blobs into per-doctype columns. If offline on first launch after upgrade, the migration blocks app entry with a `MigrationBlockedScreen` that retries on Connectivity restore — same blocking pattern as `SyncProgressScreen`.
+
+**Algorithm (run once, guarded by `sdk_meta.schema_version < 2`):**
+
+```
+BEGIN TRANSACTION  (per doctype, not one mega-txn; see below)
+  1. distinct_doctypes ← SELECT DISTINCT doctype FROM documents
+  2. For each doctype X in distinct_doctypes:
+       fetch meta via MetaService (required, networked)
+       IF meta unavailable (404 — doctype renamed/removed on server):
+         move rows to documents__orphaned_v1 (stash table), log + surface counter
+         in a post-migration advisory screen; skip to next doctype
+       create docs__X + per-child docs__<child> tables with full v2 schema
+       populate doctype_meta row (meta_json, table_name, is_entry_point,
+         is_child_table, etc.)
+
+  3. For each row r in documents WHERE doctype=X (chunked via WriteQueue[X] 500 at a time):
+       parsed ← JSON.decode(r.dataJson)
+       split parsed into (parent_fields, child_table_payloads) per meta
+
+       INSERT INTO docs__X (
+         mobile_uuid  = r.localId,          -- preserve existing local identity
+         server_name  = r.serverId,         -- null if it was only ever local
+         sync_status  = 'dirty' IF r.status='dirty' ELSE 'synced',
+         docstatus    = parsed.docstatus || 0,
+         modified     = r.modified,
+         local_modified = now,
+         pulled_at    = CASE WHEN r.status='clean' THEN r.modified ELSE NULL END,
+         … per-field columns per 4.5 mapping,
+         <field>__is_local = 0 for all Link values
+           (we assume pre-v2 Link values were server_names — the old code path
+            only wrote them after server round-trip;
+            if that assumption is wrong we cannot detect it retroactively,
+            accepted migration risk — documented in changelog)
+         <field>__norm  = normalizeForSearch(<field>) for norm fields
+       )
+
+       For each (childfield, child_rows) in child_table_payloads:
+         INSERT INTO docs__<child> (
+           mobile_uuid, server_name, parent_uuid=r.localId,
+           parent_doctype=X, parentfield=childfield, idx, modified, …fields
+         )
+
+       IF r.status='dirty':
+         INSERT INTO outbox (
+           doctype=X, mobile_uuid=r.localId,
+           server_name=r.serverId,
+           operation = CASE WHEN r.serverId IS NULL THEN 'INSERT' ELSE 'UPDATE' END,
+           payload   = JSON of parsed (for replay),
+           state     = 'pending',
+           created_at = r.modified        -- preserve original save order
+         )
+COMMIT  (per-doctype)
+
+  4. After all doctypes migrated:
+       UPDATE sdk_meta SET schema_version = 2
+       RENAME TABLE documents TO documents__archived_v1      -- do not drop;
+         keep for 1 SDK version as an audit/rollback aid; next major release drops it.
+       (Orphaned rows remain in documents__orphaned_v1 indefinitely until
+        user confirms loss via advisory screen.)
+```
+
+**Edge cases explicitly handled:**
+- Concurrent user action during migration: not possible — migration runs before app surfaces any UI (on the MigrationBlockedScreen).
+- Row with `docstatus > 0` and `status='dirty'`: enqueue both an UPDATE (to flush field edits) and a SUBMIT outbox row if the local payload has `docstatus=1` but server's last-known `docstatus` was 0. Deterministic rule: compare `parsed.docstatus` vs existing dump's docstatus; if raised, append SUBMIT; if lowered to 2, append CANCEL.
+- Row with `status='deleted'`: append a DELETE outbox row; insert parent row with `sync_status='dirty'` for tracking.
+- DataJson corrupted or unparseable: move to `documents__orphaned_v1`, log row count per doctype.
+- Meta-driven schema for X has a different field list than JSON keys (server-side added/removed fields since this row was saved): for removed fields, ignore the extra JSON keys; for added fields, leave columns NULL; captured in `documents__archived_v1` audit.
+
+**Rollback:** Because `documents__archived_v1` is preserved, if a user hits a fatal migration bug they can `ROLLBACK` back to v1.1.0 of the SDK; the new tables can be dropped and the archived table renamed back. Documented in the migration-guide snippet.
+
+**Gate for P1 claim** ("existing v1.1.0 consumer apps continue to work after migration"):
+- Integration test: seed a v1 `documents` table with 100 mixed rows (clean/dirty/deleted, including child table JSONs), run migration, assert 1:1 parent+child row counts, assert outbox row counts match dirty/deleted count, assert all `mobile_uuid`s preserved.
+- Smoke test on example app: after migration, user can still open/edit/push previously-dirty rows.
+
 ## 13. Decisions log (alternatives considered)
 
 - **Schema: full columnar (chosen) vs. hybrid blob vs. per-doctype JSON.** Full columnar wins on query power and storage efficiency; migration cost accepted (mostly `ALTER TABLE ADD COLUMN`).
@@ -900,6 +1050,8 @@ Each phase gets: design reference, implementation, tests to the specified tier, 
 - **Pull/push coordination: push-wins with deferred pulls (chosen) vs. mutex.** Push-wins avoids spurious conflicts on fast user-save paths.
 - **Logout wipe: delete DB file + recreate (chosen) vs. transaction-wrapped DROP/DELETE.** File delete is OS-atomic; zero risk of partially-wiped state.
 - **Retry-all: priority-ordered (chosen) vs. insertion order.** Frontloads likely successes; visible success rate improves dramatically.
+- **INSERT idempotency via `mobile_uuid` (chosen) vs. client-generated idempotency key.** `mobile_uuid` is already the client-side PK; adding a second client→server key would be dead surface. Server-side dedup on `mobile_uuid` is sufficient for INSERT; UPDATE relies on `check_if_latest`; SUBMIT/CANCEL are state-idempotent natively.
+- **Dependencies: tier-compute in-memory per run (chosen) vs. persistent `depends_on` column.** Tier computation reads already-persistent outbox rows; adding a column adds writer/reader surface with no benefit.
 
 ## 14. Open questions
 
