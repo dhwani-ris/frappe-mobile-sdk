@@ -77,8 +77,9 @@ This document specifies a complete offline-first data layer that supports **any*
 │ FrappeClient (api/*) — HTTP, auth, endpoints                │
 └─────────────────────────────────────────────────────────────┘
                           │
-                   Frappe server + mobile_control
-                   (JWT, meta watermark, mobile_uuid dedup)
+                    Frappe server (stock v15+)
+                    — optional consumer hooks for stricter
+                      idempotency (see §10)
 ```
 
 ### 3.2 Three dataflows
@@ -151,7 +152,7 @@ CREATE TABLE doctype_meta (
   doctype              TEXT PRIMARY KEY,
   table_name           TEXT NOT NULL,
   meta_json            TEXT NOT NULL,                -- full DocTypeMeta
-  meta_watermark       TEXT,                         -- from mobile_control; drives migration
+  meta_watermark       TEXT,                         -- server's DocType.modified; drives migration
   dep_graph_json       TEXT,                         -- cached edges + tier
   last_ok_cursor       TEXT,                         -- JSON {modified, name}
   last_pull_started_at INTEGER,
@@ -271,7 +272,7 @@ Consumer may override with `SDKConfig(normalizeForSearch: ...)`.
 
 ### 4.9 Migration triggers
 
-- `FrappeSDK.initialize()` and app resume (when `Connectivity.isOnline`): fetch `meta_watermark` for each in-scope doctype via `mobile_control`.
+- `FrappeSDK.initialize()` and app resume (when `Connectivity.isOnline`): fetch each in-scope doctype's current `modified` via `GET /api/resource/DocType/<X>?fields=["modified"]` and compare against local `meta_watermark`. If different, refetch full meta. (Optional optimization: if the consumer ships a bulk `get_meta_watermarks` endpoint and advertises it via the `X-Mobile-Essentials-Version` response header, SDK batches the check into one request — see §10.)
 - If advanced for doctype X: fetch full meta → diff fields → apply:
   - **New field**: `ALTER TABLE docs__X ADD COLUMN <field> <type>` with `NULL` default; if field is Link, also `ADD COLUMN <field>__is_local`; if searchable, also `ADD COLUMN <field>__norm` + backfill `UPDATE … SET <field>__norm = normalizeForSearch(<field>)` in 500-row chunks via `WriteQueue`.
   - **Removed field**: column remains (SQLite < 3.35 cannot `DROP COLUMN` atomically; impact is negligible since unused columns aren't read). Drop the field's index if one existed.
@@ -539,17 +540,48 @@ PullEngine checks before each doctype's pull loop. Push waits briefly (≤30 s) 
 - Cursor persisted only on full-doctype success → no data loss on mid-pull disconnect.
 - On reconnect: drain deferred pulls; run outbox.
 
-### 5.7 Idempotency — cross-repo contract
+### 5.7 Idempotency
 
-**INSERT is not natively idempotent in Frappe.** Retries would create duplicates. Mitigation:
+**INSERT is not natively idempotent in Frappe.** Retries can duplicate on flaky networks. Three mitigation layers, priority order — SDK applies the first one available:
 
-- Every outbox INSERT payload carries `mobile_uuid`.
-- `mobile_control` server app MUST install a `before_insert` hook: if a doc with this `mobile_uuid` already exists in this `doctype`, return the existing dict instead of creating a duplicate.
-- SDK asserts `mobileControlMinVersion` on initialize; if server header `X-Mobile-Control-Version` < required → init fails with actionable error.
+**L1. User-set naming (`autoname = field:mobile_uuid`) — recommended, zero overhead.**
+If a DocType is configured so that `name = mobile_uuid`, the server `name` is deterministically set to the client-generated UUID. A retried POST with the same name returns `DuplicateEntryError`; SDK catches it, fetches the existing doc, and writes back `name` + `modified` as if the retry had succeeded. No extra round-trip. Every outbox INSERT payload still carries `mobile_uuid` as a data field (not just as the name) for clarity and for L2/L3 compatibility.
+
+**L2. Server `before_insert` dedup hook — consumer opt-in, zero-retry-duplication guarantee.**
+Consumer installs a server-side hook in their own Frappe app:
+```python
+# <consumer_app>/hooks.py
+doc_events = {
+  "*": {"before_insert": "<consumer_app>.utils.mobile_dedup"}
+}
+
+# <consumer_app>/utils.py
+def mobile_dedup(doc, method):
+    uuid = doc.get('mobile_uuid')
+    if not uuid: return
+    existing = frappe.db.get_value(doc.doctype, {'mobile_uuid': uuid}, 'name')
+    if existing:
+        raise frappe.DuplicateEntryError(doc.doctype, existing)
+```
+(Consumer adds a `mobile_uuid` field to the DocTypes they care about.) SDK treats `DuplicateEntryError` on INSERT the same as L1: fetch existing, write-back. Works alongside L1 or independently.
+
+**L3. Client-side pre-retry GET check — works against stock Frappe, no server changes.**
+On network-class failure (timeout, 5xx) during INSERT, SDK does not retry blindly. Before retry it issues:
+```
+GET /api/resource/<doctype>?filters=[["mobile_uuid","=",<uuid>]]&fields=["name","modified"]&limit_page_length=1
+```
+If a row comes back, SDK treats the prior POST as succeeded (writes back `name` + `modified`, marks outbox `done`, no retry). Costs one extra round-trip on retries only. Requires the consumer's DocType to have a queryable `mobile_uuid` field (consumer must add this — it's a 1-field schema change, no code).
+
+**Default SDK policy.** At INSERT time SDK inspects meta:
+- If `meta.autoname == 'field:mobile_uuid'` → L1 path.
+- Else if consumer has advertised `X-Mobile-Essentials-Version` header on login (indicating L2 hook present) → payload still includes `mobile_uuid`; SDK catches `DuplicateEntryError` the same way.
+- Else → L3 path on retries.
+
+If neither `mobile_uuid` field is queryable nor autoname uses it (stock DocType, no consumer prep), SDK emits a one-time `InitWarning` at app launch listing affected DocTypes and documents the duplication risk — the onus is on the consumer to choose a mitigation.
 
 **UPDATE** — idempotent via Frappe's native `check_if_latest` (client sends snapshot `modified`).
-**SUBMIT / CANCEL** — idempotent: Frappe raises specific errors ("already submitted" / "already cancelled"); SDK treats these as success.
-**DELETE** — 404 treated as success.
+**SUBMIT / CANCEL** — Frappe raises specific errors ("already submitted" / "already cancelled") that SDK catches as success.
+**DELETE** — 404 on a retry treated as success.
 
 ## 6. Unified read resolver + FilterParser
 
@@ -900,22 +932,52 @@ class SDKConfig {
   final String Function(String)? normalizeForSearch;
   final bool showSDKWidgets;                        // default true
   final int? maxAttachmentBytes;                    // null = no client cap
-  final int mobileControlMinVersion;                // init assertion
+  final IdempotencyStrategy? idempotencyOverride;   // null = auto-detect (L1→L2→L3)
 }
+enum IdempotencyStrategy { userSetNaming, serverDedupHook, preRetryGetCheck }
 ```
 
-## 10. Server contract — `mobile_control` requirements
+## 10. Server requirements
 
-Hard dependencies; SDK `initialize()` aborts with actionable error if unmet.
+SDK targets **stock Frappe v15+** with no proprietary server app required. Standard endpoints only.
 
-| Endpoint / hook | Purpose | Required behavior |
+### 10.1 Required (stock Frappe v15+)
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /api/method/login` OR API-key/secret auth OR OAuth token | Session establishment |
+| `GET /api/resource/<doctype>` | List + cursor pagination (supports `filters`, `fields`, `order_by`, `limit_page_length`, `limit_start`) |
+| `GET /api/resource/<doctype>/<name>` | Single doc |
+| `POST /api/resource/<doctype>` | Insert |
+| `PUT /api/resource/<doctype>/<name>` | Partial update |
+| `DELETE /api/resource/<doctype>/<name>` | Delete |
+| `POST /api/method/frappe.client.submit` | Submit |
+| `POST /api/method/frappe.client.cancel` | Cancel |
+| `POST /api/method/upload_file` | Attachment upload |
+| `GET /api/resource/DocType/<doctype>?fields=["modified"]` | Meta-change detection (compare `modified` vs local `meta_watermark`) |
+| `GET /api/resource/DocType/<doctype>` | Full meta (fetched on change) |
+
+Insert response must include `name` + all child rows with their `name` + `modified` — this is native Frappe behavior, called out so consumer doesn't accidentally override with a custom handler that strips it.
+
+### 10.2 Optional consumer server app (recommended for scale)
+
+The consumer may ship a small helper Frappe app to reduce round-trips and strengthen idempotency. SDK auto-detects it via an `X-Mobile-Essentials-Version` response header on login.
+
+| Capability | Endpoint / hook | Benefit |
 |---|---|---|
-| `POST /api/method/mobile_control.auth.login` | Login + JWT | Returns `SessionUser` payload |
-| `GET /api/method/mobile_control.meta.get_watermarks` | Meta change signal | List of `{doctype, meta_version}` |
-| `GET /api/method/mobile_control.meta.get_doctype` | Full meta + link_filters | Used by MetaService |
-| `before_insert` hook on `frappe.client.insert` | **mobile_uuid dedup** | If doc with `mobile_uuid=X` exists in this doctype, return existing dict — do not create duplicate |
-| Response shape on insert | Write-back | Must include `name` + all child rows with their `name` + `modified` |
-| `X-Mobile-Control-Version` header | Version guard | SDK asserts `≥ mobileControlMinVersion` |
+| Bulk meta watermark | `GET /api/method/<app>.get_meta_watermarks?doctypes=[…]` → `[{doctype, modified}]` | One request instead of N to check all doctypes' metas |
+| `before_insert` dedup hook | `doc_events['*']['before_insert']` (see §5.7 L2) | Eliminates INSERT-retry duplication without requiring `autoname=field:mobile_uuid` |
+| `SessionUser` payload on login | Custom `login` response body extension | Populates `SessionUser` in one trip instead of follow-up calls |
+| `mobile_uuid` custom field on DocTypes via fixtures | DocField `mobile_uuid` (Data, unique, hidden) | Makes L3 GET-check fast and guarantees duplication detection |
+
+**SDK never refuses to initialize if these are absent.** Without them, SDK falls back to the stock endpoints + L3 pre-retry GET idempotency (see §5.7). The consumer app is a performance and correctness *upgrade*, not a gate.
+
+### 10.3 What SDK does if nothing is done server-side
+
+SDK works against a vanilla Frappe instance with zero customization. Consequences the consumer accepts:
+- Meta watermark check uses N per-doctype GETs instead of one bulk call (N small for typical apps; one-time at resume).
+- INSERT idempotency falls back to L3 (extra GET on retries only) and requires the consumer to either (a) use `autoname=field:mobile_uuid` on mobile-created DocTypes, or (b) add a `mobile_uuid` custom field for L3 to query against. If neither is done, the SDK emits an `InitWarning` per affected DocType and duplicates may occur on network-error retries.
+- `SessionUser.permissions` populated by a follow-up `GET /api/method/frappe.client.get_list?doctype=User&filters=[["name","=",<me>]]` + `GET /api/method/frappe.client.get_value?doctype=User&fieldname=roles&filters=…`.
 
 ## 11. Testing
 
@@ -940,8 +1002,13 @@ Hard dependencies; SDK `initialize()` aborts with actionable error if unmet.
 
 ### 11.4 Gates
 - P1: existing v1.1.0 consumer apps continue to work after migration.
-- P3: 10 k-row doctype initial sync on 2 GB / 4-core emulator < 5 min, no UI jank.
-- P4: 100 concurrent offline saves → 100 % push success against mock `mobile_control`, no duplication.
+- P3: 10 k-row doctype initial sync on 2 GB / 4-core emulator < 5 min, no UI jank (frame build time < 16 ms p95 on the UI isolate during sync).
+- P4 (revised — realistic for low-end Android):
+  - `max_inflight_network` honored: no more than `PushPool.size` (2/4/8 by tier) HTTP requests in flight at once.
+  - `max_db_writes_per_doctype = 1`: WriteQueue per-doctype serialization verified under stress.
+  - `batch_size = 20–50`: per-transaction write grouping stays within this range.
+  - **Throughput test:** 500 queued offline saves (enqueued at human-plausible pace: ~10/sec from the UI simulation) drain to a mock server with **0 duplicates**, **0 SQLite lock errors**, and **peak memory delta < 50 MB** on a 2 GB emulator. Queue drain time measured and reported; no hard deadline — we measure vs. optimize, not vs. fail.
+  - **Resilience test:** pull app kill mid-drain at 50 %, relaunch, confirm remaining 250 saves complete with same 0-duplicate guarantee (tests outbox resume + L2/L3 dedup).
 - P5: all existing form + list screens work offline identically to online.
 - P6: SDK minor-version bump + changelog shipped.
 
@@ -951,7 +1018,7 @@ Six independently mergeable plans. Dependencies: P2 ← P1; P3 ← P2; P4 ← P1
 
 | # | Phase | Scope |
 |---|---|---|
-| P1 | Schema foundation + outbox + mobile_uuid dedup | Per-doctype + per-child tables; outbox; pending_attachments; doctype_meta with dep_graph; one-time migration from current single `documents` table preserving existing dirty rows; `mobile_control` `before_insert` dedup hook |
+| P1 | Schema foundation + outbox + idempotency strategy | Per-doctype + per-child tables; outbox; pending_attachments; doctype_meta with dep_graph; one-time migration from current single `documents` table preserving existing dirty rows; auto-detect idempotency strategy per DocType (L1/L2/L3 per §5.7) — no server-app requirement |
 | P2 | Meta service + dependency graph | Closure builder; dep-graph cache; meta-watermark migration engine; `__norm` column population |
 | P3 | Pull engine + concurrency utilities | `PullPool`, `WriteQueue`, cursor-based watermark, isolate parse, pull/push coordination gate, `syncState$` stream |
 | P4 | Push engine + conflict + attachments | `PushPool`, tier dispatch, UUID rewrite, TimestampMismatch auto-merge, attachment sub-pipeline, outbox state machine, retry-all priority |
@@ -964,7 +1031,7 @@ Each phase gets: design reference, implementation, tests to the specified tier, 
 
 Current SDK ships a single `documents` table at `lib/src/database/app_database.dart:135`: `(localId, doctype, serverId, dataJson, status, modified)`. Any consumer app that adopted v1.1.0 may have dirty rows on device that must survive the schema change.
 
-**Preconditions.** The device must have network connectivity to reach `mobile_control` for DocType metas; metas are required to map JSON blobs into per-doctype columns. If offline on first launch after upgrade, the migration blocks app entry with a `MigrationBlockedScreen` that retries on Connectivity restore — same blocking pattern as `SyncProgressScreen`.
+**Preconditions.** The device must have network connectivity on first launch after upgrade to fetch each affected DocType's meta (via `GET /api/resource/DocType/<X>`) — metas are required to map JSON blobs into per-doctype columns. If offline on first launch after upgrade, the migration blocks app entry with a `MigrationBlockedScreen` that retries on Connectivity restore — same blocking pattern as `SyncProgressScreen`.
 
 **Algorithm (run once, guarded by `sdk_meta.schema_version < 2`):**
 
