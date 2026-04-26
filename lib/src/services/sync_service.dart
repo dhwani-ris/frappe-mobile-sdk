@@ -1,6 +1,8 @@
+import 'dart:convert';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import '../api/client.dart';
 import '../database/app_database.dart';
+import '../models/doc_type_meta.dart';
 import 'offline_repository.dart';
 
 /// Service for bi-directional sync
@@ -157,49 +159,92 @@ class SyncService {
         ];
       }
 
-      final result = await _client.doctype.list(
-        doctype,
-        filters: filters,
-        fields: ['*'],
-        limitPageLength: 1000,
-      );
+      // If the parent meta declares any `Table` / `Table MultiSelect`
+      // field, the bare `frappe.client.get_list` response is missing
+      // child arrays — we need full docs (`/api/resource/<doctype>/<name>`).
+      // Otherwise the cheaper flat `get_list` is fine. We resolve the
+      // meta from cache (or doctype_meta DAO) so this works for
+      // returning users where `ensureSchemaForClosure` ran on a previous
+      // launch only.
+      final needsFullDoc =
+          _repository.doctypesWithChildren().contains(doctype) ||
+              await _doctypeHasChildTables(doctype);
 
-      total = result.length;
+      // Paginate via `limit_start` until the server returns a short page
+      // (fewer rows than requested). Without this, doctypes with > 1000
+      // rows (Village, Hamlet, etc.) silently truncate at the first page.
+      // Page size is the API cap, not a UX choice.
+      const int pageSize = 1000;
+      int start = 0;
+      while (true) {
+        final List<dynamic> page = needsFullDoc
+            ? await _client.doctype.listFullDocs(
+                doctype,
+                filters: filters,
+                limitStart: start,
+                limitPageLength: pageSize,
+              )
+            : await _client.doctype.list(
+                doctype,
+                filters: filters,
+                fields: ['*'],
+                limitStart: start,
+                limitPageLength: pageSize,
+              );
+        if (page.isEmpty) break;
+        total += page.length;
 
-      for (final docData in result) {
-        try {
-          final serverId =
-              docData['name'] as String? ?? docData['docname'] as String?;
-          if (serverId == null) continue;
-
-          await _repository.saveServerDocument(
-            doctype: doctype,
-            serverId: serverId,
-            data: docData as Map<String, dynamic>,
-          );
-          success++;
-        } catch (e) {
-          final errorMsg = e.toString();
-          failed++;
-
-          final docId =
-              docData['name'] as String? ??
-              docData['docname'] as String? ??
-              'unknown';
-          errors.add(
-            SyncError(
+        for (final docData in page) {
+          try {
+            final serverId = docData['name'] as String? ??
+                docData['docname'] as String?;
+            if (serverId == null) continue;
+            await _repository.saveServerDocument(
+              doctype: doctype,
+              serverId: serverId,
+              data: docData as Map<String, dynamic>,
+            );
+            success++;
+          } catch (e) {
+            failed++;
+            final docId = docData['name'] as String? ??
+                docData['docname'] as String? ??
+                'unknown';
+            errors.add(SyncError(
               documentId: docId,
               doctype: doctype,
               operation: 'pull',
-              errorMessage: errorMsg,
-            ),
-          );
+              errorMessage: e.toString(),
+            ));
+          }
         }
+
+        // Last page: server returned fewer than we asked for. Empty next
+        // pages are also handled by the top-of-loop `isEmpty` guard.
+        if (page.length < pageSize) break;
+        start += page.length;
       }
 
       return SyncResult(success, failed, total, null, errors: errors);
     } finally {
       _isSyncing = false;
+    }
+  }
+
+  Future<bool> _doctypeHasChildTables(String doctype) async {
+    final raw = await _database.doctypeMetaDao.getMetaJson(doctype);
+    if (raw == null || raw.isEmpty || raw == '{}') return false;
+    try {
+      final parsed = jsonDecode(raw) as Map<String, dynamic>;
+      final meta = DocTypeMeta.fromJson(parsed);
+      for (final f in meta.fields) {
+        if (f.fieldtype == 'Table' || f.fieldtype == 'Table MultiSelect') {
+          return true;
+        }
+      }
+      return false;
+    } catch (_) {
+      return false;
     }
   }
 

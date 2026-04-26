@@ -1,17 +1,33 @@
 // Copyright (c) 2026, Bhushan Barbuddhe and contributors
 // For license information, please see license.txt
 
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart';
 
 import '../api/client.dart';
 import '../database/app_database.dart';
+import '../database/migrations/v1_to_v2.dart';
+import '../models/doc_type_meta.dart';
+import '../models/session_user.dart';
 import '../services/auth_service.dart';
 import '../services/meta_service.dart';
 import '../services/permission_service.dart';
+import '../services/session_user_service.dart';
 import '../services/sync_service.dart';
 import '../services/offline_repository.dart';
 import '../services/link_option_service.dart';
 import '../services/translation_service.dart';
+
+/// Thrown by [FrappeSDK.runV1ToV2MigrationIfNeeded] when the device has no
+/// connectivity and the offline-first data migration cannot proceed. The
+/// consumer app should display [MigrationBlockedScreen] (or its own
+/// equivalent) and retry the call once connectivity is restored.
+class MigrationNeedsNetworkException implements Exception {
+  @override
+  String toString() =>
+      'v1→v2 data migration requires network connectivity. '
+      'Show MigrationBlockedScreen and retry when online.';
+}
 
 /// Main SDK initialization class for easy setup
 class FrappeSDK {
@@ -27,6 +43,7 @@ class FrappeSDK {
   SyncService? _syncService;
   OfflineRepository? _repository;
   LinkOptionService? _linkOptionService;
+  SessionUserService? _sessionUserService;
 
   bool _initialized = false;
 
@@ -58,6 +75,7 @@ class FrappeSDK {
       getMobileUuid: () async => 'test-uuid',
     );
     _linkOptionService = LinkOptionService(_client!);
+    _sessionUserService = SessionUserService(_database!.rawDatabase);
     _initialized = true;
   }
 
@@ -88,6 +106,10 @@ class FrappeSDK {
       getMobileUuid: () => _authService!.getOrCreateMobileUuid(),
     );
     _linkOptionService = LinkOptionService(_client!);
+    _sessionUserService = SessionUserService(_database!.rawDatabase);
+    // Best-effort: re-hydrate any persisted SessionUser from the previous
+    // app run. Idempotent — no-op when sdk_meta.session_user_json is null.
+    await _sessionUserService!.restoreFromDb();
 
     _initialized = true;
 
@@ -97,6 +119,63 @@ class FrappeSDK {
         await _initialMetaAndDataSync();
       }
     }
+  }
+
+  /// Runs the v1 → v2 offline-first data migration if it has not yet been
+  /// applied (`sdk_meta.schema_version < 2`).
+  ///
+  /// Returns `true` if the migration ran, `false` if it was already applied.
+  /// Throws [MigrationNeedsNetworkException] when the device is offline; the
+  /// caller is expected to display [MigrationBlockedScreen] until connectivity
+  /// returns and then retry.
+  ///
+  /// **WARNING — do not call until the new offline-first read/write engines
+  /// (P3 + P4) are wired.** This migration renames the legacy `documents`
+  /// table to `documents__archived_v1`. The current
+  /// [OfflineRepository] writes to `documents` via the legacy `DocumentDao`,
+  /// so any read/write through it will fail once the rename has happened.
+  /// Until P3 rewires `OfflineRepository` to the per-doctype tables, leave
+  /// this method uncalled. The SDK does NOT auto-invoke it from
+  /// [initialize].
+  ///
+  /// [isOnline] and [metaFetcher] are injection seams used by tests. In
+  /// production both default to real implementations (connectivity_plus and
+  /// the wired [MetaService]).
+  Future<bool> runV1ToV2MigrationIfNeeded({
+    Future<bool> Function()? isOnline,
+    Future<DocTypeMeta> Function(String doctype)? metaFetcher,
+  }) async {
+    if (!_initialized) await initialize();
+    final raw = _database!.rawDatabase;
+    final currentVersion = await _readSchemaVersion(raw);
+    if (currentVersion >= 2) return false;
+
+    final online = await (isOnline ?? _defaultIsOnline)();
+    if (!online) {
+      throw MigrationNeedsNetworkException();
+    }
+
+    final migration = V1ToV2Migration(
+      db: raw,
+      metaFetcher: metaFetcher ??
+          (doctype) async => _metaService!.getMeta(doctype),
+    );
+    return migration.run();
+  }
+
+  Future<bool> _defaultIsOnline() async {
+    final result = await Connectivity().checkConnectivity();
+    return result.contains(ConnectivityResult.mobile) ||
+        result.contains(ConnectivityResult.wifi) ||
+        result.contains(ConnectivityResult.ethernet);
+  }
+
+  Future<int> _readSchemaVersion(dynamic db) async {
+    final rows = await db.rawQuery(
+      'SELECT schema_version FROM sdk_meta WHERE id=1 LIMIT 1',
+    );
+    if (rows.isEmpty) return 2;
+    return (rows.first['schema_version'] as int?) ?? 0;
   }
 
   /// Login with username and password (stateless, returns user info)
@@ -237,6 +316,28 @@ class FrappeSDK {
     return _syncService!;
   }
 
+  /// Get the SessionUser service. Spec §6.6.
+  ///
+  /// The consumer wires login response → [SessionUser] via this service:
+  /// `FrappeSDK.instance.sessionUserService.set(SessionUser.fromJson(loginResponse))`
+  /// after a successful auth call. Logout flows call `.clear()` before
+  /// running [AtomicWipe.wipe] to drop the persisted JSON.
+  SessionUserService get sessionUserService {
+    if (!_initialized) {
+      throw Exception('SDK not initialized. Call initialize() first.');
+    }
+    return _sessionUserService!;
+  }
+
+  /// Convenience: current logged-in user, or null if no session has
+  /// been populated yet (e.g. fresh install before login).
+  SessionUser? get sessionUser => _sessionUserService?.current;
+
+  /// Convenience: stream of [SessionUser] changes — fires on `set()` and
+  /// `clear()`. Restored state from disk does NOT fire (use the synchronous
+  /// [sessionUser] getter for the initial read).
+  Stream<SessionUser?>? get sessionUser$ => _sessionUserService?.stream;
+
   /// Get Repository (for offline operations)
   OfflineRepository get repository {
     if (!_initialized) {
@@ -354,12 +455,24 @@ class FrappeSDK {
     }
 
     try {
-      final doctypes = await _metaService!.getMobileFormDoctypeNames();
-      for (final doctype in doctypes) {
+      // Pull data for entry-point (mobile form) doctypes AND every doctype
+      // they reach via Link / Table / Table MultiSelect — i.e. the
+      // dependency closure. Spec §3.2 + §5.1.
+      //
+      // Without this, Link pickers on offline forms have nothing to show
+      // (e.g. Household needs State / District / Block populated locally
+      // before the user can fill its address Link fields). Child-table
+      // doctypes are excluded — they ride along inside their parent's
+      // records and don't need their own pull.
+      final entryPoints = await _metaService!.getMobileFormDoctypeNames();
+      final closure = await _metaService!.closure(entryPoints);
+      final toPull = closure.doctypes
+          .where((d) => !closure.childDoctypes.contains(d))
+          .toList();
+      for (final doctype in toPull) {
         try {
           await _syncService!.pullSync(doctype: doctype);
         } catch (_) {
-          // continue with other doctypes
           continue;
         }
       }

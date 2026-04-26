@@ -24,6 +24,10 @@ class DocField {
   final bool inListView;
   final bool allowMultiple;
 
+  /// Frappe `search_index=1` flag — indicates the field should be indexed
+  /// for search. Used by the offline-first SDK's index policy.
+  final bool searchIndex;
+
   DocField({
     this.fieldname,
     required this.fieldtype,
@@ -46,6 +50,7 @@ class DocField {
     this.idx,
     this.inListView = false,
     this.allowMultiple = false,
+    this.searchIndex = false,
   });
 
   factory DocField.fromJson(Map<String, dynamic> json) {
@@ -106,6 +111,8 @@ class DocField {
           parseBool(json['allow_multiple']) ||
           parseBool(json['allowMultiple']) ||
           _isMultiSelectFieldType(json['fieldtype'] as String?),
+      searchIndex:
+          parseBool(json['search_index']) || parseBool(json['searchIndex']),
     );
   }
 
@@ -139,6 +146,7 @@ class DocField {
       if (idx != null) 'idx': idx,
       'in_list_view': inListView ? 1 : 0,
       'allow_multiple': allowMultiple ? 1 : 0,
+      'search_index': searchIndex ? 1 : 0,
     };
   }
 

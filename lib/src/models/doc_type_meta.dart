@@ -17,6 +17,17 @@ class DocTypeMeta {
   /// Default sort order: 'asc' or 'desc' (from Frappe sort_order)
   final String? sortOrder;
 
+  /// Comma-separated list of fieldnames used for search in list view
+  /// (from Frappe `search_fields`). May be null.
+  final List<String>? searchFields;
+
+  /// Frappe's naming rule. Examples:
+  /// - `field:mobile_uuid` (used by L1 idempotency — name = mobile_uuid)
+  /// - `naming_series:` (used with naming_series field)
+  /// - `Prompt`, `hash`, `format:...` etc.
+  /// Null when not configured. See spec §5.7.
+  final String? autoname;
+
   /// True if this doctype supports submit/cancel workflow (Frappe is_submittable)
   bool get isSubmittable {
     final v = metaData?['is_submittable'];
@@ -32,6 +43,8 @@ class DocTypeMeta {
     this.titleField,
     this.sortField,
     this.sortOrder,
+    this.searchFields,
+    this.autoname,
   });
 
   factory DocTypeMeta.fromJson(Map<String, dynamic> json) {
@@ -67,6 +80,17 @@ class DocTypeMeta {
     final sortField = json['sort_field'] as String?;
     final sortOrder = json['sort_order'] as String?;
 
+    final searchFieldsRaw = json['search_fields'] as String?;
+    final searchFields = searchFieldsRaw == null || searchFieldsRaw.isEmpty
+        ? null
+        : searchFieldsRaw
+              .split(',')
+              .map((s) => s.trim())
+              .where((s) => s.isNotEmpty)
+              .toList();
+
+    final autoname = json['autoname'] as String?;
+
     return DocTypeMeta(
       name: json['name'] as String? ?? json['doctype'] as String? ?? '',
       label: json['label'] as String?,
@@ -78,6 +102,8 @@ class DocTypeMeta {
       sortOrder: sortOrder?.toLowerCase() == 'desc'
           ? 'desc'
           : (sortOrder?.isNotEmpty == true ? 'asc' : null),
+      searchFields: searchFields,
+      autoname: autoname?.isNotEmpty == true ? autoname : null,
     );
   }
 
@@ -91,6 +117,9 @@ class DocTypeMeta {
       if (titleField != null) 'title_field': titleField,
       if (sortField != null) 'sort_field': sortField,
       if (sortOrder != null) 'sort_order': sortOrder,
+      if (searchFields != null && searchFields!.isNotEmpty)
+        'search_fields': searchFields!.join(','),
+      if (autoname != null) 'autoname': autoname,
     };
   }
 

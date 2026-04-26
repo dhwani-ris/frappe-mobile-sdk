@@ -6,6 +6,7 @@ import '../database/entities/link_option_entity.dart';
 import '../models/doc_field.dart';
 import '../models/doc_type_meta.dart';
 import '../models/link_filter_result.dart';
+import '../query/unified_resolver.dart';
 import '../utils/depends_on_evaluator.dart';
 import 'meta_service.dart';
 
@@ -221,5 +222,100 @@ class LinkOptionService {
     } catch (_) {
       return null;
     }
+  }
+
+  /// Offline-first variant of [getLinkOptions]. Routes the read through
+  /// a [UnifiedResolver] (Spec §6.1) so the dropdown is sourced from the
+  /// local `docs__<doctype>` table, with a background API refresh fired
+  /// when online.
+  ///
+  /// Returns the same `List<LinkOptionEntity>` shape as [getLinkOptions]
+  /// — drop-in replacement for callers that have already wired a
+  /// resolver. When the local store is empty (e.g. first launch before
+  /// initial sync), the result is empty; consumers that need API
+  /// fallback in that window should call [getLinkOptions] instead.
+  ///
+  /// [meta] is read via the resolver's `metaResolver` when omitted —
+  /// keeps this entry-point fully offline (no network) so dropdowns
+  /// keep responding when the device is air-gapped.
+  ///
+  /// [filters] accepts the Frappe 4-tuple form `[doctype, col, op, val]`
+  /// for parity with [getLinkOptions]; the doctype prefix is stripped
+  /// before forwarding to the resolver. [query] becomes a `LIKE %...%`
+  /// against the doctype's `title_field` (FilterParser routes through
+  /// the `__norm` companion when one exists for case-insensitive,
+  /// accent-insensitive search).
+  Future<List<LinkOptionEntity>> getLinkOptionsOffline({
+    required String doctype,
+    required UnifiedResolver resolver,
+    DocTypeMeta? meta,
+    List<List<dynamic>>? filters,
+    String? query,
+    int page = 0,
+    int pageSize = 5000,
+  }) async {
+    final resolved = meta ?? await resolver.metaResolver(doctype);
+    final titleField = resolved.titleField;
+
+    final threeTuples = <List>[];
+    if (filters != null) {
+      for (final f in filters) {
+        // Strip the doctype prefix from the 4-tuple form.
+        if (f.length == 4) {
+          threeTuples.add([f[1], f[2], f[3]]);
+        } else if (f.length == 3) {
+          threeTuples.add(List<dynamic>.from(f));
+        }
+      }
+    }
+    if (query != null && query.isNotEmpty && titleField != null) {
+      threeTuples.add([titleField, 'like', '%$query%']);
+    }
+
+    final result = await resolver.resolve(
+      doctype: doctype,
+      filters: threeTuples,
+      page: page,
+      pageSize: pageSize,
+    );
+
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final out = <LinkOptionEntity>[];
+    for (final row in result.rows) {
+      final name = (row['server_name'] as String?) ??
+          (row['mobile_uuid'] as String?) ??
+          '';
+      if (name.isEmpty) continue;
+      String? label;
+      if (titleField != null && row[titleField] != null) {
+        final s = row[titleField].toString().trim();
+        if (s.isNotEmpty) label = s;
+      }
+      for (final k in const [
+        'title',
+        'full_name',
+        'customer_name',
+        'supplier_name',
+        'label',
+      ]) {
+        if (label != null && label.isNotEmpty) break;
+        final v = row[k];
+        if (v != null) {
+          final s = v.toString().trim();
+          if (s.isNotEmpty) label = s;
+        }
+      }
+      label ??= name;
+      out.add(
+        LinkOptionEntity(
+          doctype: doctype,
+          name: name,
+          label: label,
+          dataJson: jsonEncode(row),
+          lastUpdated: now,
+        ),
+      );
+    }
+    return out;
   }
 }

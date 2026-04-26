@@ -6,12 +6,21 @@ import 'daos/document_dao.dart';
 import 'daos/link_option_dao.dart';
 import 'daos/auth_token_dao.dart';
 import 'daos/doctype_permission_dao.dart';
+import 'schema/system_tables.dart';
 
 class AppDatabase {
-  static const int _version = 2;
-  static Database? _database;
+  static const int _version = 3;
+
+  /// Singleton instance for the production (on-disk) database. The in-memory
+  /// factory does NOT touch this — each call returns an independent instance
+  /// for hermetic tests.
   static AppDatabase? _instance;
   static String? _databaseName;
+
+  /// Underlying sqflite handle. Held per-instance so both production and
+  /// in-memory test databases work identically through [database] /
+  /// [rawDatabase] / DAOs.
+  final Database _db;
 
   final DoctypeMetaDao doctypeMetaDao;
   final DocumentDao documentDao;
@@ -20,7 +29,8 @@ class AppDatabase {
   final DoctypePermissionDao doctypePermissionDao;
 
   AppDatabase._(Database database)
-    : doctypeMetaDao = DoctypeMetaDao(database),
+    : _db = database,
+      doctypeMetaDao = DoctypeMetaDao(database),
       documentDao = DocumentDao(database),
       linkOptionDao = LinkOptionDao(database),
       authTokenDao = AuthTokenDao(database),
@@ -40,12 +50,10 @@ class AppDatabase {
 
     try {
       final packageInfo = await PackageInfo.fromPlatform();
-      // Use appName, fallback to packageName if appName is empty
       final appName = packageInfo.appName.isNotEmpty
           ? packageInfo.appName
           : packageInfo.packageName;
 
-      // If both are empty or invalid, use fallback
       if (appName.isEmpty || appName.trim().isEmpty) {
         _databaseName = 'frappe_mobile_sdk.db';
         return _databaseName!;
@@ -53,7 +61,6 @@ class AppDatabase {
 
       final sanitized = _sanitizeName(appName);
 
-      // If sanitization resulted in empty string, use fallback
       if (sanitized.isEmpty) {
         _databaseName = 'frappe_mobile_sdk.db';
         return _databaseName!;
@@ -62,7 +69,6 @@ class AppDatabase {
       _databaseName = '${sanitized}_frappe.db';
       return _databaseName!;
     } catch (e) {
-      // Fallback to default name if package_info fails (e.g., in CI/test environments)
       _databaseName = 'frappe_mobile_sdk.db';
       return _databaseName!;
     }
@@ -76,24 +82,21 @@ class AppDatabase {
         .replaceAll(RegExp(r'^_|_$'), '');
   }
 
-  /// Get database instance (singleton)
+  /// Get database instance (singleton).
   static Future<AppDatabase> getInstance({String? appName}) async {
     if (_instance != null) return _instance!;
 
-    if (_database == null) {
-      final documentsDirectory = await getDatabasesPath();
-      final dbName = await _getDatabaseName(appNameOverride: appName);
-      final path = join(documentsDirectory, dbName);
-      _database = await openDatabase(
-        path,
-        version: _version,
-        onCreate: _onCreate,
-        onConfigure: _onConfigure,
-        onUpgrade: _onUpgrade,
-      );
-    }
-
-    _instance = AppDatabase._(_database!);
+    final documentsDirectory = await getDatabasesPath();
+    final dbName = await _getDatabaseName(appNameOverride: appName);
+    final path = join(documentsDirectory, dbName);
+    final db = await openDatabase(
+      path,
+      version: _version,
+      onCreate: _onCreate,
+      onConfigure: _onConfigure,
+      onUpgrade: _onUpgrade,
+    );
+    _instance = AppDatabase._(db);
     return _instance!;
   }
 
@@ -121,6 +124,14 @@ class AppDatabase {
       await db.execute('ALTER TABLE doctype_meta ADD COLUMN groupName TEXT');
       await db.execute('ALTER TABLE doctype_meta ADD COLUMN sortOrder INTEGER');
     }
+    if (oldVersion < 3) {
+      for (final stmt in systemTablesDDL()) {
+        await db.execute(stmt);
+      }
+      for (final stmt in doctypeMetaExtensionsDDL()) {
+        await db.execute(stmt);
+      }
+    }
   }
 
   /// Configure database (enable foreign keys)
@@ -130,7 +141,8 @@ class AppDatabase {
 
   /// Create database tables
   static Future<void> _onCreate(Database db, int version) async {
-    // Documents table
+    // Documents table (legacy v1; preserved for migration to read from
+    // and for backward compatibility during the rollout window)
     await db.execute('''
       CREATE TABLE documents (
         localId TEXT PRIMARY KEY,
@@ -142,7 +154,6 @@ class AppDatabase {
       )
     ''');
 
-    // Indexes for documents table
     await db.execute(
       'CREATE INDEX idx_documents_doctype ON documents(doctype)',
     );
@@ -151,7 +162,7 @@ class AppDatabase {
       'CREATE INDEX idx_documents_modified ON documents(modified)',
     );
 
-    // DocType metadata table
+    // DocType metadata table — base shape (legacy + groupName/sortOrder)
     await db.execute('''
       CREATE TABLE doctype_meta (
         doctype TEXT PRIMARY KEY,
@@ -164,10 +175,14 @@ class AppDatabase {
       )
     ''');
 
-    // Index for doctype_meta table
     await db.execute(
       'CREATE INDEX idx_doctype_meta_isMobileForm ON doctype_meta(isMobileForm)',
     );
+
+    // Apply v3 doctype_meta extensions on a fresh install.
+    for (final stmt in doctypeMetaExtensionsDDL()) {
+      await db.execute(stmt);
+    }
 
     // Link options table
     await db.execute('''
@@ -181,7 +196,6 @@ class AppDatabase {
       )
     ''');
 
-    // Indexes for link_options table
     await db.execute(
       'CREATE INDEX idx_link_options_doctype ON link_options(doctype)',
     );
@@ -202,6 +216,11 @@ class AppDatabase {
     ''');
 
     await _createDoctypePermissionTable(db);
+
+    // P1 v3: SDK system tables (outbox, pending_attachments, sdk_meta)
+    for (final stmt in systemTablesDDL()) {
+      await db.execute(stmt);
+    }
   }
 
   static Future<void> _createDoctypePermissionTable(Database db) async {
@@ -220,13 +239,18 @@ class AppDatabase {
   }
 
   /// Get the underlying database instance (for advanced operations if needed)
-  Database get database => _database!;
+  Database get database => _db;
 
-  /// Close the database
+  /// Alias for [database] used by SDK-internal code (P1 offline-first).
+  Database get rawDatabase => _db;
+
+  /// Close the database. If this instance is the production singleton, also
+  /// clear the static slot so a subsequent [getInstance] reopens cleanly.
   Future<void> close() async {
-    await _database?.close();
-    _database = null;
-    _instance = null;
+    await _db.close();
+    if (identical(this, _instance)) {
+      _instance = null;
+    }
   }
 
   /// Clear all data from all tables. Call on logout to wipe local DB.

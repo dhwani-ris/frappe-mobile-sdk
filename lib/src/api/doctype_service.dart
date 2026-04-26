@@ -22,6 +22,32 @@ class DoctypeService {
     return response as Map<String, dynamic>;
   }
 
+  /// Fetches just the `modified` timestamp of a DocType meta. Used by the
+  /// offline-first watermark check (spec §4.9). Avoids the full meta payload.
+  /// Returns null if the request fails or the DocType has no recorded
+  /// modified timestamp on the server.
+  Future<String?> getDocTypeWatermark(String doctype) async {
+    try {
+      final response = await _restHelper.get(
+        '/api/method/frappe.client.get_value',
+        queryParams: {
+          'doctype': 'DocType',
+          'filters': jsonEncode({'name': doctype}),
+          'fieldname': jsonEncode(['modified']),
+        },
+      );
+      if (response is Map<String, dynamic>) {
+        final message = response['message'];
+        if (message is Map && message['modified'] != null) {
+          return message['modified'].toString();
+        }
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<List<dynamic>> list(
     String doctype, {
     List<String>? fields,
@@ -92,5 +118,47 @@ class DoctypeService {
       return response['data'] as Map<String, dynamic>;
     }
     return response as Map<String, dynamic>;
+  }
+
+  /// Pages through `frappe.client.get_list` for names, then batch-fetches
+  /// each full document via `/api/resource/{doctype}/{name}`. Used by the
+  /// pull engine for parents that declare child tables, since
+  /// `get_list` returns flat parent rows only — child arrays are missing.
+  ///
+  /// Caller is responsible for paginating across the full result set; one
+  /// call returns at most [limitPageLength] full docs starting at
+  /// [limitStart].
+  Future<List<Map<String, dynamic>>> listFullDocs(
+    String doctype, {
+    List<List<dynamic>>? filters,
+    int limitStart = 0,
+    int limitPageLength = 1000,
+    String? orderBy,
+  }) async {
+    final nameList = await list(
+      doctype,
+      fields: ['name'],
+      filters: filters,
+      limitStart: limitStart,
+      limitPageLength: limitPageLength,
+      orderBy: orderBy,
+    );
+    if (nameList.isEmpty) return [];
+
+    final docs = <Map<String, dynamic>>[];
+    const batchSize = 50;
+    for (var i = 0; i < nameList.length; i += batchSize) {
+      final batch = nameList.skip(i).take(batchSize);
+      final futures = batch.map((n) {
+        final name = n is Map<String, dynamic>
+            ? n['name']?.toString() ?? ''
+            : '';
+        if (name.isEmpty) return Future.value(<String, dynamic>{});
+        return getByName(doctype, name);
+      });
+      final results = await Future.wait(futures);
+      docs.addAll(results.where((d) => d.isNotEmpty));
+    }
+    return docs;
   }
 }
