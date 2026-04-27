@@ -80,8 +80,20 @@ class UnifiedResolver {
     final tableName = await metaDao.getTableName(doctype) ??
         normalizeDoctypeTableName(doctype);
 
-    final effectiveFilters = <List>[...filters];
-    if (!includeFailed) {
+    // For child tables, Frappe link_filters reference Frappe's virtual
+    // `parent` field (server_name of parent). The local schema stores
+    // the parent's mobile_uuid in `parent_uuid` instead. Translate
+    // before handing off to FilterParser so the column whitelist check
+    // passes and the lookup finds both offline and synced child rows.
+    final effectiveFilters = meta.isTable
+        ? await _translateParentFilters(filters, tableName)
+        : <List>[...filters];
+    final effectiveOrFilters = meta.isTable
+        ? await _translateParentFilters(orFilters, tableName)
+        : <List>[...orFilters];
+
+    // Child tables (isTable=true) have no sync_status column — skip.
+    if (!includeFailed && !meta.isTable) {
       effectiveFilters.add([
         'sync_status',
         'not in',
@@ -93,7 +105,7 @@ class UnifiedResolver {
       meta: meta,
       tableName: tableName,
       filters: effectiveFilters,
-      orFilters: orFilters,
+      orFilters: effectiveOrFilters,
       orderBy: orderBy,
       page: page,
       pageSize: pageSize,
@@ -168,6 +180,75 @@ class UnifiedResolver {
         _inflightBg.remove(key);
       }
     });
+  }
+
+  /// Translates Frappe's virtual `parent` column references into
+  /// `parent_uuid` lookups for child-table queries.
+  ///
+  /// Frappe link_filters use `parent` (the server_name of the parent row),
+  /// but the local child schema stores the parent's mobile_uuid in
+  /// `parent_uuid`. For offline records the Link picker returns mobile_uuid
+  /// as the selected value, so a direct `parent_uuid = <value>` match is
+  /// tried first. For synced parents the server_name is looked up in every
+  /// distinct parent-doctype table to find the corresponding mobile_uuid.
+  Future<List<List>> _translateParentFilters(
+    List<List> filters,
+    String childTableName,
+  ) async {
+    final result = <List>[];
+    for (final f in filters) {
+      if (f.length == 3 && f[0] == 'parent') {
+        final op = (f[1] as String).toLowerCase().trim();
+        final value = f[2]?.toString() ?? '';
+        if (op == '=' && value.isNotEmpty) {
+          final resolved =
+              await _resolveParentUuid(childTableName, value) ?? value;
+          result.add(['parent_uuid', '=', resolved]);
+        } else {
+          // For operators other than '=', map column name only.
+          result.add(['parent_uuid', f[1], f[2]]);
+        }
+      } else {
+        result.add(List.from(f));
+      }
+    }
+    return result;
+  }
+
+  /// Returns the `parent_uuid` that corresponds to [value] in [childTable].
+  ///
+  /// Strategy:
+  /// 1. Direct match — value is already a mobile_uuid stored in parent_uuid.
+  /// 2. For each distinct parent_doctype in the child table, look up the
+  ///    parent's mobile_uuid via server_name = [value].
+  Future<String?> _resolveParentUuid(
+    String childTable,
+    String value,
+  ) async {
+    // 1. Direct match (offline case: value IS the mobile_uuid).
+    final direct = await db.rawQuery(
+      'SELECT 1 FROM $childTable WHERE parent_uuid = ? LIMIT 1',
+      [value],
+    );
+    if (direct.isNotEmpty) return value;
+
+    // 2. Resolve server_name → mobile_uuid via each distinct parent doctype.
+    final parentDoctypeRows = await db.rawQuery(
+      'SELECT DISTINCT parent_doctype FROM $childTable WHERE parent_doctype IS NOT NULL',
+    );
+    for (final pdRow in parentDoctypeRows) {
+      final parentDoctype = pdRow['parent_doctype'] as String?;
+      if (parentDoctype == null || parentDoctype.isEmpty) continue;
+      final parentTable = normalizeDoctypeTableName(parentDoctype);
+      final parentRows = await db.rawQuery(
+        'SELECT mobile_uuid FROM $parentTable WHERE server_name = ? LIMIT 1',
+        [value],
+      );
+      if (parentRows.isNotEmpty) {
+        return parentRows.first['mobile_uuid'] as String?;
+      }
+    }
+    return null;
   }
 
   String _requestKey(

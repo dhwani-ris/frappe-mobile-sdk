@@ -645,7 +645,7 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
       _formKey.currentState?.patchValue(_normalizePatchValues(updates));
 
       // Chain: if a patched field is itself a Link, trigger its dependents too.
-      // e.g. learner_name → household_survey (Link) → religion, category
+      // e.g. picking a parent Link cascades to the child's own Link fields.
       for (final entry in updates.entries) {
         if (entry.value == null || entry.value.toString().trim().isEmpty) {
           continue;

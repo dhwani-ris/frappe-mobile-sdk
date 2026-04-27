@@ -102,7 +102,7 @@ class PullApply {
 
       final existing = await txn.query(
         parentTable,
-        columns: ['mobile_uuid', 'sync_status'],
+        columns: ['mobile_uuid', 'sync_status', 'modified'],
         where: 'server_name = ?',
         whereArgs: [serverName],
         limit: 1,
@@ -111,15 +111,31 @@ class PullApply {
       if (existing.isNotEmpty &&
           const ['dirty', 'failed', 'conflict']
               .contains(existing.first['sync_status'])) {
-        await txn.update(
-          parentTable,
-          <String, Object?>{
-            'sync_status': 'conflict',
-            'sync_error': 'server_modified=${r['modified'] ?? ''}',
-          },
-          where: 'mobile_uuid = ?',
-          whereArgs: [existing.first['mobile_uuid']],
+        // Spec §5.1 requires "server has advanced" before flagging a
+        // conflict. Cursor filtering normally guarantees this, but
+        // defending here prevents spurious conflicts on initial sync,
+        // cursor reset, and look-ahead pages where a row may resurface
+        // with the same `modified` we already hold.
+        final storedModified = DateTime.tryParse(
+          (existing.first['modified'] as String?) ?? '',
         );
+        final incomingModified = DateTime.tryParse(
+          (r['modified'] as String?) ?? '',
+        );
+        final serverAdvanced = incomingModified != null &&
+            (storedModified == null ||
+                incomingModified.isAfter(storedModified));
+        if (serverAdvanced) {
+          await txn.update(
+            parentTable,
+            <String, Object?>{
+              'sync_status': 'conflict',
+              'sync_error': 'server_modified=${r['modified'] ?? ''}',
+            },
+            where: 'mobile_uuid = ?',
+            whereArgs: [existing.first['mobile_uuid']],
+          );
+        }
         continue;
       }
 

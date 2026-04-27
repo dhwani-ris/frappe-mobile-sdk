@@ -191,11 +191,15 @@ class RestHelper {
           }
         }
         rethrow;
-      } on SocketException {
+      } on SocketException catch (e) {
         if (method == 'GET' && attempts < 2) {
           attempts++;
           await Future.delayed(Duration(milliseconds: 500 * (1 << attempts)));
           continue;
+        }
+        final msg = e.message.toLowerCase();
+        if (msg.contains('refused') || msg.contains('unreachable')) {
+          throw NetworkException('Cannot reach server. Check your Wi-Fi connection.');
         }
         throw NetworkException('No internet connection');
       } catch (e) {

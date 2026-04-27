@@ -9,10 +9,12 @@ import '../database/table_name.dart';
 import '../models/doc_type_meta.dart';
 import '../models/document.dart';
 import '../sync/pull_apply.dart';
+import 'local_writer.dart';
 
 /// Repository for offline document operations
 class OfflineRepository {
   final AppDatabase _database;
+  final LocalWriter? _localWriter;
   final Uuid _uuid = const Uuid();
 
   /// Cache: doctype → parsed meta. Avoids re-decoding `metaJson` on every
@@ -30,7 +32,12 @@ class OfflineRepository {
   /// in a pulled parent doc end up in their own `docs__<child>` table.
   final Map<String, Map<String, PullApplyChildInfo>> _childMetasByParent = {};
 
-  OfflineRepository(this._database);
+  /// [localWriter] — when provided, every save also mirrors the parent +
+  /// child rows into the per-doctype `docs__<doctype>` tables so the
+  /// offline read path ([UnifiedResolver]) sees newly-saved data
+  /// immediately. Spec §3.2.
+  OfflineRepository(this._database, {LocalWriter? localWriter})
+      : _localWriter = localWriter;
 
   /// Drops the in-memory meta cache. Call this after a meta refresh so
   /// schema-bumping fields (new column, dropped Link) take effect on the
@@ -119,15 +126,30 @@ class OfflineRepository {
     required String doctype,
     required Map<String, dynamic> data,
   }) async {
-    final localId = _uuid.v4();
+    final rawUuid = data['mobile_uuid'] as String?;
+    final mobileUuid =
+        (rawUuid != null && rawUuid.isNotEmpty) ? rawUuid : _uuid.v4();
+    final dataWithUuid = <String, dynamic>{...data, 'mobile_uuid': mobileUuid};
     final document = Document.create(
       doctype: doctype,
-      data: data,
-      localId: localId,
+      data: dataWithUuid,
+      localId: mobileUuid,
     );
 
     final entity = _documentToEntity(document);
     await _database.documentDao.insertDocument(entity);
+
+    // Mirror to per-doctype tables (parent + split Table children) so the
+    // offline read path sees the new doc immediately. Best-effort: legacy
+    // `documents` row above is the source of truth for push.
+    if (_localWriter != null) {
+      try {
+        await _localWriter.writeParent(
+          parentDoctype: doctype,
+          data: dataWithUuid,
+        );
+      } catch (_) {}
+    }
 
     return document;
   }
@@ -148,6 +170,31 @@ class OfflineRepository {
       doctype,
     );
     return entity != null ? _entityToDocument(entity) : null;
+  }
+
+  /// Fetches a single row from the per-doctype `docs__<doctype>` table
+  /// by either `server_name` or `mobile_uuid`. Returns the raw column map
+  /// (field names as keys) or null if the table doesn't exist or no row
+  /// matches. Used by fetch_from to resolve linked documents offline.
+  Future<Map<String, dynamic>?> getRowFromPerDoctypeTable(
+    String doctype,
+    String nameOrUuid,
+  ) async {
+    final tableName = normalizeDoctypeTableName(doctype);
+    final db = _database.rawDatabase;
+    final tableCheck = await db.rawQuery(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+      [tableName],
+    );
+    if (tableCheck.isEmpty) return null;
+    final rows = await db.query(
+      tableName,
+      where: 'server_name = ? OR mobile_uuid = ?',
+      whereArgs: [nameOrUuid, nameOrUuid],
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    return Map<String, dynamic>.from(rows.first);
   }
 
   /// Get all documents for a DocType (excluding deleted)
@@ -197,6 +244,17 @@ class OfflineRepository {
 
     final updated = document.updateData(data);
     await updateDocument(updated);
+
+    if (_localWriter != null) {
+      try {
+        await _localWriter.writeParent(
+          parentDoctype: updated.doctype,
+          data: {'mobile_uuid': updated.localId, ...data},
+          serverName: updated.serverId,
+        );
+      } catch (_) {}
+    }
+
     return updated;
   }
 
@@ -245,6 +303,26 @@ class OfflineRepository {
       );
       final entity = _documentToEntity(document);
       await _database.documentDao.insertDocument(entity);
+    }
+
+    // If this server-confirm is the writeback for a row that was
+    // originally created offline, the per-doctype table already has
+    // a `mobile_uuid=<X>, server_name=null, sync_status='dirty'` row.
+    // Promote it to `server_name=<serverId>, sync_status='synced'`
+    // BEFORE the meta-driven mirror below — otherwise `_writeToPerDoctypeTable`
+    // looks the row up by `server_name`, finds nothing, and inserts a
+    // duplicate alongside the offline row. Spec §3.2.
+    final priorMobileUuid = data['mobile_uuid'] as String?;
+    if (_localWriter != null &&
+        priorMobileUuid != null &&
+        priorMobileUuid.isNotEmpty) {
+      try {
+        await _localWriter.markSynced(
+          parentDoctype: doctype,
+          mobileUuid: priorMobileUuid,
+          serverName: serverId,
+        );
+      } catch (_) {}
     }
 
     // Mirror the row into the per-doctype `docs__<doctype>` table so
@@ -382,6 +460,87 @@ class OfflineRepository {
       }
     }
     _ensuredTables.add(tableName);
+  }
+
+  /// Updates `server_name` in per-doctype tables after a successful push.
+  ///
+  /// [mobileUuid] is the parent's `mobile_uuid` / `localId`.
+  /// [serverName] is the server-assigned `name` for the parent row.
+  /// [serverData] is the full Frappe document returned by the server,
+  /// including child table arrays with server-assigned `name` per row.
+  Future<void> markPushed({
+    required String doctype,
+    required String mobileUuid,
+    required String serverName,
+    required Map<String, dynamic> serverData,
+  }) async {
+    if (_localWriter == null) return;
+
+    // 1. Parent per-doctype table.
+    try {
+      await _localWriter.markSynced(
+        parentDoctype: doctype,
+        mobileUuid: mobileUuid,
+        serverName: serverName,
+      );
+    } catch (_) {}
+
+    // 2. Child per-doctype tables.
+    final meta = await _loadMeta(doctype);
+    if (meta == null) return;
+    final db = _database.rawDatabase;
+
+    for (final field in meta.fields) {
+      final fname = field.fieldname;
+      final ftype = field.fieldtype;
+      if (fname == null) continue;
+      if (ftype != 'Table' && ftype != 'Table MultiSelect') continue;
+      final childDoctype = field.options;
+      if (childDoctype == null || childDoctype.isEmpty) continue;
+
+      final serverList = serverData[fname];
+      if (serverList is! List || serverList.isEmpty) continue;
+
+      final childTable = normalizeDoctypeTableName(childDoctype);
+      final tableCheck = await db.rawQuery(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+        [childTable],
+      );
+      if (tableCheck.isEmpty) continue;
+
+      for (var idx = 0; idx < serverList.length; idx++) {
+        final serverRow = serverList[idx];
+        if (serverRow is! Map) continue;
+        final childServerName = serverRow['name']?.toString();
+        if (childServerName == null || childServerName.isEmpty) continue;
+
+        // Try by mobile_uuid first (server echoes it when mobile_control is active).
+        final childMobileUuid = serverRow['mobile_uuid']?.toString();
+        bool updated = false;
+        if (childMobileUuid != null && childMobileUuid.isNotEmpty) {
+          try {
+            final count = await db.update(
+              childTable,
+              {'server_name': childServerName},
+              where: 'mobile_uuid = ?',
+              whereArgs: [childMobileUuid],
+            );
+            updated = count > 0;
+          } catch (_) {}
+        }
+        // Fallback: match by parent_uuid + parentfield + idx.
+        if (!updated) {
+          try {
+            await db.update(
+              childTable,
+              {'server_name': childServerName},
+              where: 'parent_uuid = ? AND parentfield = ? AND idx = ?',
+              whereArgs: [mobileUuid, fname, idx],
+            );
+          } catch (_) {}
+        }
+      }
+    }
   }
 
   /// Convert Document to Entity

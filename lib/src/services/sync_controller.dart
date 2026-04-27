@@ -47,16 +47,20 @@ class SyncController {
 
   /// Pull then push. Used by `Sync now` button + connectivity-restore
   /// hooks. Caller can run the two phases independently if it has its
-  /// own scheduling.
+  /// own scheduling. No-ops while paused.
   Future<void> syncNow() async {
+    if (notifier.value.isPaused) return;
     await runPull();
     await runPush();
   }
 
+  /// Prevents [syncNow] from starting new pull/push cycles. In-flight
+  /// operations already running via [runPull]/[runPush] are not interrupted.
   Future<void> pause() async {
     notifier.value = notifier.value.copyWith(isPaused: true);
   }
 
+  /// Re-enables [syncNow] after a [pause].
   Future<void> resume() async {
     notifier.value = notifier.value.copyWith(isPaused: false);
   }
@@ -126,6 +130,18 @@ class SyncController {
       await outboxDao.resetToPending(outboxId);
       await runPush();
     }
+  }
+
+  /// Confirms the cascade plan produced by [previewDeleteCascade] and
+  /// resets the root row to pending so the push engine retries the
+  /// delete on the next drain. No-op if the row is not in
+  /// `failed(LINK_EXISTS)`.
+  Future<void> acceptDeleteCascade(int outboxId) async {
+    final row = await outboxDao.findById(outboxId);
+    if (row == null) return;
+    if (row.errorCode != ErrorCode.LINK_EXISTS) return;
+    await outboxDao.resetToPending(outboxId);
+    await runPush();
   }
 
   /// Parses the structured `LinkExistsError` payload stored in

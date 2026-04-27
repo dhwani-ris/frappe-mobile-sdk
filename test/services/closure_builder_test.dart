@@ -111,32 +111,32 @@ void main() {
     });
 
     test('shared target appears once + meta fetched once', () async {
-      // Three entry points all link to State. The closure must list
-      // State exactly once and fetch its meta exactly once — so the
-      // initial-sync caller pulls State once, not three times.
+      // Three entry points all link to Customer. The closure must list
+      // Customer exactly once and fetch its meta exactly once — so the
+      // initial-sync caller pulls Customer once, not three times.
       final cat = {
-        'Household': DocTypeMeta(name: 'Household',
-            fields: [f('state', 'Link', options: 'State')]),
-        'Volunteer': DocTypeMeta(name: 'Volunteer',
-            fields: [f('state', 'Link', options: 'State')]),
-        'Survey': DocTypeMeta(name: 'Survey',
-            fields: [f('state', 'Link', options: 'State')]),
-        'State': DocTypeMeta(name: 'State', fields: const []),
+        'Order': DocTypeMeta(name: 'Order',
+            fields: [f('customer', 'Link', options: 'Customer')]),
+        'Quote': DocTypeMeta(name: 'Quote',
+            fields: [f('customer', 'Link', options: 'Customer')]),
+        'Invoice': DocTypeMeta(name: 'Invoice',
+            fields: [f('customer', 'Link', options: 'Customer')]),
+        'Customer': DocTypeMeta(name: 'Customer', fields: const []),
       };
       final fetchCount = <String, int>{};
       final result = await ClosureBuilder.build(
-        entryPoints: const ['Household', 'Volunteer', 'Survey'],
+        entryPoints: const ['Order', 'Quote', 'Invoice'],
         metaFetcher: (dt) async {
           fetchCount[dt] = (fetchCount[dt] ?? 0) + 1;
           return cat[dt]!;
         },
       );
-      expect(result.doctypes.where((d) => d == 'State').length, 1,
-          reason: 'State must appear exactly once in the closure');
-      expect(fetchCount['State'], 1,
+      expect(result.doctypes.where((d) => d == 'Customer').length, 1,
+          reason: 'Customer must appear exactly once in the closure');
+      expect(fetchCount['Customer'], 1,
           reason: 'meta for shared target fetched exactly once');
       expect(result.doctypes.toSet(),
-          {'Household', 'Volunteer', 'Survey', 'State'});
+          {'Order', 'Quote', 'Invoice', 'Customer'});
     });
 
     test('is_child_table reflects meta.istable', () async {

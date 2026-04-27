@@ -3,9 +3,12 @@
 // Returned as raw DDL string lists; AppDatabase executes them in its
 // onCreate / onUpgrade handlers inside a transaction.
 
+// `IF NOT EXISTS` / `OR IGNORE` make this DDL idempotent so it can be
+// safely re-run by `_onUpgrade` after a partial migration failure
+// without raising `table already exists` / `UNIQUE constraint failed`.
 List<String> systemTablesDDL() => <String>[
       '''
-      CREATE TABLE outbox (
+      CREATE TABLE IF NOT EXISTS outbox (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         doctype TEXT NOT NULL,
         mobile_uuid TEXT NOT NULL,
@@ -20,10 +23,10 @@ List<String> systemTablesDDL() => <String>[
         created_at INTEGER NOT NULL
       )
       ''',
-      'CREATE INDEX ix_outbox_state ON outbox(state, created_at)',
-      'CREATE INDEX ix_outbox_uuid ON outbox(mobile_uuid)',
+      'CREATE INDEX IF NOT EXISTS ix_outbox_state ON outbox(state, created_at)',
+      'CREATE INDEX IF NOT EXISTS ix_outbox_uuid ON outbox(mobile_uuid)',
       '''
-      CREATE TABLE pending_attachments (
+      CREATE TABLE IF NOT EXISTS pending_attachments (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         parent_uuid TEXT NOT NULL,
         parent_doctype TEXT NOT NULL,
@@ -42,17 +45,17 @@ List<String> systemTablesDDL() => <String>[
         created_at INTEGER NOT NULL
       )
       ''',
-      'CREATE INDEX ix_attach_state ON pending_attachments(state)',
-      'CREATE INDEX ix_attach_parent ON pending_attachments(parent_uuid, parent_fieldname)',
+      'CREATE INDEX IF NOT EXISTS ix_attach_state ON pending_attachments(state)',
+      'CREATE INDEX IF NOT EXISTS ix_attach_parent ON pending_attachments(parent_uuid, parent_fieldname)',
       '''
-      CREATE TABLE sdk_meta (
+      CREATE TABLE IF NOT EXISTS sdk_meta (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         schema_version INTEGER NOT NULL DEFAULT 0,
         session_user_json TEXT,
         bootstrap_done INTEGER NOT NULL DEFAULT 0
       )
       ''',
-      'INSERT INTO sdk_meta (id, schema_version) VALUES (1, 0)',
+      'INSERT OR IGNORE INTO sdk_meta (id, schema_version) VALUES (1, 0)',
     ];
 
 /// ALTER statements to add the new columns to a pre-existing

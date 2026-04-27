@@ -6,10 +6,13 @@ import 'package:flutter/foundation.dart';
 
 import '../api/client.dart';
 import '../database/app_database.dart';
+import '../database/daos/doctype_meta_dao.dart';
 import '../database/migrations/v1_to_v2.dart';
 import '../models/doc_type_meta.dart';
 import '../models/session_user.dart';
+import '../query/unified_resolver.dart';
 import '../services/auth_service.dart';
+import '../services/local_writer.dart';
 import '../services/meta_service.dart';
 import '../services/permission_service.dart';
 import '../services/session_user_service.dart';
@@ -47,6 +50,12 @@ class FrappeSDK {
 
   bool _initialized = false;
 
+  /// Cached synchronous online state — updated lazily via [_defaultIsOnline].
+  /// Conservative default (false) means the resolver starts in offline-only
+  /// mode and switches to background-refresh mode once the first connectivity
+  /// check resolves.
+  bool _cachedOnline = false;
+
   FrappeSDK({required this.baseUrl, this.databaseAppName});
 
   /// Test-only constructor: accepts a pre-built [AppDatabase] (e.g. in-memory).
@@ -64,8 +73,11 @@ class FrappeSDK {
     // (e.g. getOrCreateMobileUuid, restoreSession) won't throw "not
     // initialized" if called from any production code path under test.
     _authService = AuthService.forTesting(_client!, database: database);
-    _repository = OfflineRepository(_database!);
     _metaService = MetaService(_client!, _database!);
+    final testMetaService = _metaService!;
+    final testMetaFn = (String dt) => testMetaService.getMeta(dt);
+    final testLocalWriter = LocalWriter(database.rawDatabase, testMetaFn);
+    _repository = OfflineRepository(_database!, localWriter: testLocalWriter);
     _permissionService = PermissionService(_client!, _database!);
     _translationService = TranslationService(_client!);
     _syncService = SyncService(
@@ -74,7 +86,14 @@ class FrappeSDK {
       _database!,
       getMobileUuid: () async => 'test-uuid',
     );
-    _linkOptionService = LinkOptionService(_client!);
+    final testResolver = UnifiedResolver(
+      db: database.rawDatabase,
+      metaDao: DoctypeMetaDao(database.rawDatabase),
+      isOnline: () => false,
+      backgroundFetch: (_, __) async {},
+      metaResolver: testMetaFn,
+    );
+    _linkOptionService = LinkOptionService(testResolver, testMetaFn);
     _sessionUserService = SessionUserService(_database!.rawDatabase);
     _initialized = true;
   }
@@ -95,8 +114,12 @@ class FrappeSDK {
     // meta/sync/link-options calls always carry the Bearer token / API key.
     _client = _authService!.client;
 
-    _repository = OfflineRepository(_database!);
     _metaService = MetaService(_client!, _database!);
+    final rawDb = _database!.rawDatabase;
+    final metaSvc = _metaService!;
+    final metaFn = (String dt) => metaSvc.getMeta(dt);
+    final localWriter = LocalWriter(rawDb, metaFn);
+    _repository = OfflineRepository(_database!, localWriter: localWriter);
     _permissionService = PermissionService(_client!, _database!);
     _translationService = TranslationService(_client!);
     _syncService = SyncService(
@@ -105,7 +128,24 @@ class FrappeSDK {
       _database!,
       getMobileUuid: () => _authService!.getOrCreateMobileUuid(),
     );
-    _linkOptionService = LinkOptionService(_client!);
+    // Build UnifiedResolver — single read path for all offline queries.
+    // Probe connectivity once here; downstream callers (resolver,
+    // _initialMetaAndDataSync) read `_cachedOnline` instead of probing
+    // again, keeping launch to a single platform-channel round-trip.
+    _cachedOnline = await _defaultIsOnline();
+    final syncSvc = _syncService!;
+    final resolver = UnifiedResolver(
+      db: rawDb,
+      metaDao: DoctypeMetaDao(rawDb),
+      isOnline: () => _cachedOnline,
+      backgroundFetch: (doctype, _) async {
+        try {
+          await syncSvc.pullSync(doctype: doctype);
+        } catch (_) {}
+      },
+      metaResolver: metaFn,
+    );
+    _linkOptionService = LinkOptionService(resolver, metaFn);
     _sessionUserService = SessionUserService(_database!.rawDatabase);
     // Best-effort: re-hydrate any persisted SessionUser from the previous
     // app run. Idempotent — no-op when sdk_meta.session_user_json is null.
@@ -187,6 +227,7 @@ class FrappeSDK {
     if (lang != null && lang.isNotEmpty) {
       await _translationService?.setLocale(lang);
     }
+    _setSessionUserFromLoginResponse(response);
     return response;
   }
 
@@ -205,6 +246,7 @@ class FrappeSDK {
     if (lang != null && lang.isNotEmpty) {
       await _translationService?.setLocale(lang);
     }
+    _setSessionUserFromLoginResponse(response);
     return response;
   }
 
@@ -420,6 +462,41 @@ class FrappeSDK {
     if (lang != null && lang.isNotEmpty) {
       await _translationService?.setLocale(lang);
     }
+    // mobile_auth.me returns a Frappe user document — 'name' is the user email.
+    final name = userInfo['name'] as String?;
+    if (name != null && name.isNotEmpty) {
+      await _sessionUserService?.set(SessionUser(
+        name: name,
+        fullName: userInfo['full_name'] as String?,
+        userImage: userInfo['user_image'] as String?,
+        roles: ((userInfo['roles'] as List?) ?? [])
+            .map((r) => r.toString())
+            .where((r) => r.isNotEmpty)
+            .toList(),
+        userDefaults: ((userInfo['user_defaults'] as Map?) ?? {})
+            .map((k, v) => MapEntry(k.toString(), v.toString())),
+        permissions: {},
+        extras: {},
+      ));
+    }
+  }
+
+  /// Builds a [SessionUser] from a login/OTP response and persists it.
+  /// The login response uses `user` (not `name`) for the username.
+  void _setSessionUserFromLoginResponse(Map<String, dynamic> response) {
+    final name = response['user'] as String?;
+    if (name == null || name.isEmpty) return;
+    _sessionUserService?.set(SessionUser(
+      name: name,
+      fullName: response['full_name'] as String?,
+      roles: ((response['roles'] as List?) ?? [])
+          .map((r) => r.toString())
+          .where((r) => r.isNotEmpty)
+          .toList(),
+      userDefaults: {},
+      permissions: {},
+      extras: {},
+    ));
   }
 
   /// Internal: initial metadata + data sync for mobile doctypes.
@@ -429,6 +506,12 @@ class FrappeSDK {
   /// 3) Pull records for all mobile doctypes into the offline DB
   Future<void> _initialMetaAndDataSync() async {
     if (_metaService == null || _syncService == null) return;
+
+    // Offline launch: every call below is pure-network and would block
+    // on the HTTP timeout (~30s each, ~4 minutes total) before failing.
+    // `_cachedOnline` was set during initialize() so reading it here is
+    // race-free.
+    if (!_cachedOnline) return;
 
     try {
       await _permissionService?.syncFromApi();
@@ -460,16 +543,22 @@ class FrappeSDK {
       // dependency closure. Spec §3.2 + §5.1.
       //
       // Without this, Link pickers on offline forms have nothing to show
-      // (e.g. Household needs State / District / Block populated locally
-      // before the user can fill its address Link fields). Child-table
-      // doctypes are excluded — they ride along inside their parent's
-      // records and don't need their own pull.
+      // (e.g. an Order form needs Customer + Item populated locally before
+      // the user can fill its Link fields). Child-table doctypes are
+      // excluded — they ride along inside their parent's records and
+      // don't need their own pull.
       final entryPoints = await _metaService!.getMobileFormDoctypeNames();
       final closure = await _metaService!.closure(entryPoints);
       final toPull = closure.doctypes
           .where((d) => !closure.childDoctypes.contains(d))
           .toList();
       for (final doctype in toPull) {
+        // Skip doctypes the user cannot read — avoids wasteful 403 requests.
+        // canRead() defaults to true when no permission record exists.
+        if (_permissionService != null &&
+            !await _permissionService!.canRead(doctype)) {
+          continue;
+        }
         try {
           await _syncService!.pullSync(doctype: doctype);
         } catch (_) {

@@ -112,6 +112,8 @@ export 'src/ui/widgets/document_list_filter_chip.dart'
     show DocumentListFilterChip, DocumentListFilter, DocumentListFilterCounts;
 export 'src/ui/widgets/delete_cascade_prompt.dart'
     show showDeleteCascadePrompt, DeleteCascadeAction;
+export 'src/ui/screens/migration_blocked_screen.dart'
+    show MigrationBlockedScreen;
 export 'src/ui/screens/sync_errors_screen.dart' show SyncErrorsScreen;
 export 'src/ui/screens/sync_progress_screen.dart' show SyncProgressScreen;
 export 'src/ui/dialogs/logout_guard_dialog.dart'

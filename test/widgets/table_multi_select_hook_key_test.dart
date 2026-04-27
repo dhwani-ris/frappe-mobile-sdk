@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:frappe_mobile_sdk/src/api/client.dart';
 import 'package:frappe_mobile_sdk/src/database/entities/link_option_entity.dart';
 import 'package:frappe_mobile_sdk/src/models/doc_field.dart';
 import 'package:frappe_mobile_sdk/src/models/doc_type_meta.dart';
@@ -9,8 +8,7 @@ import 'package:frappe_mobile_sdk/src/services/link_option_service.dart';
 import 'package:frappe_mobile_sdk/src/ui/widgets/fields/table_multi_select_field.dart';
 
 class _RecordingLinkOptionService extends LinkOptionService {
-  _RecordingLinkOptionService()
-      : super(FrappeClient('http://127.0.0.1:1'));
+  _RecordingLinkOptionService() : super.withoutResolver();
 
   final List<String> queriedDoctypes = [];
 

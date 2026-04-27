@@ -23,12 +23,13 @@ void main() {
     appDb = await AppDatabase.inMemoryDatabase();
     repo = OfflineRepository(appDb);
     final meta = DocTypeMeta(
-      name: 'State',
-      titleField: 'state_name',
-      fields: [f('state_name', 'Data'), f('code', 'Data')],
+      name: 'Customer',
+      titleField: 'customer_name',
+      fields: [f('customer_name', 'Data'), f('code', 'Data')],
     );
     // Persist meta JSON so OfflineRepository can lazy-build the schema.
-    await appDb.doctypeMetaDao.upsertMetaJson('State', jsonEncode(meta.toJson()));
+    await appDb.doctypeMetaDao
+        .upsertMetaJson('Customer', jsonEncode(meta.toJson()));
   });
 
   tearDown(() async {
@@ -36,30 +37,30 @@ void main() {
   });
 
   test(
-    'saveServerDocument writes to legacy `documents` AND `docs__state`',
+    'saveServerDocument writes to legacy `documents` AND `docs__customer`',
     () async {
       await repo.saveServerDocument(
-        doctype: 'State',
-        serverId: 'STATE-MH',
+        doctype: 'Customer',
+        serverId: 'CUST-001',
         data: {
-          'name': 'STATE-MH',
-          'state_name': 'Maharashtra',
-          'code': 'MH',
+          'name': 'CUST-001',
+          'customer_name': 'Acme Corp',
+          'code': 'AC',
           'modified': '2026-01-01 00:00:00',
         },
       );
 
       // Legacy store has the row.
-      final legacyDocs = await appDb.documentDao.findByDoctype('State');
+      final legacyDocs = await appDb.documentDao.findByDoctype('Customer');
       expect(legacyDocs.length, 1);
 
       // Per-doctype table exists and has the row.
       final perDoctype =
-          await appDb.rawDatabase.query('docs__state', limit: 10);
+          await appDb.rawDatabase.query('docs__customer', limit: 10);
       expect(perDoctype.length, 1);
-      expect(perDoctype.first['server_name'], 'STATE-MH');
-      expect(perDoctype.first['state_name'], 'Maharashtra');
-      expect(perDoctype.first['code'], 'MH');
+      expect(perDoctype.first['server_name'], 'CUST-001');
+      expect(perDoctype.first['customer_name'], 'Acme Corp');
+      expect(perDoctype.first['code'], 'AC');
       expect(perDoctype.first['sync_status'], 'synced');
     },
   );
@@ -68,28 +69,28 @@ void main() {
     'second saveServerDocument with same name UPSERTs (no duplicate)',
     () async {
       await repo.saveServerDocument(
-        doctype: 'State',
-        serverId: 'STATE-MH',
+        doctype: 'Customer',
+        serverId: 'CUST-001',
         data: {
-          'name': 'STATE-MH',
-          'state_name': 'Maharashtra',
+          'name': 'CUST-001',
+          'customer_name': 'Acme Corp',
           'modified': '2026-01-01 00:00:00',
         },
       );
-      // Update with new state_name.
+      // Update with new customer_name.
       await repo.saveServerDocument(
-        doctype: 'State',
-        serverId: 'STATE-MH',
+        doctype: 'Customer',
+        serverId: 'CUST-001',
         data: {
-          'name': 'STATE-MH',
-          'state_name': 'Maharashtra Updated',
+          'name': 'CUST-001',
+          'customer_name': 'Acme Corp Updated',
           'modified': '2026-02-01 00:00:00',
         },
       );
 
-      final rows = await appDb.rawDatabase.query('docs__state');
+      final rows = await appDb.rawDatabase.query('docs__customer');
       expect(rows.length, 1, reason: 'UPSERT, not insert-twice');
-      expect(rows.first['state_name'], 'Maharashtra Updated');
+      expect(rows.first['customer_name'], 'Acme Corp Updated');
       expect(rows.first['modified'], '2026-02-01 00:00:00');
     },
   );
@@ -115,75 +116,69 @@ void main() {
   test(
     'two different doctypes get two separate tables',
     () async {
-      final districtMeta = DocTypeMeta(
-        name: 'District',
-        fields: [f('district_name', 'Data')],
+      final supplierMeta = DocTypeMeta(
+        name: 'Supplier',
+        fields: [f('supplier_name', 'Data')],
       );
       await appDb.doctypeMetaDao.upsertMetaJson(
-        'District',
-        jsonEncode(districtMeta.toJson()),
+        'Supplier',
+        jsonEncode(supplierMeta.toJson()),
       );
 
       await repo.saveServerDocument(
-        doctype: 'State',
+        doctype: 'Customer',
+        serverId: 'C1',
+        data: {'name': 'C1', 'customer_name': 'A'},
+      );
+      await repo.saveServerDocument(
+        doctype: 'Supplier',
         serverId: 'S1',
-        data: {'name': 'S1', 'state_name': 'A'},
-      );
-      await repo.saveServerDocument(
-        doctype: 'District',
-        serverId: 'D1',
-        data: {'name': 'D1', 'district_name': 'B'},
+        data: {'name': 'S1', 'supplier_name': 'B'},
       );
 
-      expect(
-        (await appDb.rawDatabase.query('docs__state')).length,
-        1,
-      );
-      expect(
-        (await appDb.rawDatabase.query('docs__district')).length,
-        1,
-      );
+      expect((await appDb.rawDatabase.query('docs__customer')).length, 1);
+      expect((await appDb.rawDatabase.query('docs__supplier')).length, 1);
     },
   );
 
   group('ensureSchemaForClosure', () {
     test('creates parent tables for every closure parent (even 0-row ones)',
         () async {
-      final villageMeta = DocTypeMeta(
-        name: 'Village',
-        fields: [f('village_name', 'Data')],
+      final categoryMeta = DocTypeMeta(
+        name: 'Category',
+        fields: [f('category_name', 'Data')],
       );
-      final hamletMeta = DocTypeMeta(
-        name: 'Hamlet',
-        fields: [f('hamlet_name', 'Data')],
+      final tagMeta = DocTypeMeta(
+        name: 'Tag',
+        fields: [f('tag_name', 'Data')],
       );
       // Note: no `saveServerDocument` calls for these — table must still be
       // created so Link pickers + UnifiedResolver have something to read.
       await repo.ensureSchemaForClosure(
-        metas: {'Village': villageMeta, 'Hamlet': hamletMeta},
+        metas: {'Category': categoryMeta, 'Tag': tagMeta},
         childDoctypes: const {},
       );
       final tables = await appDb.rawDatabase.rawQuery(
         "SELECT name FROM sqlite_master WHERE type='table' "
-        "AND name IN ('docs__village','docs__hamlet') ORDER BY name",
+        "AND name IN ('docs__category','docs__tag') ORDER BY name",
       );
       expect(tables.map((r) => r['name']).toList(),
-          ['docs__hamlet', 'docs__village']);
+          ['docs__category', 'docs__tag']);
     });
 
     test('creates child tables for closure children', () async {
-      final memberMeta = DocTypeMeta(
-        name: 'Household Survey Family Member',
+      final itemMeta = DocTypeMeta(
+        name: 'Order Item',
         isTable: true,
-        fields: [f('member_name', 'Data'), f('age', 'Int')],
+        fields: [f('item_name', 'Data'), f('qty', 'Int')],
       );
       await repo.ensureSchemaForClosure(
-        metas: {'Household Survey Family Member': memberMeta},
-        childDoctypes: const {'Household Survey Family Member'},
+        metas: {'Order Item': itemMeta},
+        childDoctypes: const {'Order Item'},
       );
       final tables = await appDb.rawDatabase.rawQuery(
         "SELECT name FROM sqlite_master WHERE type='table' "
-        "AND name = 'docs__household_survey_family_member'",
+        "AND name = 'docs__order_item'",
       );
       expect(tables, hasLength(1));
     });
@@ -191,58 +186,57 @@ void main() {
     test(
       'saveServerDocument with child rows populates registered child table',
       () async {
-        final hsMeta = DocTypeMeta(
-          name: 'Household Survey',
+        final orderMeta = DocTypeMeta(
+          name: 'Order',
           fields: [
-            f('head_of_family', 'Data'),
-            f('family_members', 'Table',
-                options: 'Household Survey Family Member'),
+            f('title', 'Data'),
+            f('items', 'Table', options: 'Order Item'),
           ],
         );
-        final memberMeta = DocTypeMeta(
-          name: 'Household Survey Family Member',
+        final itemMeta = DocTypeMeta(
+          name: 'Order Item',
           isTable: true,
-          fields: [f('member_name', 'Data'), f('age', 'Int')],
+          fields: [f('item_name', 'Data'), f('qty', 'Int')],
         );
         await appDb.doctypeMetaDao.upsertMetaJson(
-          'Household Survey',
-          jsonEncode(hsMeta.toJson()),
+          'Order',
+          jsonEncode(orderMeta.toJson()),
         );
         await appDb.doctypeMetaDao.upsertMetaJson(
-          'Household Survey Family Member',
-          jsonEncode(memberMeta.toJson()),
+          'Order Item',
+          jsonEncode(itemMeta.toJson()),
         );
         await repo.ensureSchemaForClosure(
           metas: {
-            'Household Survey': hsMeta,
-            'Household Survey Family Member': memberMeta,
+            'Order': orderMeta,
+            'Order Item': itemMeta,
           },
-          childDoctypes: const {'Household Survey Family Member'},
+          childDoctypes: const {'Order Item'},
         );
 
         await repo.saveServerDocument(
-          doctype: 'Household Survey',
-          serverId: 'HS-1',
+          doctype: 'Order',
+          serverId: 'ORD-1',
           data: {
-            'name': 'HS-1',
+            'name': 'ORD-1',
             'modified': '2026-01-01 00:00:00',
-            'head_of_family': 'Ramesh',
-            'family_members': [
-              {'name': 'mem-1', 'member_name': 'Sita', 'age': 32},
-              {'name': 'mem-2', 'member_name': 'Mohan', 'age': 12},
+            'title': 'Sample Order',
+            'items': [
+              {'name': 'item-1', 'item_name': 'Widget', 'qty': 32},
+              {'name': 'item-2', 'item_name': 'Gizmo', 'qty': 12},
             ],
           },
         );
 
         final children = await appDb.rawDatabase.query(
-          'docs__household_survey_family_member',
+          'docs__order_item',
           orderBy: 'idx',
         );
         expect(children.length, 2);
-        expect(children[0]['member_name'], 'Sita');
-        expect(children[0]['parentfield'], 'family_members');
-        expect(children[0]['parent_doctype'], 'Household Survey');
-        expect(children[1]['member_name'], 'Mohan');
+        expect(children[0]['item_name'], 'Widget');
+        expect(children[0]['parentfield'], 'items');
+        expect(children[0]['parent_doctype'], 'Order');
+        expect(children[1]['item_name'], 'Gizmo');
         expect(children[1]['idx'], 1);
       },
     );

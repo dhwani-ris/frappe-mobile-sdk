@@ -1,7 +1,6 @@
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:frappe_mobile_sdk/src/api/client.dart';
 import 'package:frappe_mobile_sdk/src/database/daos/doctype_meta_dao.dart';
 import 'package:frappe_mobile_sdk/src/database/schema/parent_schema.dart';
 import 'package:frappe_mobile_sdk/src/database/schema/system_tables.dart';
@@ -22,6 +21,7 @@ void main() {
 
   late Database db;
   late UnifiedResolver resolver;
+  late DocTypeMeta m;
 
   setUp(() async {
     db = await databaseFactory.openDatabase(inMemoryDatabasePath);
@@ -42,7 +42,7 @@ void main() {
     for (final s in systemTablesDDL()) {
       await db.execute(s);
     }
-    final m = DocTypeMeta(
+    m = DocTypeMeta(
       name: 'Customer',
       titleField: 'customer_name',
       fields: [f('customer_name', 'Data'), f('age', 'Int')],
@@ -84,24 +84,12 @@ void main() {
 
   tearDown(() async => db.close());
 
-  // The offline path doesn't make API calls, so we feed in a throwaway
-  // FrappeClient via a minimal mock — but `getLinkOptionsOffline` only
-  // hits `_getDocTypeMeta` which fails-soft when init isn't wired. That
-  // makes the title-field heuristic fall back to the 'customer_name'
-  // priority list inside the method, which is what we test.
-  // The offline path doesn't make API calls. Pass a placeholder
-  // FrappeClient — it's only stored for the legacy `getLinkOptions`
-  // path. The new `getLinkOptionsOffline` flow only consults the
-  // resolver's underlying tables.
-  FrappeClient stubClient() =>
-      FrappeClient('http://localhost'); // never reached in this test
+  LinkOptionService makeSvc() =>
+      LinkOptionService(resolver, (dt) async => m);
 
   test('routes through resolver, returns LinkOptionEntity per row', () async {
-    final svc = LinkOptionService(stubClient());
-    final out = await svc.getLinkOptionsOffline(
-      doctype: 'Customer',
-      resolver: resolver,
-    );
+    final svc = makeSvc();
+    final out = await svc.getLinkOptionsOffline(doctype: 'Customer');
     expect(out.length, 2);
     final names = out.map((e) => e.name).toSet();
     expect(names, contains('CUST-1'));
@@ -112,10 +100,9 @@ void main() {
   });
 
   test('strips doctype prefix from 4-tuple filters', () async {
-    final svc = LinkOptionService(stubClient());
+    final svc = makeSvc();
     final out = await svc.getLinkOptionsOffline(
       doctype: 'Customer',
-      resolver: resolver,
       filters: [
         ['Customer', 'age', '>=', 10],
       ],
@@ -125,10 +112,9 @@ void main() {
   });
 
   test('query parameter routes to title_field LIKE search', () async {
-    final svc = LinkOptionService(stubClient());
+    final svc = makeSvc();
     final out = await svc.getLinkOptionsOffline(
       doctype: 'Customer',
-      resolver: resolver,
       query: 'ACME',
     );
     expect(out.length, 1);

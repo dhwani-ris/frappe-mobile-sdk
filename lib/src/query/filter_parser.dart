@@ -42,6 +42,15 @@ class FilterParser {
     'docstatus': 'INTEGER',
   };
 
+  /// Extra system columns present only on child tables (`docs__<child>`) —
+  /// see `child_schema.dart`. Added to the whitelist when `meta.isTable`.
+  static const Map<String, String> _childSystemColumns = {
+    'parent_uuid': 'TEXT',
+    'parent_doctype': 'TEXT',
+    'parentfield': 'TEXT',
+    'idx': 'INTEGER',
+  };
+
   static ParsedQuery toSql({
     required DocTypeMeta meta,
     required String tableName,
@@ -240,6 +249,7 @@ class FilterParser {
   static Map<String, String> _columnTypes(DocTypeMeta meta) {
     final map = <String, String>{};
     map.addAll(_systemColumns);
+    if (meta.isTable) map.addAll(_childSystemColumns);
     for (final f in meta.fields) {
       final n = f.fieldname;
       if (n == null || n.isEmpty) continue;

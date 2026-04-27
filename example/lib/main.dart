@@ -255,7 +255,22 @@ class _HomeScreenState extends State<HomeScreen> {
       _repository!,
       _database!,
     );
-    _linkOptionService ??= LinkOptionService(_authService!.client!);
+    if (_linkOptionService == null) {
+      final metaSvc = _metaService!;
+      final syncSvc = _syncService!;
+      final rawDb = _database!.rawDatabase;
+      Future<DocTypeMeta> metaFn(String dt) => metaSvc.getMeta(dt);
+      final resolver = UnifiedResolver(
+        db: rawDb,
+        metaDao: DoctypeMetaDao(rawDb),
+        isOnline: () => true,
+        backgroundFetch: (doctype, _) async {
+          try { await syncSvc.pullSync(doctype: doctype); } catch (_) {}
+        },
+        metaResolver: metaFn,
+      );
+      _linkOptionService = LinkOptionService(resolver, metaFn);
+    }
 
     // Initial metadata + data sync for mobile forms
     await _initialMetaAndDataSync();
@@ -385,7 +400,20 @@ class _HomeScreenState extends State<HomeScreen> {
           _database!,
           getMobileUuid: () => _authService!.getOrCreateMobileUuid(),
         );
-        _linkOptionService = LinkOptionService(_authService!.client!);
+        final metaSvc = _metaService!;
+        final syncSvc = _syncService!;
+        final rawDb = _database!.rawDatabase;
+        Future<DocTypeMeta> metaFn(String dt) => metaSvc.getMeta(dt);
+        final resolver = UnifiedResolver(
+          db: rawDb,
+          metaDao: DoctypeMetaDao(rawDb),
+          isOnline: () => true,
+          backgroundFetch: (doctype, _) async {
+            try { await syncSvc.pullSync(doctype: doctype); } catch (_) {}
+          },
+          metaResolver: metaFn,
+        );
+        _linkOptionService = LinkOptionService(resolver, metaFn);
       } else {
         return const Scaffold(
           body: Center(
