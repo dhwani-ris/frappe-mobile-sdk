@@ -1,3 +1,37 @@
+# [2.0.0] - 2026-04-27
+
+### Added
+
+- **Offline-first data layer** — two-store design: every form save now writes to both the legacy `documents` JSON store and normalized per-doctype `docs__<dt>` / `docs__<child_dt>` SQLite tables via `LocalWriter`.
+- **`UnifiedResolver`** — single offline read path for Link pickers, list screens, and `fetch_from`; queries per-doctype tables first, triggers background API refresh when online.
+- **`LinkOptionService` offline-first** — backed by `UnifiedResolver`; Link dropdowns now work fully offline.
+- **Cursor-based pull** — `SyncService` uses `(modified, name)` cursors with `DoctypePullPhase` (initial / resume / incremental), look-ahead pagination, and resume-on-crash.
+- **`pullSyncMany`** — batch pull for multiple doctypes through a bounded worker pool.
+- **`getPullPhase` / `getPullPhases`** — query pull phase per doctype for UX gating (blocking screen vs background indicator).
+- **UUID-to-server-name resolution on push** — Link fields containing `mobile_uuid` values are rewritten to their `server_name` before the document is sent to the server.
+- **`SyncController`** — imperative sync surface: `syncNow`, `pause`/`resume`, `retry`, `retryAll`, `resolveConflict`, `previewDeleteCascade`, `acceptDeleteCascade`; observable `state$` stream.
+- **`SessionUser` auto-populated** — all login paths (username/password, OTP, API key, OAuth) now call `SessionUserService.set()` automatically; `sdk.sessionUser` and `sdk.sessionUser$` are available immediately after login.
+- **New UI exports** — `MigrationBlockedScreen`, `SyncStatusBar`, `SyncProgressScreen`, `SyncErrorsScreen`, `DocumentListFilterChip`, `showDeleteCascadePrompt`, `showLogoutGuardDialog`, `showForceLogoutConfirm`.
+- **`ClosureBuilder` parallel BFS** — level-by-level meta fetching with bounded concurrency (default 4 workers) reduces closure build time on large schemas.
+- **`DoctypeService.bulkGetWithChildren`** — batches per-name GET requests into a single `mobile_sync.get_docs_with_children` server call (200 docs/batch); falls back to individual GETs on 404 for older deployments.
+- **`RestHelper` improved error messages** — distinguishes "connection refused" from "no internet".
+- **`FormScreen` offline-first save** — checks connectivity before save; treats `serverId == null` docs as INSERT when going back online.
+- **`doc/OFFLINE_FIRST.md`** — new reference document for the offline-first architecture.
+
+### Changed
+
+- `OfflineRepository` constructor now accepts an optional `LocalWriter` (wired automatically by `FrappeSDK`).
+- `LinkOptionService` constructor now takes `UnifiedResolver` + `MetaResolverFn` instead of `FrappeClient`.
+- `OfflineRepository.createDocument` preserves an existing `mobile_uuid` from the payload rather than always generating a fresh one.
+- `OfflineRepository.getRowFromPerDoctypeTable` added for `fetch_from` offline resolution.
+- `UnifiedResolver` translates `parent` filter column to `parent_uuid` for child-table queries.
+
+### Fixed
+
+- `system_tables.dart` — all `CREATE TABLE` statements use `IF NOT EXISTS`; `sdk_meta` seed uses `INSERT OR IGNORE` (migration idempotency).
+- `pull_apply.dart` — conflict flag now only fires when the server `modified` timestamp is strictly after the local `modified` (previously flagged any dirty row unconditionally).
+- `SyncController.pause()` / `resume()` — `syncNow` now checks the `isPaused` flag before running.
+
 # [1.1.0](https://github.com/dhwani-ris/frappe-mobile-sdk/compare/v1.0.0...v1.1.0) (2026-04-17)
 
 

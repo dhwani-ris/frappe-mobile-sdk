@@ -291,14 +291,12 @@ Server requirement for translations (handled by `frappe_mobile_control`):
   - Button field support via `OnButtonPressedCallback` with default or custom server calls.
 
 - **Offline‑First Architecture**
-  - SQLite (`AppDatabase`) for:
-    - Doctype metadata, documents, auth tokens, permissions, link options.
-  - `OfflineRepository`:
-    - Local CRUD operations on docs.
-    - Tracks dirty (unsynced) documents (`getDirtyDocuments`).
-  - `SyncService`:
-    - `isOnline()`, `pullSync(doctype: ...)`.
-    - Integrated into example flows to sync before showing lists.
+  - **Two-store design** — every save goes to the legacy JSON blob store (`documents`) *and* a normalized per-doctype `docs__<dt>` table; the two stay in sync automatically.
+  - `OfflineRepository` + `LocalWriter` — dual-write path; offline creates appear in Link pickers immediately.
+  - `UnifiedResolver` — single read path: queries per-doctype tables first, triggers a background API refresh when online.
+  - `SyncService` — cursor-based pull with `DoctypePullPhase` (initial / resume / incremental), look-ahead pagination, and bounded-parallel batch pull (`pullSyncMany`).
+  - `SyncController` — imperative sync surface: `syncNow`, `pause`/`resume`, `retry`, `retryAll`, `resolveConflict`, `previewDeleteCascade` / `acceptDeleteCascade`, plus a `state$` stream for progress UIs.
+  - See [`doc/OFFLINE_FIRST.md`](doc/OFFLINE_FIRST.md) for full details.
 
 - **Workflows**
   - Workflow detection via metadata (`DocTypeMeta.hasWorkflow`, `workflowStateField`).
@@ -555,6 +553,9 @@ This repository includes focused documents (under `doc/` unless noted):
   - Includes a dedicated "Social Login (OAuth) Configuration" guide (Frappe server + mobile deep-link setup).
 - `doc/CUSTOMIZATION.md` – UI customization:
   - `FrappeFormStyle`, custom field factories, custom field widgets.
+- `doc/FIELD_TYPES.md` – Supported field types, SearchableSelect, Link, Table MultiSelect, Geolocation, DependsOn evaluator.
+- `doc/LINK_FILTER_BUILDER.md` – Runtime override of Link / Table MultiSelect filters using `LinkFilterBuilder` (PR #35). Covers API, wiring, precedence, and recipes.
+- `doc/FIELD_CHANGE_HANDLER.md` – `onFieldChange` / `FieldChangeHandler` hook for derived-field patches, snapshot-isolation guarantees, and per-doctype resolution via `MobileHomeScreen.getFieldChangeHandler` (PR #35).
 - `doc/TESTING.md` – Testing strategies:
   - Running the example app.
   - Using local path vs Git dependency.
@@ -573,9 +574,13 @@ For a full conceptual/API guide (installation, API calling, forms, auth, offline
 
 In‑repo documentation:
 
-- `doc/DOCUMENTATION.md` – Full SDK documentation.
+- `doc/DOCUMENTATION.md` – Full SDK documentation index.
+- `doc/OFFLINE_FIRST.md` – Offline-first architecture: two-store design, pull phases, SyncController, SessionUser, new UI components.
 - `doc/SETUP.md` – Environment and platform setup.
 - `doc/CUSTOMIZATION.md` – UI customization guide.
+- `doc/FIELD_TYPES.md` – Field type reference.
+- `doc/LINK_FILTER_BUILDER.md` – Runtime Link / Table MultiSelect filter overrides.
+- `doc/FIELD_CHANGE_HANDLER.md` – Field-edit hook with patch-map contract.
 - `doc/TESTING.md` – Testing and verification guide.
 - `doc/QUICK_TEST.md` – Quick validation steps.
 - `doc/WORKFLOWS.md` – Workflow behavior.
@@ -592,8 +597,8 @@ Flutter package for Frappe integration with direct API access, dynamic form rend
 - **Auto Token Refresh** - Automatic token refresh on expiry (401 errors)
 - **Frappe API Access** - Auth, CRUD, file upload via `FrappeClient`
 - **Dynamic Form Renderer** - Auto-generate forms from Frappe metadata
-- **Offline-First** - Full offline capability with SQLite
-- **Bi-directional Sync** - Push/pull sync with conflict resolution
+- **Offline-First** - Two-store SQLite design; offline saves visible in Link pickers immediately
+- **Bi-directional Sync** - Cursor-based pull (initial / resume / incremental phases), push with UUID-to-server-name resolution, conflict handling
 - **Customizable Styling** - Default styles + full customization support
 - **Translations** - Load Frappe translations by language; map to field labels and doctype labels in forms and lists
 - **Workflows** - Show workflow state and transition actions on forms when the DocType has a workflow (see [Workflows](doc/WORKFLOWS.md))
@@ -1108,21 +1113,54 @@ client.doc('ToDo').where('status', 'Open').get();
 final sdk = FrappeSDK(baseUrl: '...', doctypes: ['...']);
 await sdk.initialize(); // Database created automatically
 
-// Login (stateless - tokens stored in database)
+// Login — tokens + SessionUser stored automatically
 final loginResponse = await sdk.login(username, password);
 // Returns: { access_token, refresh_token, user, full_name, mobile_form_names }
 
-// User stays logged in automatically
-// On app restart, call sdk.auth.restoreSession() to restore login state
+// On app restart
+await sdk.initialize(true); // restores session + runs initial sync
 
 // Access services
-sdk.api          // FrappeClient
-sdk.auth         // AuthService
-sdk.meta         // MetaService
-sdk.sync         // SyncService
-sdk.repository   // OfflineRepository
-sdk.linkOptions  // LinkOptionService
+sdk.api              // FrappeClient
+sdk.auth             // AuthService
+sdk.meta             // MetaService
+sdk.sync             // SyncService (pull/push, getPullPhase, pullSyncMany)
+sdk.repository       // OfflineRepository (CRUD + LocalWriter dual-write)
+sdk.linkOptions      // LinkOptionService (offline-first via UnifiedResolver)
+sdk.sessionUser      // SessionUser? — populated on every login path
+sdk.sessionUser$     // Stream<SessionUser?>
+sdk.sessionUserService  // SessionUserService (set / clear / restore)
 ```
+
+### SyncController
+
+```dart
+final ctrl = sdk.syncController;
+
+await ctrl.syncNow();          // pull then push (no-op if paused)
+await ctrl.pause();            // block future syncNow calls
+await ctrl.resume();
+
+await ctrl.retry(outboxId);
+await ctrl.retryAll();
+
+await ctrl.resolveConflict(
+  outboxId: id,
+  action: ConflictAction.pullAndOverwriteLocal,
+);
+
+final plan = await ctrl.previewDeleteCascade(outboxId);
+if (plan != null) {
+  // show plan.blockedBy …
+  await ctrl.acceptDeleteCascade(outboxId);
+}
+
+// Observable state for progress UIs
+ctrl.state   // SyncState
+ctrl.state$  // Stream<SyncState>
+```
+
+See [`doc/OFFLINE_FIRST.md`](doc/OFFLINE_FIRST.md) for pull phases, cursor design, UUID resolution, and the full UI component reference.
 
 ### Form Styling
 

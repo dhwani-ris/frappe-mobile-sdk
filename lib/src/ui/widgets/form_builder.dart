@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_form_builder/flutter_form_builder.dart';
 import '../../models/doc_type_meta.dart';
 import '../../models/doc_field.dart';
+import '../../models/link_filter_result.dart';
 import '../../constants/field_types.dart';
 import '../../services/link_option_service.dart';
 import '../../services/link_field_coordinator.dart';
@@ -26,6 +27,17 @@ typedef OnButtonPressedCallback =
       Future<void> Function(DocField field, Map<String, dynamic> formData)
       useDefault,
     );
+
+/// Called when a field value changes. Returns a map of computed field updates
+/// (e.g. for hidden computed fields) or null when there is nothing to patch.
+///
+/// The [formData] argument is a snapshot — mutating it does not alter the
+/// SDK's internal form state. Return patches to apply changes.
+typedef FieldChangeHandler = Map<String, dynamic>? Function(
+  String fieldName,
+  dynamic newValue,
+  Map<String, dynamic> formData,
+);
 
 /// Layout mode for form tab headers.
 enum FormTabHeaderLayout { tabBar, stepper }
@@ -170,12 +182,16 @@ class FrappeFormBuilder extends StatefulWidget {
 
   /// Called when a field value changes. Returns a map of computed field updates
   /// to patch into the form (e.g. for hidden computed fields).
-  final Map<String, dynamic>? Function(
-    String fieldName,
-    dynamic newValue,
-    Map<String, dynamic> formData,
-  )?
-  onFieldChange;
+  final FieldChangeHandler? onFieldChange;
+
+  /// Parent form data when this builder renders a child-table row.
+  /// Null for top-level forms.
+  final Map<String, dynamic>? parentFormData;
+
+  /// Looks up a filter builder by doctype + fieldname. Returns null when
+  /// the app has no custom filter for that field.
+  final LinkFilterBuilder? Function(String doctype, String fieldname)?
+      getLinkFilterBuilder;
 
   const FrappeFormBuilder({
     super.key,
@@ -197,6 +213,8 @@ class FrappeFormBuilder extends StatefulWidget {
     this.onButtonPressed,
     this.onFormDataChanged,
     this.onFieldChange,
+    this.parentFormData,
+    this.getLinkFilterBuilder,
   });
 
   @override
@@ -235,6 +253,11 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
   final List<_FormTab> _tabs = [];
   final Map<String, int> _fieldTabIndex = {};
 
+  /// Parent form data for filter resolution. Equals [_formData] when this
+  /// builder is a top-level form (not a child-row form).
+  Map<String, dynamic> get effectiveParentFormData =>
+      widget.parentFormData ?? _formData;
+
   void _attachTabControllerListener() {
     _tabController.addListener(() {
       if (!mounted) return;
@@ -270,6 +293,8 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
         meta: widget.meta,
         linkOptionService: widget.linkOptionService!,
         useCoordinator: true,
+        parentFormData: effectiveParentFormData,
+        getLinkFilterBuilder: widget.getLinkFilterBuilder,
       );
       _linkFieldCoordinator!.prefetchInitial(_formData);
       _progressSubscription = _linkFieldCoordinator!.progressStream.listen((p) {
@@ -618,10 +643,9 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
         _formData.addAll(updates);
       });
       _formKey.currentState?.patchValue(_normalizePatchValues(updates));
-      if (mounted) setState(() {});
 
       // Chain: if a patched field is itself a Link, trigger its dependents too.
-      // e.g. learner_name → household_survey (Link) → religion, category
+      // e.g. picking a parent Link cascades to the child's own Link fields.
       for (final entry in updates.entries) {
         if (entry.value == null || entry.value.toString().trim().isEmpty) {
           continue;
@@ -719,6 +743,8 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
       fileUrlBase: widget.fileUrlBase,
       imageHeaders: widget.imageHeaders,
       getMeta: widget.getMeta,
+      parentFormData: effectiveParentFormData,
+      getLinkFilterBuilder: widget.getLinkFilterBuilder,
       childTableFormBuilder: widget.getMeta != null
           ? (childMeta, initialData, onSubmit, {registerSubmit}) =>
                 FrappeFormBuilder(
@@ -736,6 +762,8 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
                   translate: widget.translate,
                   onButtonPressed: widget.onButtonPressed,
                   onFieldChange: widget.onFieldChange,
+                  parentFormData: effectiveParentFormData,
+                  getLinkFilterBuilder: widget.getLinkFilterBuilder,
                 )
           : null,
       onButtonPressed: widget.onButtonPressed,
@@ -781,19 +809,17 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
             _handleFetchFrom(field.fieldname!, value);
           }
 
-          // Computed fields: call onFieldChange and patch hidden field values
-          if (oldValue != value &&
-              field.fieldname != null &&
-              widget.onFieldChange != null) {
-            final patches = widget.onFieldChange!(
+          // Notify external listener. Pass a snapshot so handlers cannot
+          // accidentally mutate _formData; they must return patches instead.
+          if (oldValue != value && field.fieldname != null) {
+            final patches = widget.onFieldChange?.call(
               field.fieldname!,
               value,
               Map<String, dynamic>.from(_formData),
             );
             if (patches != null && patches.isNotEmpty) {
               _formData.addAll(patches);
-              // Sync UI state so visible fields reflect computed values.
-              _formKey.currentState?.patchValue(patches);
+              _formKey.currentState?.patchValue(_normalizePatchValues(patches));
             }
           }
 
@@ -1124,6 +1150,8 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
           meta: widget.meta,
           linkOptionService: widget.linkOptionService!,
           useCoordinator: true,
+          parentFormData: effectiveParentFormData,
+          getLinkFilterBuilder: widget.getLinkFilterBuilder,
         );
         _linkFieldCoordinator!.prefetchInitial(_formData);
         _progressSubscription = _linkFieldCoordinator!.progressStream.listen((

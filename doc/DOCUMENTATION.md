@@ -14,6 +14,7 @@ This `doc/` folder is the primary documentation for the SDK.
 
 ## Features
 
+- **Offline-first architecture** (two-store design, pull phases, SyncController, SessionUser, new UI components): [`doc/OFFLINE_FIRST.md`](OFFLINE_FIRST.md)
 - **Field types** (supported types, SearchableSelect, TableMultiSelect, Geolocation, DependsOn): [`doc/FIELD_TYPES.md`](FIELD_TYPES.md)
 - **Workflows** (how the SDK surfaces workflows in `FormScreen`): [`doc/WORKFLOWS.md`](WORKFLOWS.md)
 

@@ -6,6 +6,7 @@ import '../api/utils.dart';
 import '../models/doc_field.dart';
 import '../models/doc_type_meta.dart';
 import '../models/document.dart';
+import '../models/link_filter_result.dart';
 import '../models/workflow_transition.dart';
 import '../services/link_option_service.dart';
 import '../services/meta_service.dart';
@@ -14,7 +15,11 @@ import '../services/sync_service.dart';
 import '../services/workflow_service.dart';
 import 'sync_status_screen.dart';
 import 'widgets/form_builder.dart'
-    show FrappeFormBuilder, FrappeFormStyle, OnButtonPressedCallback;
+    show
+        FrappeFormBuilder,
+        FrappeFormStyle,
+        OnButtonPressedCallback,
+        FieldChangeHandler;
 
 /// Visual customization for [FormScreen] action area.
 class FormScreenStyle {
@@ -68,12 +73,11 @@ class FormScreen extends StatefulWidget {
   final OnButtonPressedCallback? onButtonPressed;
 
   /// Called when a field value changes. Returns computed field patches (for hidden computed fields).
-  final Map<String, dynamic>? Function(
-    String fieldName,
-    dynamic newValue,
-    Map<String, dynamic> formData,
-  )?
-  onFieldChange;
+  final FieldChangeHandler? onFieldChange;
+
+  /// Optional builder for runtime link filters. Called during link option resolution.
+  final LinkFilterBuilder? Function(String doctype, String fieldname)?
+      getLinkFilterBuilder;
 
   /// When true (default), use LinkFieldCoordinator for sequenced link option loading.
   final bool useLinkFieldCoordinator;
@@ -100,6 +104,7 @@ class FormScreen extends StatefulWidget {
     this.initialData,
     this.onButtonPressed,
     this.onFieldChange,
+    this.getLinkFilterBuilder,
     this.useLinkFieldCoordinator = true,
     this.screenStyle,
   });
@@ -386,12 +391,14 @@ class _FormScreenState extends State<FormScreen> {
     String linkedDoctype,
     String docName,
   ) async {
+    // Per-doctype table covers both synced (server_name) and offline-only
+    // (mobile_uuid) rows without touching the legacy documents table.
     try {
-      final doc = await widget.repository.getDocumentByServerId(
-        docName,
+      final row = await widget.repository.getRowFromPerDoctypeTable(
         linkedDoctype,
+        docName,
       );
-      if (doc != null) return doc.data;
+      if (row != null) return row;
     } catch (_) {}
     if (widget.api != null) {
       try {
@@ -422,12 +429,40 @@ class _FormScreenState extends State<FormScreen> {
       _errorMessage = null;
     });
 
+    // Decide path based on connectivity. Without network, take the
+    // offline-first path so the form is durably saved to the local DB
+    // and pushed later — instead of failing with "No Internet Connection".
+    bool serverReachable = widget.api != null;
+    if (serverReachable && widget.syncService != null) {
+      try {
+        serverReachable = await widget.syncService!.isOnline();
+      } catch (_) {
+        serverReachable = false;
+      }
+    }
+
     try {
-      if (widget.api != null) {
+      if (widget.api != null && serverReachable) {
         Map<String, dynamic>? savedData;
-        // Server-first: create/update on server, then update local
-        if (widget.document == null) {
-          if (widget.getMobileUuid != null) {
+        // Server-first: create/update on server, then update local.
+        // Treat an offline-only document (document!=null but serverId==null)
+        // the same as a brand-new doc — the server has never seen it, so we
+        // must INSERT, not UPDATE. Forwarding `mobile_uuid` lets Frappe's
+        // L2 idempotency match the row when push-back lands.
+        final isInsert =
+            widget.document == null || widget.document!.serverId == null;
+        if (isInsert) {
+          // Preserve any existing offline data + mobile_uuid from the local doc.
+          if (widget.document != null) {
+            final existing = Map<String, dynamic>.from(widget.document!.data);
+            existing.addAll(payload);
+            payload
+              ..clear()
+              ..addAll(existing);
+          }
+          if (widget.getMobileUuid != null &&
+              (payload['mobile_uuid'] == null ||
+                  (payload['mobile_uuid'] as String).isEmpty)) {
             final uuid = await widget.getMobileUuid!();
             if (uuid != null && uuid.isNotEmpty) {
               payload['mobile_uuid'] = uuid;
@@ -886,6 +921,7 @@ class _FormScreenState extends State<FormScreen> {
                   style: widget.style,
                   translate: widget.translate,
                   onFieldChange: widget.onFieldChange,
+                  getLinkFilterBuilder: widget.getLinkFilterBuilder,
                 ),
               ),
             ],

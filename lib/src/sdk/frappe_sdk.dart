@@ -1,17 +1,36 @@
 // Copyright (c) 2026, Bhushan Barbuddhe and contributors
 // For license information, please see license.txt
 
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart';
 
 import '../api/client.dart';
 import '../database/app_database.dart';
+import '../database/daos/doctype_meta_dao.dart';
+import '../database/migrations/v1_to_v2.dart';
+import '../models/doc_type_meta.dart';
+import '../models/session_user.dart';
+import '../query/unified_resolver.dart';
 import '../services/auth_service.dart';
+import '../services/local_writer.dart';
 import '../services/meta_service.dart';
 import '../services/permission_service.dart';
+import '../services/session_user_service.dart';
 import '../services/sync_service.dart';
 import '../services/offline_repository.dart';
 import '../services/link_option_service.dart';
 import '../services/translation_service.dart';
+
+/// Thrown by [FrappeSDK.runV1ToV2MigrationIfNeeded] when the device has no
+/// connectivity and the offline-first data migration cannot proceed. The
+/// consumer app should display [MigrationBlockedScreen] (or its own
+/// equivalent) and retry the call once connectivity is restored.
+class MigrationNeedsNetworkException implements Exception {
+  @override
+  String toString() =>
+      'v1→v2 data migration requires network connectivity. '
+      'Show MigrationBlockedScreen and retry when online.';
+}
 
 /// Main SDK initialization class for easy setup
 class FrappeSDK {
@@ -27,8 +46,15 @@ class FrappeSDK {
   SyncService? _syncService;
   OfflineRepository? _repository;
   LinkOptionService? _linkOptionService;
+  SessionUserService? _sessionUserService;
 
   bool _initialized = false;
+
+  /// Cached synchronous online state — updated lazily via [_defaultIsOnline].
+  /// Conservative default (false) means the resolver starts in offline-only
+  /// mode and switches to background-refresh mode once the first connectivity
+  /// check resolves.
+  bool _cachedOnline = false;
 
   FrappeSDK({required this.baseUrl, this.databaseAppName});
 
@@ -47,8 +73,11 @@ class FrappeSDK {
     // (e.g. getOrCreateMobileUuid, restoreSession) won't throw "not
     // initialized" if called from any production code path under test.
     _authService = AuthService.forTesting(_client!, database: database);
-    _repository = OfflineRepository(_database!);
     _metaService = MetaService(_client!, _database!);
+    final testMetaService = _metaService!;
+    final testMetaFn = (String dt) => testMetaService.getMeta(dt);
+    final testLocalWriter = LocalWriter(database.rawDatabase, testMetaFn);
+    _repository = OfflineRepository(_database!, localWriter: testLocalWriter);
     _permissionService = PermissionService(_client!, _database!);
     _translationService = TranslationService(_client!);
     _syncService = SyncService(
@@ -57,7 +86,15 @@ class FrappeSDK {
       _database!,
       getMobileUuid: () async => 'test-uuid',
     );
-    _linkOptionService = LinkOptionService(_client!);
+    final testResolver = UnifiedResolver(
+      db: database.rawDatabase,
+      metaDao: DoctypeMetaDao(database.rawDatabase),
+      isOnline: () => false,
+      backgroundFetch: (_, __) async {},
+      metaResolver: testMetaFn,
+    );
+    _linkOptionService = LinkOptionService(testResolver, testMetaFn);
+    _sessionUserService = SessionUserService(_database!.rawDatabase);
     _initialized = true;
   }
 
@@ -77,8 +114,12 @@ class FrappeSDK {
     // meta/sync/link-options calls always carry the Bearer token / API key.
     _client = _authService!.client;
 
-    _repository = OfflineRepository(_database!);
     _metaService = MetaService(_client!, _database!);
+    final rawDb = _database!.rawDatabase;
+    final metaSvc = _metaService!;
+    final metaFn = (String dt) => metaSvc.getMeta(dt);
+    final localWriter = LocalWriter(rawDb, metaFn);
+    _repository = OfflineRepository(_database!, localWriter: localWriter);
     _permissionService = PermissionService(_client!, _database!);
     _translationService = TranslationService(_client!);
     _syncService = SyncService(
@@ -87,7 +128,28 @@ class FrappeSDK {
       _database!,
       getMobileUuid: () => _authService!.getOrCreateMobileUuid(),
     );
-    _linkOptionService = LinkOptionService(_client!);
+    // Build UnifiedResolver — single read path for all offline queries.
+    // Probe connectivity once here; downstream callers (resolver,
+    // _initialMetaAndDataSync) read `_cachedOnline` instead of probing
+    // again, keeping launch to a single platform-channel round-trip.
+    _cachedOnline = await _defaultIsOnline();
+    final syncSvc = _syncService!;
+    final resolver = UnifiedResolver(
+      db: rawDb,
+      metaDao: DoctypeMetaDao(rawDb),
+      isOnline: () => _cachedOnline,
+      backgroundFetch: (doctype, _) async {
+        try {
+          await syncSvc.pullSync(doctype: doctype);
+        } catch (_) {}
+      },
+      metaResolver: metaFn,
+    );
+    _linkOptionService = LinkOptionService(resolver, metaFn);
+    _sessionUserService = SessionUserService(_database!.rawDatabase);
+    // Best-effort: re-hydrate any persisted SessionUser from the previous
+    // app run. Idempotent — no-op when sdk_meta.session_user_json is null.
+    await _sessionUserService!.restoreFromDb();
 
     _initialized = true;
 
@@ -99,6 +161,63 @@ class FrappeSDK {
     }
   }
 
+  /// Runs the v1 → v2 offline-first data migration if it has not yet been
+  /// applied (`sdk_meta.schema_version < 2`).
+  ///
+  /// Returns `true` if the migration ran, `false` if it was already applied.
+  /// Throws [MigrationNeedsNetworkException] when the device is offline; the
+  /// caller is expected to display [MigrationBlockedScreen] until connectivity
+  /// returns and then retry.
+  ///
+  /// **WARNING — do not call until the new offline-first read/write engines
+  /// (P3 + P4) are wired.** This migration renames the legacy `documents`
+  /// table to `documents__archived_v1`. The current
+  /// [OfflineRepository] writes to `documents` via the legacy `DocumentDao`,
+  /// so any read/write through it will fail once the rename has happened.
+  /// Until P3 rewires `OfflineRepository` to the per-doctype tables, leave
+  /// this method uncalled. The SDK does NOT auto-invoke it from
+  /// [initialize].
+  ///
+  /// [isOnline] and [metaFetcher] are injection seams used by tests. In
+  /// production both default to real implementations (connectivity_plus and
+  /// the wired [MetaService]).
+  Future<bool> runV1ToV2MigrationIfNeeded({
+    Future<bool> Function()? isOnline,
+    Future<DocTypeMeta> Function(String doctype)? metaFetcher,
+  }) async {
+    if (!_initialized) await initialize();
+    final raw = _database!.rawDatabase;
+    final currentVersion = await _readSchemaVersion(raw);
+    if (currentVersion >= 2) return false;
+
+    final online = await (isOnline ?? _defaultIsOnline)();
+    if (!online) {
+      throw MigrationNeedsNetworkException();
+    }
+
+    final migration = V1ToV2Migration(
+      db: raw,
+      metaFetcher: metaFetcher ??
+          (doctype) async => _metaService!.getMeta(doctype),
+    );
+    return migration.run();
+  }
+
+  Future<bool> _defaultIsOnline() async {
+    final result = await Connectivity().checkConnectivity();
+    return result.contains(ConnectivityResult.mobile) ||
+        result.contains(ConnectivityResult.wifi) ||
+        result.contains(ConnectivityResult.ethernet);
+  }
+
+  Future<int> _readSchemaVersion(dynamic db) async {
+    final rows = await db.rawQuery(
+      'SELECT schema_version FROM sdk_meta WHERE id=1 LIMIT 1',
+    );
+    if (rows.isEmpty) return 2;
+    return (rows.first['schema_version'] as int?) ?? 0;
+  }
+
   /// Login with username and password (stateless, returns user info)
   Future<Map<String, dynamic>> login(String username, String password) async {
     if (!_initialized) await initialize();
@@ -108,6 +227,7 @@ class FrappeSDK {
     if (lang != null && lang.isNotEmpty) {
       await _translationService?.setLocale(lang);
     }
+    _setSessionUserFromLoginResponse(response);
     return response;
   }
 
@@ -126,6 +246,7 @@ class FrappeSDK {
     if (lang != null && lang.isNotEmpty) {
       await _translationService?.setLocale(lang);
     }
+    _setSessionUserFromLoginResponse(response);
     return response;
   }
 
@@ -237,6 +358,28 @@ class FrappeSDK {
     return _syncService!;
   }
 
+  /// Get the SessionUser service. Spec §6.6.
+  ///
+  /// The consumer wires login response → [SessionUser] via this service:
+  /// `FrappeSDK.instance.sessionUserService.set(SessionUser.fromJson(loginResponse))`
+  /// after a successful auth call. Logout flows call `.clear()` before
+  /// running [AtomicWipe.wipe] to drop the persisted JSON.
+  SessionUserService get sessionUserService {
+    if (!_initialized) {
+      throw Exception('SDK not initialized. Call initialize() first.');
+    }
+    return _sessionUserService!;
+  }
+
+  /// Convenience: current logged-in user, or null if no session has
+  /// been populated yet (e.g. fresh install before login).
+  SessionUser? get sessionUser => _sessionUserService?.current;
+
+  /// Convenience: stream of [SessionUser] changes — fires on `set()` and
+  /// `clear()`. Restored state from disk does NOT fire (use the synchronous
+  /// [sessionUser] getter for the initial read).
+  Stream<SessionUser?>? get sessionUser$ => _sessionUserService?.stream;
+
   /// Get Repository (for offline operations)
   OfflineRepository get repository {
     if (!_initialized) {
@@ -319,6 +462,41 @@ class FrappeSDK {
     if (lang != null && lang.isNotEmpty) {
       await _translationService?.setLocale(lang);
     }
+    // mobile_auth.me returns a Frappe user document — 'name' is the user email.
+    final name = userInfo['name'] as String?;
+    if (name != null && name.isNotEmpty) {
+      await _sessionUserService?.set(SessionUser(
+        name: name,
+        fullName: userInfo['full_name'] as String?,
+        userImage: userInfo['user_image'] as String?,
+        roles: ((userInfo['roles'] as List?) ?? [])
+            .map((r) => r.toString())
+            .where((r) => r.isNotEmpty)
+            .toList(),
+        userDefaults: ((userInfo['user_defaults'] as Map?) ?? {})
+            .map((k, v) => MapEntry(k.toString(), v.toString())),
+        permissions: {},
+        extras: {},
+      ));
+    }
+  }
+
+  /// Builds a [SessionUser] from a login/OTP response and persists it.
+  /// The login response uses `user` (not `name`) for the username.
+  void _setSessionUserFromLoginResponse(Map<String, dynamic> response) {
+    final name = response['user'] as String?;
+    if (name == null || name.isEmpty) return;
+    _sessionUserService?.set(SessionUser(
+      name: name,
+      fullName: response['full_name'] as String?,
+      roles: ((response['roles'] as List?) ?? [])
+          .map((r) => r.toString())
+          .where((r) => r.isNotEmpty)
+          .toList(),
+      userDefaults: {},
+      permissions: {},
+      extras: {},
+    ));
   }
 
   /// Internal: initial metadata + data sync for mobile doctypes.
@@ -328,6 +506,12 @@ class FrappeSDK {
   /// 3) Pull records for all mobile doctypes into the offline DB
   Future<void> _initialMetaAndDataSync() async {
     if (_metaService == null || _syncService == null) return;
+
+    // Offline launch: every call below is pure-network and would block
+    // on the HTTP timeout (~30s each, ~4 minutes total) before failing.
+    // `_cachedOnline` was set during initialize() so reading it here is
+    // race-free.
+    if (!_cachedOnline) return;
 
     try {
       await _permissionService?.syncFromApi();
@@ -354,12 +538,30 @@ class FrappeSDK {
     }
 
     try {
-      final doctypes = await _metaService!.getMobileFormDoctypeNames();
-      for (final doctype in doctypes) {
+      // Pull data for entry-point (mobile form) doctypes AND every doctype
+      // they reach via Link / Table / Table MultiSelect — i.e. the
+      // dependency closure. Spec §3.2 + §5.1.
+      //
+      // Without this, Link pickers on offline forms have nothing to show
+      // (e.g. an Order form needs Customer + Item populated locally before
+      // the user can fill its Link fields). Child-table doctypes are
+      // excluded — they ride along inside their parent's records and
+      // don't need their own pull.
+      final entryPoints = await _metaService!.getMobileFormDoctypeNames();
+      final closure = await _metaService!.closure(entryPoints);
+      final toPull = closure.doctypes
+          .where((d) => !closure.childDoctypes.contains(d))
+          .toList();
+      for (final doctype in toPull) {
+        // Skip doctypes the user cannot read — avoids wasteful 403 requests.
+        // canRead() defaults to true when no permission record exists.
+        if (_permissionService != null &&
+            !await _permissionService!.canRead(doctype)) {
+          continue;
+        }
         try {
           await _syncService!.pullSync(doctype: doctype);
         } catch (_) {
-          // continue with other doctypes
           continue;
         }
       }
