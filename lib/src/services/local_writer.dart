@@ -3,7 +3,6 @@ import 'package:uuid/uuid.dart';
 
 import '../database/field_type_mapping.dart';
 import '../database/normalize_for_search.dart';
-import '../database/schema_applier.dart';
 import '../database/table_name.dart';
 import '../models/doc_type_meta.dart';
 import '../models/meta_resolver.dart';
