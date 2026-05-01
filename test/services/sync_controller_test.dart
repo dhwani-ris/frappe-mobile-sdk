@@ -23,6 +23,12 @@ void main() {
   });
   tearDown(() async => db.close());
 
+  // Defaults for tests that do not exercise the pullAndOverwriteLocal path.
+  // Tests for that path override them with mocks.
+  Future<Map<String, dynamic>> noopFetch(String dt, String name) async =>
+      <String, dynamic>{};
+  Future<void> noopApply(String dt, Map<String, dynamic> doc) async {}
+
   test('retry(outboxId) → row flips from failed to pending', () async {
     final id = await outbox.insertPending(
       doctype: 'X',
@@ -30,17 +36,23 @@ void main() {
       operation: OutboxOperation.insert,
       payload: '{}',
     );
-    await outbox.markFailed(id,
-        errorCode: ErrorCode.NETWORK, errorMessage: 'timeout');
+    await outbox.markFailed(
+      id,
+      errorCode: ErrorCode.NETWORK,
+      errorMessage: 'timeout',
+    );
 
     var pushCalls = 0;
     final ctrl = SyncController(
       outboxDao: outbox,
       notifier: SyncStateNotifier(),
-      runPull: () async {},
+      runPull: () async => <String>{},
+      runPullForDoctypes: (_) async {},
       runPush: () async {
         pushCalls++;
       },
+      fetchSingleDoc: noopFetch,
+      applySingleDoc: noopApply,
     );
     await ctrl.retry(id);
     final r = await outbox.findById(id);
@@ -60,8 +72,11 @@ void main() {
     final ctrl = SyncController(
       outboxDao: outbox,
       notifier: SyncStateNotifier(),
-      runPull: () async {},
+      runPull: () async => <String>{},
+      runPullForDoctypes: (_) async {},
       runPush: () async => pushCalls++,
+      fetchSingleDoc: noopFetch,
+      applySingleDoc: noopApply,
     );
     await ctrl.retry(id);
     final r = await outbox.findById(id);
@@ -76,23 +91,32 @@ void main() {
       operation: OutboxOperation.insert,
       payload: '{}',
     );
-    await outbox.markFailed(idPerm,
-        errorCode: ErrorCode.PERMISSION_DENIED, errorMessage: 'x');
+    await outbox.markFailed(
+      idPerm,
+      errorCode: ErrorCode.PERMISSION_DENIED,
+      errorMessage: 'x',
+    );
     final idNet = await outbox.insertPending(
       doctype: 'X',
       mobileUuid: 'u2',
       operation: OutboxOperation.insert,
       payload: '{}',
     );
-    await outbox.markFailed(idNet,
-        errorCode: ErrorCode.NETWORK, errorMessage: 'x');
+    await outbox.markFailed(
+      idNet,
+      errorCode: ErrorCode.NETWORK,
+      errorMessage: 'x',
+    );
 
     var pushCalls = 0;
     final ctrl = SyncController(
       outboxDao: outbox,
       notifier: SyncStateNotifier(),
-      runPull: () async {},
+      runPull: () async => <String>{},
+      runPullForDoctypes: (_) async {},
       runPush: () async => pushCalls++,
+      fetchSingleDoc: noopFetch,
+      applySingleDoc: noopApply,
     );
     await ctrl.retryAll();
     final net = await outbox.findById(idNet);
@@ -115,21 +139,35 @@ void main() {
       operation: OutboxOperation.insert,
       payload: '{}',
     );
-    await outbox.markFailed(idA, errorCode: ErrorCode.NETWORK, errorMessage: 'x');
-    await outbox.markFailed(idB, errorCode: ErrorCode.NETWORK, errorMessage: 'x');
+    await outbox.markFailed(
+      idA,
+      errorCode: ErrorCode.NETWORK,
+      errorMessage: 'x',
+    );
+    await outbox.markFailed(
+      idB,
+      errorCode: ErrorCode.NETWORK,
+      errorMessage: 'x',
+    );
 
     final ctrl = SyncController(
       outboxDao: outbox,
       notifier: SyncStateNotifier(),
-      runPull: () async {},
+      runPull: () async => <String>{},
+      runPullForDoctypes: (_) async {},
       runPush: () async {},
+      fetchSingleDoc: noopFetch,
+      applySingleDoc: noopApply,
     );
     await ctrl.retryAll(filterDoctypes: const ['A']);
     final a = await outbox.findById(idA);
     final b = await outbox.findById(idB);
     expect(a!.state, OutboxState.pending);
-    expect(b!.state, OutboxState.failed,
-        reason: 'B is not in the doctype filter');
+    expect(
+      b!.state,
+      OutboxState.failed,
+      reason: 'B is not in the doctype filter',
+    );
   });
 
   test('pause sets isPaused; resume clears', () async {
@@ -137,8 +175,11 @@ void main() {
     final ctrl = SyncController(
       outboxDao: outbox,
       notifier: n,
-      runPull: () async {},
+      runPull: () async => <String>{},
+      runPullForDoctypes: (_) async {},
       runPush: () async {},
+      fetchSingleDoc: noopFetch,
+      applySingleDoc: noopApply,
     );
     await ctrl.pause();
     expect(n.value.isPaused, isTrue);
@@ -146,29 +187,142 @@ void main() {
     expect(n.value.isPaused, isFalse);
   });
 
-  test('resolveConflict pullAndOverwriteLocal → marks done', () async {
-    final id = await outbox.insertPending(
-      doctype: 'X',
-      mobileUuid: 'u',
-      operation: OutboxOperation.update,
-      payload: '{}',
-    );
-    await db.update('outbox', {'server_name': 'X-1'},
-        where: 'id=?', whereArgs: [id]);
-    await outbox.markConflict(id, errorMessage: 'x');
-    final ctrl = SyncController(
-      outboxDao: outbox,
-      notifier: SyncStateNotifier(),
-      runPull: () async {},
-      runPush: () async {},
-    );
-    await ctrl.resolveConflict(
-      outboxId: id,
-      action: ConflictAction.pullAndOverwriteLocal,
-    );
-    final r = await outbox.findById(id);
-    expect(r!.state, OutboxState.done);
-  });
+  test(
+    'resolveConflict pullAndOverwriteLocal: fetches, applies, marks done',
+    () async {
+      final id = await outbox.insertPending(
+        doctype: 'Customer',
+        mobileUuid: 'u-conflict',
+        serverName: 'CUST-1',
+        operation: OutboxOperation.update,
+        payload: '{}',
+      );
+      await outbox.markConflict(id, errorMessage: 'mismatch');
+
+      final fetched = <List<String>>[];
+      final applied = <List<Object?>>[];
+
+      Future<Map<String, dynamic>> fakeFetch(String dt, String name) async {
+        fetched.add([dt, name]);
+        return <String, dynamic>{
+          'name': name,
+          'modified': '2026-04-30 10:00:00.000000',
+          'customer_name': 'Server Name',
+        };
+      }
+
+      Future<void> fakeApply(String dt, Map<String, dynamic> doc) async {
+        applied.add([dt, doc]);
+      }
+
+      final ctrl = SyncController(
+        outboxDao: outbox,
+        notifier: SyncStateNotifier(),
+        runPull: () async => <String>{},
+        runPullForDoctypes: (_) async {},
+        runPush: () async {},
+        fetchSingleDoc: fakeFetch,
+        applySingleDoc: fakeApply,
+      );
+
+      await ctrl.resolveConflict(
+        outboxId: id,
+        action: ConflictAction.pullAndOverwriteLocal,
+      );
+
+      expect(fetched, [
+        ['Customer', 'CUST-1'],
+      ]);
+      expect(applied.length, 1);
+      expect(applied.first[0], 'Customer');
+      expect((applied.first[1] as Map)['customer_name'], 'Server Name');
+      final r = await outbox.findById(id);
+      expect(r!.state, OutboxState.done);
+    },
+  );
+
+  test(
+    'resolveConflict pullAndOverwriteLocal: fetch failure leaves row in conflict',
+    () async {
+      final id = await outbox.insertPending(
+        doctype: 'Customer',
+        mobileUuid: 'u-conflict',
+        serverName: 'CUST-1',
+        operation: OutboxOperation.update,
+        payload: '{}',
+      );
+      await outbox.markConflict(id, errorMessage: 'mismatch');
+
+      var applyCalled = false;
+      Future<Map<String, dynamic>> failingFetch(String dt, String name) async {
+        throw Exception('network down');
+      }
+
+      Future<void> trackingApply(String dt, Map<String, dynamic> doc) async {
+        applyCalled = true;
+      }
+
+      final ctrl = SyncController(
+        outboxDao: outbox,
+        notifier: SyncStateNotifier(),
+        runPull: () async => <String>{},
+        runPullForDoctypes: (_) async {},
+        runPush: () async {},
+        fetchSingleDoc: failingFetch,
+        applySingleDoc: trackingApply,
+      );
+
+      await expectLater(
+        ctrl.resolveConflict(
+          outboxId: id,
+          action: ConflictAction.pullAndOverwriteLocal,
+        ),
+        throwsException,
+      );
+      expect(applyCalled, isFalse);
+      final r = await outbox.findById(id);
+      expect(r!.state, OutboxState.conflict);
+    },
+  );
+
+  test(
+    'resolveConflict pullAndOverwriteLocal: serverName=null skips fetch and closes',
+    () async {
+      final id = await outbox.insertPending(
+        doctype: 'Customer',
+        mobileUuid: 'u-conflict',
+        // No serverName — INSERT that never reached the server.
+        operation: OutboxOperation.insert,
+        payload: '{}',
+      );
+      await outbox.markConflict(id, errorMessage: 'mismatch');
+
+      var fetchCalled = false;
+      Future<Map<String, dynamic>> trackingFetch(String dt, String name) async {
+        fetchCalled = true;
+        return <String, dynamic>{};
+      }
+
+      final ctrl = SyncController(
+        outboxDao: outbox,
+        notifier: SyncStateNotifier(),
+        runPull: () async => <String>{},
+        runPullForDoctypes: (_) async {},
+        runPush: () async {},
+        fetchSingleDoc: trackingFetch,
+        applySingleDoc: noopApply,
+      );
+
+      await ctrl.resolveConflict(
+        outboxId: id,
+        action: ConflictAction.pullAndOverwriteLocal,
+      );
+
+      expect(fetchCalled, isFalse);
+      final r = await outbox.findById(id);
+      expect(r!.state, OutboxState.done);
+    },
+  );
 
   test('resolveConflict keepLocalAndRetry → flips to pending + push', () async {
     final id = await outbox.insertPending(
@@ -182,8 +336,11 @@ void main() {
     final ctrl = SyncController(
       outboxDao: outbox,
       notifier: SyncStateNotifier(),
-      runPull: () async {},
+      runPull: () async => <String>{},
+      runPullForDoctypes: (_) async {},
       runPush: () async => pushCalls++,
+      fetchSingleDoc: noopFetch,
+      applySingleDoc: noopApply,
     );
     await ctrl.resolveConflict(
       outboxId: id,
@@ -199,8 +356,16 @@ void main() {
     final ctrl = SyncController(
       outboxDao: outbox,
       notifier: SyncStateNotifier(),
-      runPull: () async => events.add('pull'),
+      runPull: () async {
+        events.add('pull');
+        return <String>{};
+      },
       runPush: () async => events.add('push'),
+      runPullForDoctypes: (s) async {
+        events.add('pullFor:${s.join(",")}');
+      },
+      fetchSingleDoc: noopFetch,
+      applySingleDoc: noopApply,
     );
     await ctrl.syncNow();
     expect(events, ['pull', 'push']);
@@ -213,7 +378,11 @@ void main() {
       operation: OutboxOperation.insert,
       payload: '{}',
     );
-    await outbox.markFailed(idF, errorCode: ErrorCode.NETWORK, errorMessage: 'x');
+    await outbox.markFailed(
+      idF,
+      errorCode: ErrorCode.NETWORK,
+      errorMessage: 'x',
+    );
     final idC = await outbox.insertPending(
       doctype: 'X',
       mobileUuid: 'c',
@@ -232,12 +401,62 @@ void main() {
     final ctrl = SyncController(
       outboxDao: outbox,
       notifier: SyncStateNotifier(),
-      runPull: () async {},
+      runPull: () async => <String>{},
+      runPullForDoctypes: (_) async {},
       runPush: () async {},
+      fetchSingleDoc: noopFetch,
+      applySingleDoc: noopApply,
     );
     final errs = await ctrl.pendingErrors();
     expect(errs.length, 3);
     expect(errs.map((r) => r.id).toSet(), {idF, idC, idB});
+  });
+
+  test(
+    'SIG-2: syncNow re-pulls deferred doctypes after push completes',
+    () async {
+      final calls = <String>[];
+      final ctrl = SyncController(
+        outboxDao: outbox,
+        notifier: SyncStateNotifier(),
+        runPull: () async {
+          calls.add('pull');
+          return {'Foo'};
+        },
+        runPush: () async {
+          calls.add('push');
+        },
+        runPullForDoctypes: (s) async {
+          calls.add('pullFor:${s.join(",")}');
+        },
+        fetchSingleDoc: noopFetch,
+        applySingleDoc: noopApply,
+      );
+      await ctrl.syncNow();
+      expect(calls, ['pull', 'push', 'pullFor:Foo']);
+    },
+  );
+
+  test('SIG-2: syncNow does NOT re-pull when nothing was deferred', () async {
+    final calls = <String>[];
+    final ctrl = SyncController(
+      outboxDao: outbox,
+      notifier: SyncStateNotifier(),
+      runPull: () async {
+        calls.add('pull');
+        return <String>{};
+      },
+      runPush: () async {
+        calls.add('push');
+      },
+      runPullForDoctypes: (_) async {
+        calls.add('pullFor');
+      },
+      fetchSingleDoc: noopFetch,
+      applySingleDoc: noopApply,
+    );
+    await ctrl.syncNow();
+    expect(calls, ['pull', 'push']);
   });
 
   test(r'state$ stream relays notifier changes', () async {
@@ -245,8 +464,11 @@ void main() {
     final ctrl = SyncController(
       outboxDao: outbox,
       notifier: n,
-      runPull: () async {},
+      runPull: () async => <String>{},
+      runPullForDoctypes: (_) async {},
       runPush: () async {},
+      fetchSingleDoc: noopFetch,
+      applySingleDoc: noopApply,
     );
     final emitted = <bool>[];
     final sub = ctrl.state$.listen((s) => emitted.add(s.isPaused));

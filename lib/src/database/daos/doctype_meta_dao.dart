@@ -101,6 +101,19 @@ class DoctypeMetaDao {
     );
   }
 
+  /// SIG-12: persists the "this parent has at least one Table or Table
+  /// MultiSelect child" flag so `OfflineRepository.doctypesWithChildren`
+  /// can answer correctly after a cold start, before the in-memory
+  /// `_childMetasByParent` cache has been populated.
+  Future<void> setIsParentWithChildren(String doctype, bool value) async {
+    await _database.update(
+      'doctype_meta',
+      <String, Object?>{'is_parent_with_children': value ? 1 : 0},
+      where: 'doctype = ?',
+      whereArgs: [doctype],
+    );
+  }
+
   Future<String?> getTableName(String doctype) async {
     final rows = await _database.query(
       'doctype_meta',

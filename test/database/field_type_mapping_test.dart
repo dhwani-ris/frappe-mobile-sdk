@@ -5,9 +5,22 @@ void main() {
   group('sqliteColumnTypeFor', () {
     test('TEXT types', () {
       for (final t in [
-        'Data', 'Small Text', 'Long Text', 'Text', 'Code', 'HTML',
-        'JSON', 'Read Only', 'Password', 'Color', 'Select', 'Barcode',
-        'Link', 'Dynamic Link', 'Attach', 'Attach Image', 'Signature',
+        'Data',
+        'Small Text',
+        'Long Text',
+        'Text',
+        'Code',
+        'HTML',
+        'JSON',
+        'Read Only',
+        'Color',
+        'Select',
+        'Barcode',
+        'Link',
+        'Dynamic Link',
+        'Attach',
+        'Attach Image',
+        'Signature',
         'Geolocation',
       ]) {
         expect(sqliteColumnTypeFor(t), 'TEXT', reason: t);
@@ -38,8 +51,11 @@ void main() {
 
     test('layout fieldtypes have no column', () {
       for (final t in [
-        'Section Break', 'Column Break', 'Tab Break',
-        'Heading', 'Button',
+        'Section Break',
+        'Column Break',
+        'Tab Break',
+        'Heading',
+        'Button',
       ]) {
         expect(sqliteColumnTypeFor(t), isNull, reason: t);
       }
@@ -64,6 +80,14 @@ void main() {
       expect(isChildTableFieldType('Table'), isTrue);
       expect(isChildTableFieldType('Table MultiSelect'), isTrue);
       expect(isChildTableFieldType('Link'), isFalse);
+    });
+
+    test('Password fieldtype maps to no column (security: never persist)', () {
+      // Password values would land in unencrypted SQLite if mapped to
+      // any column type — exposing them on rooted/extracted devices.
+      // The single source of truth is null mapping; PullApply, schema
+      // generation, and push payload assembly all key off `== null`.
+      expect(sqliteColumnTypeFor('Password'), isNull);
     });
   });
 }

@@ -32,15 +32,18 @@ void main() {
     childMeta = DocTypeMeta(
       name: 'Sales Order Item',
       isTable: true,
-      fields: [
-        f('item_code', 'Data'),
-        f('qty', 'Int'),
-      ],
+      fields: [f('item_code', 'Data'), f('qty', 'Int')],
     );
-    for (final s in buildParentSchemaDDL(parentMeta, tableName: 'docs__sales_order')) {
+    for (final s in buildParentSchemaDDL(
+      parentMeta,
+      tableName: 'docs__sales_order',
+    )) {
       await db.execute(s);
     }
-    for (final s in buildChildSchemaDDL(childMeta, tableName: 'docs__sales_order_item')) {
+    for (final s in buildChildSchemaDDL(
+      childMeta,
+      tableName: 'docs__sales_order_item',
+    )) {
       await db.execute(s);
     }
   });
@@ -119,8 +122,11 @@ void main() {
     );
     final p = await db.query('docs__sales_order');
     expect(p.first['sync_status'], 'conflict');
-    expect(p.first['customer'], 'LOCAL_EDIT',
-        reason: 'local dirty payload preserved');
+    expect(
+      p.first['customer'],
+      'LOCAL_EDIT',
+      reason: 'local dirty payload preserved',
+    );
   });
 
   test('children fully replaced on re-pull', () async {
@@ -176,10 +182,7 @@ void main() {
       name: 'Customer',
       titleField: 'full_name',
       searchFields: ['email'],
-      fields: [
-        f('full_name', 'Data'),
-        f('email', 'Data'),
-      ],
+      fields: [f('full_name', 'Data'), f('email', 'Data')],
     );
     for (final s in buildParentSchemaDDL(m, tableName: 'docs__customer')) {
       await db.execute(s);
@@ -243,9 +246,27 @@ void main() {
       rows: [
         // Three rows the server returns with empty/null mobile_uuid -- a
         // non-deduped write would PK-collide on the second one.
-        {'name': 'EMP-1', 'modified': '2026-01-01', 'emp_id': 'E1', 'mobile_uuid': '', 'docstatus': 0},
-        {'name': 'EMP-2', 'modified': '2026-01-02', 'emp_id': 'E2', 'mobile_uuid': '', 'docstatus': 1},
-        {'name': 'EMP-3', 'modified': '2026-01-03', 'emp_id': 'E3', 'mobile_uuid': null, 'docstatus': 0},
+        {
+          'name': 'EMP-1',
+          'modified': '2026-01-01',
+          'emp_id': 'E1',
+          'mobile_uuid': '',
+          'docstatus': 0,
+        },
+        {
+          'name': 'EMP-2',
+          'modified': '2026-01-02',
+          'emp_id': 'E2',
+          'mobile_uuid': '',
+          'docstatus': 1,
+        },
+        {
+          'name': 'EMP-3',
+          'modified': '2026-01-03',
+          'emp_id': 'E3',
+          'mobile_uuid': null,
+          'docstatus': 0,
+        },
       ],
     );
     final rows = await db.query('docs__employee', orderBy: 'server_name');
@@ -259,5 +280,88 @@ void main() {
     // docstatus IS still mirrored from server data (system column with sane
     // default; meta-loop value passes through but does not break PK).
     expect(rows.firstWhere((r) => r['server_name'] == 'EMP-2')['docstatus'], 1);
+  });
+
+  test(
+    'parseFrappeUtcStringForTest normalizes tz-naive Frappe timestamps to UTC',
+    () {
+      // Frappe returns "YYYY-MM-DD HH:MM:SS.ffffff" with no timezone.
+      // Without normalization, DateTime.tryParse interprets these as local
+      // time — brittle across DST and tz changes. The helper appends `Z`
+      // unless an offset is already present.
+      expect(parseFrappeUtcStringForTest('2024-01-01 10:00:00'), endsWith('Z'));
+      expect(
+        parseFrappeUtcStringForTest('2024-01-01 10:00:00.500000'),
+        endsWith('Z'),
+      );
+      expect(
+        parseFrappeUtcStringForTest('2024-01-01 10:00:00Z'),
+        equals('2024-01-01 10:00:00Z'),
+      );
+      expect(
+        parseFrappeUtcStringForTest('2024-01-01T10:00:00+05:30'),
+        contains('+05:30'),
+      );
+      expect(
+        parseFrappeUtcStringForTest('2024-01-01T10:00:00-08:00'),
+        contains('-08:00'),
+      );
+      expect(parseFrappeUtcStringForTest(null), isNull);
+      expect(parseFrappeUtcStringForTest(''), isNull);
+      // Date-only strings stay as-is — Dart's DateTime.tryParse rejects
+      // `YYYY-MM-DDZ`, so we don't append the suffix when there's no time
+      // component. Comparison still works because two such strings parse
+      // with the same offset.
+      expect(parseFrappeUtcStringForTest('2024-01-01'), '2024-01-01');
+      expect(
+        DateTime.tryParse(parseFrappeUtcStringForTest('2024-01-01')!),
+        isNotNull,
+      );
+      expect(
+        DateTime.tryParse(parseFrappeUtcStringForTest('2024-01-01 10:00:00')!),
+        isNotNull,
+      );
+    },
+  );
+
+  test('Password fields are not persisted to the local mirror', () async {
+    // Schema generation already excludes Password columns; PullApply
+    // additionally skips them via `sqliteColumnTypeFor(type) == null`.
+    // This test pins the contract: even when the server response carries
+    // a Password value, no `password` column is created and no write is
+    // attempted against it.
+    final m = DocTypeMeta(
+      name: 'Vendor',
+      fields: [f('vendor_name', 'Data'), f('api_secret', 'Password')],
+    );
+    for (final s in buildParentSchemaDDL(m, tableName: 'docs__vendor')) {
+      await db.execute(s);
+    }
+    await PullApply.applyPage(
+      db: db,
+      parentMeta: m,
+      parentTable: 'docs__vendor',
+      childMetasByFieldname: const {},
+      rows: [
+        {
+          'name': 'V-001',
+          'vendor_name': 'Acme',
+          'api_secret': 'leaked-if-stored',
+          'modified': '2026-01-01',
+        },
+      ],
+    );
+    final cols = (await db.rawQuery(
+      'PRAGMA table_info(docs__vendor)',
+    )).map((r) => r['name'] as String).toSet();
+    expect(
+      cols.contains('api_secret'),
+      isFalse,
+      reason: 'Password columns must never be created',
+    );
+    final rows = await db.query('docs__vendor');
+    expect(rows.length, 1);
+    expect(rows.first['vendor_name'], 'Acme');
+    expect(rows.first.containsKey('api_secret'), isFalse);
   });
 }

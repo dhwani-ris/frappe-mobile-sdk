@@ -17,9 +17,12 @@ typedef OnRestoreCallback = void Function();
 /// deferred doctypes).
 class ConnectivityWatcher {
   bool _isOnline;
-  final StreamController<bool> _controller =
-      StreamController<bool>.broadcast();
+  final StreamController<bool> _controller = StreamController<bool>.broadcast();
   final List<OnRestoreCallback> _onRestoreCallbacks = [];
+
+  /// Subscription on the source stream — stored so [dispose] can cancel it
+  /// instead of letting it keep emitting into a closed controller.
+  StreamSubscription<bool>? _sub;
 
   ConnectivityWatcher._(this._isOnline);
 
@@ -28,14 +31,15 @@ class ConnectivityWatcher {
     required Stream<bool> stream,
   }) {
     final w = ConnectivityWatcher._(initial);
-    stream.listen(w._onEvent);
+    w._sub = stream.listen(w._onEvent);
     return w;
   }
 
   static Future<ConnectivityWatcher> production() async {
     final connectivity = Connectivity();
-    final initial = !(await connectivity.checkConnectivity())
-        .contains(ConnectivityResult.none);
+    final initial = !(await connectivity.checkConnectivity()).contains(
+      ConnectivityResult.none,
+    );
     final stream = connectivity.onConnectivityChanged.map(
       (results) => !results.contains(ConnectivityResult.none),
     );
@@ -57,5 +61,14 @@ class ConnectivityWatcher {
         cb();
       }
     }
+  }
+
+  /// Cancels the source-stream subscription and closes the broadcast
+  /// controller. Idempotent — safe to call multiple times. After dispose,
+  /// further events on the source stream are ignored.
+  Future<void> dispose() async {
+    await _sub?.cancel();
+    _sub = null;
+    if (!_controller.isClosed) await _controller.close();
   }
 }

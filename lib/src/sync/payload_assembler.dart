@@ -2,6 +2,7 @@ import 'package:sqflite/sqflite.dart';
 
 import '../models/doc_type_meta.dart';
 import '../models/outbox_row.dart';
+import 'push_error.dart';
 import 'uuid_rewriter.dart';
 
 /// Per-child-doctype info passed to [PayloadAssembler.assemble].
@@ -40,13 +41,24 @@ class PayloadAssembler {
     required Map<String, ChildInfo> childMetasByFieldname,
     required ResolveServerNameFn resolveServerName,
   }) async {
-    final parent = (await db.query(
+    final parentRows = await db.query(
       parentTable,
       where: 'mobile_uuid = ?',
       whereArgs: [row.mobileUuid],
       limit: 1,
-    ))
-        .first;
+    );
+    if (parentRows.isEmpty) {
+      // The parent row was deleted between outbox-insert and push-run —
+      // either by a manual cleanup, a cascading delete, or an aborted
+      // create flow. Surface a structured rejection instead of crashing
+      // the WriteQueue task with StateError.
+      throw ServerRejection(
+        status: 0,
+        rawBody:
+            'Local row missing for outbox entry mobile_uuid=${row.mobileUuid}',
+      );
+    }
+    final parent = parentRows.first;
 
     final payload = <String, Object?>{
       'doctype': parentMeta.name,

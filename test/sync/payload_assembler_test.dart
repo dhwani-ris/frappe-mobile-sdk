@@ -46,10 +46,16 @@ void main() {
       isTable: true,
       fields: [f('item_code', 'Data'), f('qty', 'Int')],
     );
-    for (final s in buildParentSchemaDDL(parentMeta, tableName: 'docs__sales_order')) {
+    for (final s in buildParentSchemaDDL(
+      parentMeta,
+      tableName: 'docs__sales_order',
+    )) {
       await db.execute(s);
     }
-    for (final s in buildChildSchemaDDL(childMeta, tableName: 'docs__so_item')) {
+    for (final s in buildChildSchemaDDL(
+      childMeta,
+      tableName: 'docs__so_item',
+    )) {
       await db.execute(s);
     }
     await db.insert('docs__sales_order', {
@@ -102,7 +108,7 @@ void main() {
         childMetasByFieldname: {
           'items': _ChildInfo('SO Item', childMeta, 'docs__so_item'),
         },
-        resolveServerName: (_, __) async => null,
+        resolveServerName: (_, _) async => null,
       );
       expect(payload['doctype'], 'Sales Order');
       expect(payload['mobile_uuid'], 'u-so-1');
@@ -140,7 +146,7 @@ void main() {
       childMetasByFieldname: {
         'items': _ChildInfo('SO Item', childMeta, 'docs__so_item'),
       },
-      resolveServerName: (_, __) async => null,
+      resolveServerName: (_, _) async => null,
     );
     expect(payload['modified'], '2026-01-15 10:00:00');
   });
@@ -163,7 +169,7 @@ void main() {
       childMetasByFieldname: {
         'items': _ChildInfo('SO Item', childMeta, 'docs__so_item'),
       },
-      resolveServerName: (_, __) async => null,
+      resolveServerName: (_, _) async => null,
     );
     for (final sys in [
       'sync_status',
@@ -202,9 +208,41 @@ void main() {
         childMetasByFieldname: {
           'items': _ChildInfo('SO Item', childMeta, 'docs__so_item'),
         },
-        resolveServerName: (_, __) async => null,
+        resolveServerName: (_, _) async => null,
       ),
       throwsA(isA<BlockedByUpstream>()),
     );
   });
+
+  test(
+    'throws ServerRejection (not StateError) when parent row missing',
+    () async {
+      // Outbox row points to a mobile_uuid that doesn't exist in the
+      // per-doctype mirror — happens when the row is deleted between
+      // outbox-insert and push-run. Previously crashed with `StateError:
+      // No element` from `.first`; must now surface a structured error
+      // so the outbox row is marked failed cleanly.
+      final row = OutboxRow(
+        id: 1,
+        doctype: 'Sales Order',
+        mobileUuid: 'ghost-uuid',
+        operation: OutboxOperation.update,
+        state: OutboxState.pending,
+        retryCount: 0,
+        createdAt: DateTime.utc(2026, 1, 1),
+        serverName: 'SO-DELETED',
+      );
+      expect(
+        () => PayloadAssembler.assemble(
+          db: db,
+          row: row,
+          parentMeta: parentMeta,
+          parentTable: 'docs__sales_order',
+          childMetasByFieldname: const {},
+          resolveServerName: (_, _) async => null,
+        ),
+        throwsA(isA<ServerRejection>()),
+      );
+    },
+  );
 }

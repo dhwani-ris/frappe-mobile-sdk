@@ -15,6 +15,30 @@ enum ConflictAction { pullAndOverwriteLocal, keepLocalAndRetry }
 
 typedef RunFn = Future<void> Function();
 
+/// Pull runner — returns the set of doctypes the engine deferred because
+/// a push was active for them. Caller re-runs [RunPullForFn] for this
+/// subset after the push completes (SIG-2).
+typedef RunPullFn = Future<Set<String>> Function();
+
+/// Targeted re-pull for a specific doctype subset. Wraps
+/// `PullEngine.run(closure)` over a closure scoped to [doctypes].
+typedef RunPullForFn = Future<void> Function(Set<String> doctypes);
+
+/// Fetches a single document snapshot from the server. Throws on any
+/// failure (404, 5xx, network) — the wired implementation is
+/// `client.doctype.getByName`, whose contract throws `ApiException` on
+/// non-2xx responses (`rest_helper.dart:245`). Callers do NOT receive
+/// `null` on missing rows; that case surfaces as a thrown 404.
+typedef FetchSingleDocFn =
+    Future<Map<String, dynamic>> Function(String doctype, String serverName);
+
+/// Applies a single server-side document snapshot to the local mirror.
+/// The wired implementation builds parentMeta + childMetasByFieldname
+/// inline (using the same MetaResolverFn that PullEngine uses) and calls
+/// `PullApply.applyPage(... rows: [doc])`.
+typedef ApplySingleDocFn =
+    Future<void> Function(String doctype, Map<String, dynamic> doc);
+
 /// Public imperative surface for sync. Spec §9.3.
 ///
 /// The controller is a thin facade over [OutboxDao], [SyncStateNotifier],
@@ -32,26 +56,36 @@ typedef RunFn = Future<void> Function();
 class SyncController {
   final OutboxDao outboxDao;
   final SyncStateNotifier notifier;
-  final RunFn runPull;
+  final RunPullFn runPull;
   final RunFn runPush;
+  final RunPullForFn runPullForDoctypes;
+  final FetchSingleDocFn fetchSingleDoc;
+  final ApplySingleDocFn applySingleDoc;
 
   SyncController({
     required this.outboxDao,
     required this.notifier,
     required this.runPull,
     required this.runPush,
+    required this.runPullForDoctypes,
+    required this.fetchSingleDoc,
+    required this.applySingleDoc,
   });
 
   SyncState get state => notifier.value;
   Stream<SyncState> get state$ => notifier.stream;
 
-  /// Pull then push. Used by `Sync now` button + connectivity-restore
-  /// hooks. Caller can run the two phases independently if it has its
-  /// own scheduling. No-ops while paused.
+  /// Pull then push. Doctypes deferred during the pull (because a push
+  /// was active for them) are re-pulled after the push completes — SIG-2.
+  /// Used by `Sync now` button + connectivity-restore hooks. No-ops while
+  /// paused.
   Future<void> syncNow() async {
     if (notifier.value.isPaused) return;
-    await runPull();
+    final deferred = await runPull();
     await runPush();
+    if (deferred.isNotEmpty) {
+      await runPullForDoctypes(deferred);
+    }
   }
 
   /// Prevents [syncNow] from starting new pull/push cycles. In-flight
@@ -113,9 +147,14 @@ class SyncController {
   }
 
   /// Resolves a conflicted row.
-  /// - [pullAndOverwriteLocal]: marks the row done with its current
-  ///   `server_name`. The next pull picks up the server snapshot;
-  ///   local edits are discarded.
+  /// - [pullAndOverwriteLocal]: fetches the current server snapshot, applies
+  ///   it to the local mirror, then marks the outbox row done. Blocking —
+  ///   the dialog awaits this future before dismissing, so the user
+  ///   returning to the list view sees server values immediately. Any
+  ///   failure (network, 404, 5xx) propagates to the caller; the outbox
+  ///   row stays in `conflict` so the user can retry. NO silent deletion
+  ///   semantics — a 404 is treated as a fetch failure, not as "server
+  ///   deleted this row".
   /// - [keepLocalAndRetry]: flips the row back to pending so the push
   ///   engine runs ThreeWayMerge again with a fresh server snapshot.
   Future<void> resolveConflict({
@@ -125,7 +164,17 @@ class SyncController {
     final row = await outboxDao.findById(outboxId);
     if (row == null) return;
     if (action == ConflictAction.pullAndOverwriteLocal) {
-      await outboxDao.markDone(outboxId, serverName: row.serverName ?? '');
+      final serverName = row.serverName;
+      if (serverName == null || serverName.isEmpty) {
+        // INSERT that never reached the server — there is nothing to
+        // fetch. Close the outbox row; per-doctype row stays as the
+        // user's local copy. NOT a "treat 404 as deleted" path.
+        await outboxDao.markDone(outboxId, serverName: '');
+        return;
+      }
+      final snapshot = await fetchSingleDoc(row.doctype, serverName);
+      await applySingleDoc(row.doctype, snapshot);
+      await outboxDao.markDone(outboxId, serverName: serverName);
     } else {
       await outboxDao.resetToPending(outboxId);
       await runPush();
@@ -171,10 +220,7 @@ class SyncController {
         blocked = const {};
       }
     }
-    return DeleteCascadePlan(
-      rootOutboxId: outboxId,
-      blockedBy: blocked,
-    );
+    return DeleteCascadePlan(rootOutboxId: outboxId, blockedBy: blocked);
   }
 }
 

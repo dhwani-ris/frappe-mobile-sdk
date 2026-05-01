@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:frappe_mobile_sdk/src/sync/pull_engine.dart';
 import 'package:frappe_mobile_sdk/src/sync/sync_state_notifier.dart';
@@ -47,9 +49,10 @@ void main() {
       await db.execute(s);
     }
 
-    final meta = DocTypeMeta(name: 'Customer', fields: [
-      f('customer_name', 'Data'),
-    ]);
+    final meta = DocTypeMeta(
+      name: 'Customer',
+      fields: [f('customer_name', 'Data')],
+    );
     for (final s in buildParentSchemaDDL(meta, tableName: 'docs__customer')) {
       await db.execute(s);
     }
@@ -81,9 +84,9 @@ void main() {
             : const <Map<String, dynamic>>[];
       },
     );
-    final closure = ClosureResult(
-      doctypes: const ['Customer'],
-      graph: const {
+    final closure = const ClosureResult(
+      doctypes: ['Customer'],
+      graph: {
         'Customer': DepGraph(
           doctype: 'Customer',
           tier: 0,
@@ -91,8 +94,8 @@ void main() {
           incoming: [],
         ),
       },
-      childDoctypes: const {},
-      warnings: const [],
+      childDoctypes: {},
+      warnings: [],
     );
     final notifier = SyncStateNotifier();
     final engine = PullEngine(
@@ -112,6 +115,11 @@ void main() {
     expect(rows.length, 1);
     final cursor = await metaDao.getLastOkCursor('Customer');
     expect(cursor, isNot(isNull));
+    // SIG-9: persisted cursor JSON must include `complete: true` once the
+    // doctype drains, so SyncService._pullOneInternal can read it without
+    // falling back into a re-fetch loop.
+    final parsed = jsonDecode(cursor!) as Map<String, dynamic>;
+    expect(parsed['complete'], isTrue);
     expect(notifier.value.perDoctype.containsKey('Customer'), isTrue);
     expect(notifier.value.perDoctype['Customer']!.pulledCount, 1);
     expect(notifier.value.perDoctype['Customer']!.completedAt, isNotNull);
@@ -130,9 +138,9 @@ void main() {
         fail('fetcher should not be called for a deferred doctype');
       },
     );
-    final closure = ClosureResult(
-      doctypes: const ['Customer'],
-      graph: const {
+    final closure = const ClosureResult(
+      doctypes: ['Customer'],
+      graph: {
         'Customer': DepGraph(
           doctype: 'Customer',
           tier: 0,
@@ -140,8 +148,8 @@ void main() {
           incoming: [],
         ),
       },
-      childDoctypes: const {},
-      warnings: const [],
+      childDoctypes: {},
+      warnings: [],
     );
     final notifier = SyncStateNotifier();
     final engine = PullEngine(
@@ -152,17 +160,50 @@ void main() {
       fetcher: fetcher,
       pageSize: 500,
       notifier: notifier,
-      metaResolver: (dt) async =>
-          DocTypeMeta(name: dt, fields: const []),
+      metaResolver: (dt) async => DocTypeMeta(name: dt, fields: const []),
     );
-    await engine.run(closure);
+    final deferred = await engine.run(closure);
     expect(notifier.value.perDoctype['Customer']!.deferred, isTrue);
+    // SIG-2: caller needs to know which doctypes were deferred so it can
+    // re-pull them after the push engine drains.
+    expect(deferred, contains('Customer'));
+  });
+
+  test('PullEngine.run returns empty set when nothing was deferred', () async {
+    final fetcher = PullPageFetcher(
+      listHttp: (doctype, params) async => const [],
+    );
+    final closure = const ClosureResult(
+      doctypes: ['Customer'],
+      graph: {
+        'Customer': DepGraph(
+          doctype: 'Customer',
+          tier: 0,
+          outgoing: [],
+          incoming: [],
+        ),
+      },
+      childDoctypes: {},
+      warnings: [],
+    );
+    final engine = PullEngine(
+      db: db,
+      metaDao: metaDao,
+      outboxDao: OutboxDao(db),
+      pool: ConcurrencyPool(maxConcurrent: 2),
+      fetcher: fetcher,
+      pageSize: 500,
+      notifier: SyncStateNotifier(),
+      metaResolver: (dt) async => DocTypeMeta(name: dt, fields: const []),
+    );
+    final deferred = await engine.run(closure);
+    expect(deferred, isEmpty);
   });
 
   test('skips child doctypes (they ride with parent)', () async {
-    final closure = ClosureResult(
-      doctypes: const ['Sales Order Item'],
-      graph: const {
+    final closure = const ClosureResult(
+      doctypes: ['Sales Order Item'],
+      graph: {
         'Sales Order Item': DepGraph(
           doctype: 'Sales Order Item',
           tier: 1,
@@ -170,8 +211,8 @@ void main() {
           incoming: [],
         ),
       },
-      childDoctypes: const {'Sales Order Item'},
-      warnings: const [],
+      childDoctypes: {'Sales Order Item'},
+      warnings: [],
     );
     var called = false;
     final fetcher = PullPageFetcher(
@@ -202,19 +243,15 @@ void main() {
         page++;
         if (page == 1) {
           return [
-            {
-              'name': 'C-1',
-              'modified': '2026-01-01',
-              'customer_name': 'A',
-            },
+            {'name': 'C-1', 'modified': '2026-01-01', 'customer_name': 'A'},
           ];
         }
         throw Exception('network');
       },
     );
-    final closure = ClosureResult(
-      doctypes: const ['Customer'],
-      graph: const {
+    final closure = const ClosureResult(
+      doctypes: ['Customer'],
+      graph: {
         'Customer': DepGraph(
           doctype: 'Customer',
           tier: 0,
@@ -222,8 +259,8 @@ void main() {
           incoming: [],
         ),
       },
-      childDoctypes: const {},
-      warnings: const [],
+      childDoctypes: {},
+      warnings: [],
     );
     final engine = PullEngine(
       db: db,
@@ -238,8 +275,11 @@ void main() {
     );
     await engine.run(closure);
     final cursor = await metaDao.getLastOkCursor('Customer');
-    expect(cursor, isNull,
-        reason: 'cursor must NOT advance when page 2 throws');
+    expect(
+      cursor,
+      isNull,
+      reason: 'cursor must NOT advance when page 2 throws',
+    );
   });
 
   test('multiple doctypes drain in parallel via the pool', () async {
@@ -264,43 +304,30 @@ void main() {
         if (perDoctypeCalls[doctype] == 1) {
           if (doctype == 'Customer') {
             return [
-              {
-                'name': 'C-1',
-                'modified': '2026-01-01',
-                'customer_name': 'X',
-              },
+              {'name': 'C-1', 'modified': '2026-01-01', 'customer_name': 'X'},
             ];
           } else if (doctype == 'Lead') {
             return [
-              {
-                'name': 'L-1',
-                'modified': '2026-01-01',
-                'lead_name': 'Y',
-              },
+              {'name': 'L-1', 'modified': '2026-01-01', 'lead_name': 'Y'},
             ];
           }
         }
         return const <Map<String, dynamic>>[];
       },
     );
-    final closure = ClosureResult(
-      doctypes: const ['Customer', 'Lead'],
-      graph: const {
+    final closure = const ClosureResult(
+      doctypes: ['Customer', 'Lead'],
+      graph: {
         'Customer': DepGraph(
           doctype: 'Customer',
           tier: 0,
           outgoing: [],
           incoming: [],
         ),
-        'Lead': DepGraph(
-          doctype: 'Lead',
-          tier: 0,
-          outgoing: [],
-          incoming: [],
-        ),
+        'Lead': DepGraph(doctype: 'Lead', tier: 0, outgoing: [], incoming: []),
       },
-      childDoctypes: const {},
-      warnings: const [],
+      childDoctypes: {},
+      warnings: [],
     );
     final engine = PullEngine(
       db: db,
@@ -339,9 +366,9 @@ void main() {
         return const <Map<String, dynamic>>[];
       },
     );
-    final closure = ClosureResult(
-      doctypes: const ['Customer'],
-      graph: const {
+    final closure = const ClosureResult(
+      doctypes: ['Customer'],
+      graph: {
         'Customer': DepGraph(
           doctype: 'Customer',
           tier: 0,
@@ -349,8 +376,8 @@ void main() {
           incoming: [],
         ),
       },
-      childDoctypes: const {},
-      warnings: const [],
+      childDoctypes: {},
+      warnings: [],
     );
 
     // Capture queue creations: one queue per doctype, reused across pages.
@@ -372,28 +399,33 @@ void main() {
     );
     await engine.run(closure);
 
-    expect(
-      created,
-      ['Customer'],
-      reason: 'queue is created once per doctype, not per page',
-    );
+    expect(created, [
+      'Customer',
+    ], reason: 'queue is created once per doctype, not per page');
     final rows = await db.query('docs__customer');
-    expect(rows.length, 2,
-        reason: 'both pages must commit through the WriteQueue');
+    expect(
+      rows.length,
+      2,
+      reason: 'both pages must commit through the WriteQueue',
+    );
   });
 
   test(
     'parent with child fieldname resolves child meta and pulls children inline',
     () async {
-      final orderMeta = DocTypeMeta(name: 'Order', fields: [
-        f('items', 'Table', options: 'Order Item'),
-      ]);
+      final orderMeta = DocTypeMeta(
+        name: 'Order',
+        fields: [f('items', 'Table', options: 'Order Item')],
+      );
       final itemMeta = DocTypeMeta(
         name: 'Order Item',
         isTable: true,
         fields: [f('item_code', 'Data'), f('qty', 'Int')],
       );
-      for (final s in buildParentSchemaDDL(orderMeta, tableName: 'docs__order')) {
+      for (final s in buildParentSchemaDDL(
+        orderMeta,
+        tableName: 'docs__order',
+      )) {
         await db.execute(s);
       }
       await db.execute('''
@@ -442,9 +474,9 @@ void main() {
           return const <Map<String, dynamic>>[];
         },
       );
-      final closure = ClosureResult(
-        doctypes: const ['Order', 'Order Item'],
-        graph: const {
+      final closure = const ClosureResult(
+        doctypes: ['Order', 'Order Item'],
+        graph: {
           'Order': DepGraph(
             doctype: 'Order',
             tier: 0,
@@ -464,8 +496,8 @@ void main() {
             incoming: [],
           ),
         },
-        childDoctypes: const {'Order Item'},
-        warnings: const [],
+        childDoctypes: {'Order Item'},
+        warnings: [],
       );
       final engine = PullEngine(
         db: db,
@@ -475,8 +507,7 @@ void main() {
         fetcher: fetcher,
         pageSize: 500,
         notifier: SyncStateNotifier(),
-        metaResolver: (dt) async =>
-            dt == 'Order' ? orderMeta : itemMeta,
+        metaResolver: (dt) async => dt == 'Order' ? orderMeta : itemMeta,
       );
       await engine.run(closure);
 

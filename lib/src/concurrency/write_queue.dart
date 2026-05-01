@@ -24,9 +24,10 @@ class _PendingWrite<T> {
 /// queues so they never block each other.
 ///
 /// One transaction per batch — eliminates SQLite write contention while
-/// keeping fsync amortised across writes. A failure in one task only
-/// fails that task; the remaining batch tasks continue inside the same
-/// transaction.
+/// keeping fsync amortised across writes. Per-task isolation is provided
+/// by SQLite savepoints: a failed task is rolled back to its savepoint
+/// (its partial writes are discarded) without aborting the outer
+/// transaction or affecting sibling tasks.
 class WriteQueue {
   final Database db;
   final String doctype;
@@ -34,12 +35,9 @@ class WriteQueue {
 
   final Queue<_PendingWrite<Object?>> _queue = Queue();
   bool _running = false;
+  int _savepointCounter = 0;
 
-  WriteQueue({
-    required this.db,
-    required this.doctype,
-    this.batchRows = 50,
-  });
+  WriteQueue({required this.db, required this.doctype, this.batchRows = 50});
 
   Future<T> submit<T>(WriteTask<T> task) {
     final p = _PendingWrite<Object?>(
@@ -60,10 +58,21 @@ class WriteQueue {
             var count = 0;
             while (_queue.isNotEmpty && count < batchRows) {
               final p = _queue.removeFirst();
+              final sp = 'wq_${++_savepointCounter}';
               try {
+                await txn.execute('SAVEPOINT $sp');
                 final r = await p.task(txn);
+                await txn.execute('RELEASE SAVEPOINT $sp');
                 p.completer.complete(r);
               } catch (e, st) {
+                // Roll back this task's partial writes; sibling tasks
+                // inside the same outer transaction are unaffected.
+                try {
+                  await txn.execute('ROLLBACK TO SAVEPOINT $sp');
+                  await txn.execute('RELEASE SAVEPOINT $sp');
+                } catch (_) {
+                  // Savepoint may not exist if the SAVEPOINT itself failed.
+                }
                 p.completer.completeError(e, st);
               }
               count++;

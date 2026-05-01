@@ -37,7 +37,7 @@ class OfflineRepository {
   /// offline read path ([UnifiedResolver]) sees newly-saved data
   /// immediately. Spec §3.2.
   OfflineRepository(this._database, {LocalWriter? localWriter})
-      : _localWriter = localWriter;
+    : _localWriter = localWriter;
 
   /// Drops the in-memory meta cache. Call this after a meta refresh so
   /// schema-bumping fields (new column, dropped Link) take effect on the
@@ -51,7 +51,28 @@ class OfflineRepository {
   /// Doctype names whose meta has at least one Table / Table MultiSelect
   /// field. Used by SyncService to decide whether to fetch full docs
   /// (with children) instead of bare `frappe.client.get_list` rows.
-  Set<String> doctypesWithChildren() => _childMetasByParent.keys.toSet();
+  /// SIG-12: returns the union of in-memory `_childMetasByParent.keys`
+  /// and the persisted `is_parent_with_children = 1` rows in
+  /// `doctype_meta`. Merging both sources is required because:
+  ///   * In-memory keys reflect what `ensureSchemaForClosure` /
+  ///     `_resolveChildMetas` have already touched in THIS process —
+  ///     including doctypes registered this session whose flag has not
+  ///     yet been persisted at the moment the query runs.
+  ///   * Persisted rows reflect everything written by ANY prior session,
+  ///     including doctypes the current process has not yet touched
+  ///     (the cold-start case SIG-12 was filed for).
+  /// Preferring memory-only loses persisted state on a fresh process;
+  /// preferring DB-only loses unpersisted in-flight registrations.
+  Future<Set<String>> doctypesWithChildren() async {
+    final out = <String>{..._childMetasByParent.keys};
+    final rows = await _database.rawDatabase.rawQuery(
+      'SELECT doctype FROM doctype_meta WHERE is_parent_with_children = 1',
+    );
+    for (final r in rows) {
+      out.add(r['doctype'] as String);
+    }
+    return out;
+  }
 
   /// Eagerly creates per-doctype mirror tables for every doctype the
   /// closure visited — parents AND children — and registers the child
@@ -117,6 +138,14 @@ class OfflineRepository {
       }
       if (byField.isNotEmpty) {
         _childMetasByParent[doctype] = byField;
+        // SIG-12: persist the flag so doctypesWithChildren survives a
+        // process restart even before ensureSchemaForClosure runs again.
+        try {
+          await _database.doctypeMetaDao.setIsParentWithChildren(doctype, true);
+        } catch (_) {
+          // setIsParentWithChildren may not be available on older schemas
+          // (test fixtures that only seed v3 doctype_meta). Best-effort.
+        }
       }
     }
   }
@@ -127,8 +156,9 @@ class OfflineRepository {
     required Map<String, dynamic> data,
   }) async {
     final rawUuid = data['mobile_uuid'] as String?;
-    final mobileUuid =
-        (rawUuid != null && rawUuid.isNotEmpty) ? rawUuid : _uuid.v4();
+    final mobileUuid = (rawUuid != null && rawUuid.isNotEmpty)
+        ? rawUuid
+        : _uuid.v4();
     final dataWithUuid = <String, dynamic>{...data, 'mobile_uuid': mobileUuid};
     final document = Document.create(
       doctype: doctype,

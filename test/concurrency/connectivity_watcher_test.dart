@@ -43,4 +43,38 @@ void main() {
     expect(count, 2);
     await c.close();
   });
+
+  test('dispose cancels subscription and closes controller', () async {
+    final controller = StreamController<bool>();
+    final w = ConnectivityWatcher.fromStream(
+      initial: false,
+      stream: controller.stream,
+    );
+    final seen = <bool>[];
+    final sub = w.onChange.listen(seen.add);
+    controller.add(true);
+    await Future<void>.delayed(Duration.zero);
+    expect(seen, [true]);
+
+    await w.dispose();
+
+    // After dispose, source-stream events MUST NOT mutate watcher state.
+    controller.add(false);
+    await Future<void>.delayed(Duration.zero);
+    expect(w.isOnline, isTrue, reason: 'state frozen after dispose');
+
+    await sub.cancel();
+    await controller.close();
+  });
+
+  test('dispose is idempotent — second call is a no-op', () async {
+    final controller = StreamController<bool>();
+    final w = ConnectivityWatcher.fromStream(
+      initial: false,
+      stream: controller.stream,
+    );
+    await w.dispose();
+    await w.dispose(); // must not throw
+    await controller.close();
+  });
 }

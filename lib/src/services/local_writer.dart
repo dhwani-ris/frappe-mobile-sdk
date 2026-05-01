@@ -24,7 +24,7 @@ class LocalWriter {
   final Uuid _uuid;
 
   LocalWriter(this._db, this._metaResolver, {Uuid? uuid})
-      : _uuid = uuid ?? const Uuid();
+    : _uuid = uuid ?? const Uuid();
 
   static const _systemParentColumns = <String>{
     'mobile_uuid',
@@ -73,9 +73,10 @@ class LocalWriter {
   }) async {
     final parentMeta = await _metaResolver(parentDoctype);
     final parentTable = normalizeDoctypeTableName(parentDoctype);
-    final _rawUuid = data['mobile_uuid'] as String?;
-    final mobileUuid =
-        (_rawUuid != null && _rawUuid.isNotEmpty) ? _rawUuid : _uuid.v4();
+    final rawUuid = data['mobile_uuid'] as String?;
+    final mobileUuid = (rawUuid != null && rawUuid.isNotEmpty)
+        ? rawUuid
+        : _uuid.v4();
     final nowMs = DateTime.now().toUtc().millisecondsSinceEpoch;
 
     final childInfos = <String, _ChildInfo>{};
@@ -84,7 +85,9 @@ class LocalWriter {
       final fn = f.fieldname;
       final opt = f.options;
       if ((ft == 'Table' || ft == 'Table MultiSelect') &&
-          fn != null && opt != null && opt.isNotEmpty) {
+          fn != null &&
+          opt != null &&
+          opt.isNotEmpty) {
         try {
           final cm = await _metaResolver(opt);
           childInfos[fn] = _ChildInfo(opt, cm);
@@ -163,11 +166,10 @@ class LocalWriter {
           final raw = list[idx];
           if (raw is! Map) continue;
           final cr = Map<String, dynamic>.from(raw);
-          final _rawChildUuid = cr['mobile_uuid'] as String?;
-          final childUuid =
-              (_rawChildUuid != null && _rawChildUuid.isNotEmpty)
-                  ? _rawChildUuid
-                  : _uuid.v4();
+          final rawChildUuid = cr['mobile_uuid'] as String?;
+          final childUuid = (rawChildUuid != null && rawChildUuid.isNotEmpty)
+              ? rawChildUuid
+              : _uuid.v4();
           final childServerName = cr['name']?.toString();
 
           final childRow = <String, Object?>{
@@ -223,10 +225,7 @@ class LocalWriter {
       if (!await _tableExists(txn, parentTable)) return;
       await txn.update(
         parentTable,
-        <String, Object?>{
-          'server_name': serverName,
-          'sync_status': 'synced',
-        },
+        <String, Object?>{'server_name': serverName, 'sync_status': 'synced'},
         where: 'mobile_uuid = ?',
         whereArgs: [mobileUuid],
       );

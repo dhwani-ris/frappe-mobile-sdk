@@ -83,18 +83,26 @@ void main() {
       final ddl = buildParentSchemaDDL(meta, tableName: 'docs__order');
       final createStmt = ddl.firstWhere((s) => s.startsWith('CREATE TABLE'));
       // Match `items ` or `taxes ` followed by a column type — should NOT appear.
-      expect(createStmt, isNot(matches(RegExp(r'\bitems\s+(TEXT|INTEGER|REAL)'))));
-      expect(createStmt, isNot(matches(RegExp(r'\btaxes\s+(TEXT|INTEGER|REAL)'))));
+      expect(
+        createStmt,
+        isNot(matches(RegExp(r'\bitems\s+(TEXT|INTEGER|REAL)'))),
+      );
+      expect(
+        createStmt,
+        isNot(matches(RegExp(r'\btaxes\s+(TEXT|INTEGER|REAL)'))),
+      );
     });
 
     test('emits UNIQUE partial index on server_name', () {
       final meta = DocTypeMeta(name: 'X', fields: const []);
       final ddl = buildParentSchemaDDL(meta, tableName: 'docs__x');
       expect(
-        ddl.any((s) =>
-            s.contains('UNIQUE INDEX') &&
-            s.contains('server_name') &&
-            s.contains('WHERE server_name IS NOT NULL')),
+        ddl.any(
+          (s) =>
+              s.contains('UNIQUE INDEX') &&
+              s.contains('server_name') &&
+              s.contains('WHERE server_name IS NOT NULL'),
+        ),
         isTrue,
       );
     });
@@ -103,53 +111,86 @@ void main() {
       final meta = DocTypeMeta(name: 'X', fields: const []);
       final ddl = buildParentSchemaDDL(meta, tableName: 'docs__x');
       expect(
-        ddl.any((s) =>
-            s.contains('CREATE INDEX') && s.contains('sync_status')),
+        ddl.any((s) => s.contains('CREATE INDEX') && s.contains('sync_status')),
         isTrue,
       );
       expect(
-        ddl.any((s) =>
-            s.contains('CREATE INDEX') && s.contains('modified')),
+        ddl.any((s) => s.contains('CREATE INDEX') && s.contains('modified')),
         isTrue,
       );
     });
 
-    test('meta field colliding with system column is dropped (no duplicate)',
-        () {
-      // Consumers often add `mobile_uuid` for L2 idempotency; some
-      // doctypes also expose `modified` / `docstatus` as fields. Without
-      // dedup, SQLite rejects the CREATE TABLE.
-      final meta = DocTypeMeta(name: 'Gram Panchayat', fields: [
-        DocField(fieldname: 'mobile_uuid', fieldtype: 'Data', label: 'UUID'),
-        DocField(fieldname: 'modified', fieldtype: 'Datetime', label: 'Mod'),
-        DocField(fieldname: 'docstatus', fieldtype: 'Int', label: 'Stat'),
-        DocField(
-            fieldname: 'panchayat_name', fieldtype: 'Data', label: 'Name'),
-      ]);
-      final ddl = buildParentSchemaDDL(meta, tableName: 'docs__gp');
-      final create = ddl.first;
-      // Each system column should appear exactly once.
-      for (final col in const [
-        'mobile_uuid',
-        'modified',
-        'docstatus',
-      ]) {
-        final regex = RegExp('\\b$col\\b');
-        final occurrences = regex.allMatches(create).length;
-        expect(occurrences, 1,
-            reason: '$col must appear once, found $occurrences');
-      }
-      // Real meta-only field still made it through.
-      expect(create, contains('panchayat_name'));
-    });
+    test(
+      'meta field colliding with system column is dropped (no duplicate)',
+      () {
+        // Consumers often add `mobile_uuid` for L2 idempotency; some
+        // doctypes also expose `modified` / `docstatus` as fields. Without
+        // dedup, SQLite rejects the CREATE TABLE.
+        final meta = DocTypeMeta(
+          name: 'Gram Panchayat',
+          fields: [
+            DocField(
+              fieldname: 'mobile_uuid',
+              fieldtype: 'Data',
+              label: 'UUID',
+            ),
+            DocField(
+              fieldname: 'modified',
+              fieldtype: 'Datetime',
+              label: 'Mod',
+            ),
+            DocField(fieldname: 'docstatus', fieldtype: 'Int', label: 'Stat'),
+            DocField(
+              fieldname: 'panchayat_name',
+              fieldtype: 'Data',
+              label: 'Name',
+            ),
+          ],
+        );
+        final ddl = buildParentSchemaDDL(meta, tableName: 'docs__gp');
+        final create = ddl.first;
+        // Each system column should appear exactly once.
+        for (final col in const ['mobile_uuid', 'modified', 'docstatus']) {
+          final regex = RegExp('\\b$col\\b');
+          final occurrences = regex.allMatches(create).length;
+          expect(
+            occurrences,
+            1,
+            reason: '$col must appear once, found $occurrences',
+          );
+        }
+        // Real meta-only field still made it through.
+        expect(create, contains('panchayat_name'));
+      },
+    );
 
     test('duplicate field names in meta itself are deduped', () {
-      final meta = DocTypeMeta(name: 'Y', fields: [
-        DocField(fieldname: 'a', fieldtype: 'Data', label: 'A'),
-        DocField(fieldname: 'a', fieldtype: 'Data', label: 'A again'),
-      ]);
+      final meta = DocTypeMeta(
+        name: 'Y',
+        fields: [
+          DocField(fieldname: 'a', fieldtype: 'Data', label: 'A'),
+          DocField(fieldname: 'a', fieldtype: 'Data', label: 'A again'),
+        ],
+      );
       final create = buildParentSchemaDDL(meta, tableName: 'docs__y').first;
       expect(RegExp(r'\ba\s+TEXT\b').allMatches(create).length, 1);
+    });
+
+    test('Password fields are NOT created as columns (security)', () {
+      // Password values must never land in the on-device SQLite mirror.
+      // The column is omitted via sqliteColumnTypeFor returning null; this
+      // test pins the contract so a future change to field_type_mapping
+      // can't silently re-introduce the leak.
+      final meta = DocTypeMeta(
+        name: 'Vendor',
+        fields: [f('vendor_name', 'Data'), f('api_secret', 'Password')],
+      );
+      final create = buildParentSchemaDDL(
+        meta,
+        tableName: 'docs__vendor',
+      ).firstWhere((s) => s.startsWith('CREATE TABLE'));
+      expect(create, contains('vendor_name'));
+      expect(create, isNot(contains('api_secret')));
     });
   });
 }

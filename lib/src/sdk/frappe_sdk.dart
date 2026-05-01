@@ -75,7 +75,7 @@ class FrappeSDK {
     _authService = AuthService.forTesting(_client!, database: database);
     _metaService = MetaService(_client!, _database!);
     final testMetaService = _metaService!;
-    final testMetaFn = (String dt) => testMetaService.getMeta(dt);
+    final testMetaFn = testMetaService.getMeta;
     final testLocalWriter = LocalWriter(database.rawDatabase, testMetaFn);
     _repository = OfflineRepository(_database!, localWriter: testLocalWriter);
     _permissionService = PermissionService(_client!, _database!);
@@ -90,7 +90,7 @@ class FrappeSDK {
       db: database.rawDatabase,
       metaDao: DoctypeMetaDao(database.rawDatabase),
       isOnline: () => false,
-      backgroundFetch: (_, __) async {},
+      backgroundFetch: (_, _) async {},
       metaResolver: testMetaFn,
     );
     _linkOptionService = LinkOptionService(testResolver, testMetaFn);
@@ -117,7 +117,7 @@ class FrappeSDK {
     _metaService = MetaService(_client!, _database!);
     final rawDb = _database!.rawDatabase;
     final metaSvc = _metaService!;
-    final metaFn = (String dt) => metaSvc.getMeta(dt);
+    final metaFn = metaSvc.getMeta;
     final localWriter = LocalWriter(rawDb, metaFn);
     _repository = OfflineRepository(_database!, localWriter: localWriter);
     _permissionService = PermissionService(_client!, _database!);
@@ -197,8 +197,8 @@ class FrappeSDK {
 
     final migration = V1ToV2Migration(
       db: raw,
-      metaFetcher: metaFetcher ??
-          (doctype) async => _metaService!.getMeta(doctype),
+      metaFetcher:
+          metaFetcher ?? (doctype) async => _metaService!.getMeta(doctype),
     );
     return migration.run();
   }
@@ -465,19 +465,22 @@ class FrappeSDK {
     // mobile_auth.me returns a Frappe user document — 'name' is the user email.
     final name = userInfo['name'] as String?;
     if (name != null && name.isNotEmpty) {
-      await _sessionUserService?.set(SessionUser(
-        name: name,
-        fullName: userInfo['full_name'] as String?,
-        userImage: userInfo['user_image'] as String?,
-        roles: ((userInfo['roles'] as List?) ?? [])
-            .map((r) => r.toString())
-            .where((r) => r.isNotEmpty)
-            .toList(),
-        userDefaults: ((userInfo['user_defaults'] as Map?) ?? {})
-            .map((k, v) => MapEntry(k.toString(), v.toString())),
-        permissions: {},
-        extras: {},
-      ));
+      await _sessionUserService?.set(
+        SessionUser(
+          name: name,
+          fullName: userInfo['full_name'] as String?,
+          userImage: userInfo['user_image'] as String?,
+          roles: ((userInfo['roles'] as List?) ?? [])
+              .map((r) => r.toString())
+              .where((r) => r.isNotEmpty)
+              .toList(),
+          userDefaults: ((userInfo['user_defaults'] as Map?) ?? {}).map(
+            (k, v) => MapEntry(k.toString(), v.toString()),
+          ),
+          permissions: {},
+          extras: {},
+        ),
+      );
     }
   }
 
@@ -486,17 +489,19 @@ class FrappeSDK {
   void _setSessionUserFromLoginResponse(Map<String, dynamic> response) {
     final name = response['user'] as String?;
     if (name == null || name.isEmpty) return;
-    _sessionUserService?.set(SessionUser(
-      name: name,
-      fullName: response['full_name'] as String?,
-      roles: ((response['roles'] as List?) ?? [])
-          .map((r) => r.toString())
-          .where((r) => r.isNotEmpty)
-          .toList(),
-      userDefaults: {},
-      permissions: {},
-      extras: {},
-    ));
+    _sessionUserService?.set(
+      SessionUser(
+        name: name,
+        fullName: response['full_name'] as String?,
+        roles: ((response['roles'] as List?) ?? [])
+            .map((r) => r.toString())
+            .where((r) => r.isNotEmpty)
+            .toList(),
+        userDefaults: {},
+        permissions: {},
+        extras: {},
+      ),
+    );
   }
 
   /// Internal: initial metadata + data sync for mobile doctypes.
@@ -568,5 +573,24 @@ class FrappeSDK {
     } catch (_) {
       // ignore data sync errors
     }
+  }
+
+  /// Releases the per-instance services this SDK owns and resets
+  /// [_initialized] so a follow-up [initialize] rebuilds cleanly.
+  ///
+  /// Lifecycle contract:
+  /// - The instance is REUSABLE after dispose — call [initialize] again.
+  /// - References handed out by getters before dispose (e.g. cached
+  ///   `sessionUserService`, `sessionUser$`) point at services whose
+  ///   `StreamController` is closed; consumers MUST drop those refs and
+  ///   re-fetch from the SDK after the next [initialize].
+  /// - Calling getters between [dispose] and a fresh [initialize] throws
+  ///   the same `Exception` they already raise when `!_initialized`
+  ///   (e.g. `sessionUserService` getter at lines 367–371).
+  /// - Idempotent — safe to call multiple times.
+  Future<void> dispose() async {
+    await _sessionUserService?.dispose();
+    _sessionUserService = null;
+    _initialized = false;
   }
 }

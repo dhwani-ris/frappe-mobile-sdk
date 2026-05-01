@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:uuid/uuid.dart';
 
@@ -5,6 +6,35 @@ import '../database/field_type_mapping.dart';
 import '../database/normalize_for_search.dart';
 import '../database/table_name.dart';
 import '../models/doc_type_meta.dart';
+
+/// Frappe returns `modified` as `"YYYY-MM-DD HH:MM:SS.ffffff"` with no
+/// timezone suffix. `DateTime.tryParse` interprets such tz-naive strings
+/// as device-local time, which makes any cross-call comparison brittle:
+/// DST transitions, device tz changes, or future code that compares
+/// against `DateTime.now().toUtc()` will all drift. Normalize to UTC
+/// explicitly by appending `Z` when no offset is present.
+@visibleForTesting
+String? parseFrappeUtcStringForTest(String? raw) {
+  if (raw == null || raw.isEmpty) return null;
+  return _asUtc(raw);
+}
+
+DateTime? _parseFrappeUtc(String? raw) {
+  if (raw == null || raw.isEmpty) return null;
+  return DateTime.tryParse(_asUtc(raw));
+}
+
+String _asUtc(String raw) {
+  // Already has a timezone designator?
+  if (raw.endsWith('Z')) return raw;
+  if (raw.contains('+')) return raw;
+  if (RegExp(r'-\d{2}:\d{2}$').hasMatch(raw)) return raw;
+  // Date-only string (e.g. `2026-02-01`) — Dart's DateTime.tryParse
+  // rejects `YYYY-MM-DDZ`, so leave as-is. Two such strings still order
+  // consistently because both parse with the same local-midnight offset.
+  if (!raw.contains(':')) return raw;
+  return '${raw}Z';
+}
 
 /// System columns that the per-doctype mirror manages itself. A meta field
 /// that shares one of these names (e.g. `mobile_uuid` exposed for L2
@@ -109,20 +139,22 @@ class PullApply {
       );
 
       if (existing.isNotEmpty &&
-          const ['dirty', 'failed', 'conflict']
-              .contains(existing.first['sync_status'])) {
+          const [
+            'dirty',
+            'failed',
+            'conflict',
+          ].contains(existing.first['sync_status'])) {
         // Spec §5.1 requires "server has advanced" before flagging a
         // conflict. Cursor filtering normally guarantees this, but
         // defending here prevents spurious conflicts on initial sync,
         // cursor reset, and look-ahead pages where a row may resurface
         // with the same `modified` we already hold.
-        final storedModified = DateTime.tryParse(
-          (existing.first['modified'] as String?) ?? '',
+        final storedModified = _parseFrappeUtc(
+          existing.first['modified'] as String?,
         );
-        final incomingModified = DateTime.tryParse(
-          (r['modified'] as String?) ?? '',
-        );
-        final serverAdvanced = incomingModified != null &&
+        final incomingModified = _parseFrappeUtc(r['modified'] as String?);
+        final serverAdvanced =
+            incomingModified != null &&
             (storedModified == null ||
                 incomingModified.isAfter(storedModified));
         if (serverAdvanced) {

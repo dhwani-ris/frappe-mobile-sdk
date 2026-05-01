@@ -1,6 +1,7 @@
 import 'package:sqflite/sqflite.dart';
 
 import '../models/outbox_row.dart';
+import 'push_error.dart';
 
 /// Applies a successful Frappe push response to local state. Spec §5.2.
 ///
@@ -44,7 +45,18 @@ class ResponseWriteback {
     required Map<String, String> childTablesByFieldname,
     required Map<String, dynamic> response,
   }) async {
-    final serverName = response['name'] as String;
+    // Frappe usually returns the server-assigned id as `name`. Some
+    // endpoints (custom controllers, file upload, older versions) return
+    // it as `docname` instead — accept either. If neither is present the
+    // response is malformed; raise a structured error so the outbox row
+    // is marked failed cleanly instead of crashing the WriteQueue task.
+    final serverName = (response['name'] ?? response['docname']) as String?;
+    if (serverName == null || serverName.isEmpty) {
+      throw ServerRejection(
+        status: 0,
+        rawBody: 'Push response missing both "name" and "docname"',
+      );
+    }
     final serverModified = response['modified'] as String?;
     await txn.update(
       parentTable,
@@ -83,8 +95,7 @@ class ResponseWriteback {
       <String, Object?>{
         'state': OutboxState.done.wireName,
         'server_name': serverName,
-        'last_attempt_at':
-            DateTime.now().toUtc().millisecondsSinceEpoch,
+        'last_attempt_at': DateTime.now().toUtc().millisecondsSinceEpoch,
       },
       where: 'id = ?',
       whereArgs: [row.id],

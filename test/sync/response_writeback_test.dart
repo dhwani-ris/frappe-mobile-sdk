@@ -7,6 +7,7 @@ import 'package:frappe_mobile_sdk/src/database/daos/outbox_dao.dart';
 import 'package:frappe_mobile_sdk/src/models/doc_type_meta.dart';
 import 'package:frappe_mobile_sdk/src/models/doc_field.dart';
 import 'package:frappe_mobile_sdk/src/models/outbox_row.dart';
+import 'package:frappe_mobile_sdk/src/sync/push_error.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 DocField f(String n, String t, {String? options}) =>
@@ -49,10 +50,16 @@ void main() {
       isTable: true,
       fields: [f('qty', 'Int')],
     );
-    for (final s in buildParentSchemaDDL(parentMeta, tableName: 'docs__sales_order')) {
+    for (final s in buildParentSchemaDDL(
+      parentMeta,
+      tableName: 'docs__sales_order',
+    )) {
       await db.execute(s);
     }
-    for (final s in buildChildSchemaDDL(childMeta, tableName: 'docs__so_item')) {
+    for (final s in buildChildSchemaDDL(
+      childMeta,
+      tableName: 'docs__so_item',
+    )) {
       await db.execute(s);
     }
 
@@ -114,6 +121,39 @@ void main() {
     );
     final rows = await outbox.findByState(OutboxState.done);
     expect(rows.first.serverName, 'SO-1001');
+  });
+
+  test(
+    'throws ServerRejection when response has neither name nor docname',
+    () async {
+      final outboxRow = (await outbox.findByState(OutboxState.pending)).first;
+      expect(
+        () => ResponseWriteback.apply(
+          db: db,
+          row: outboxRow,
+          parentTable: 'docs__sales_order',
+          childTablesByFieldname: const {},
+          response: const <String, dynamic>{
+            // no 'name', no 'docname'
+            'modified': '2026-01-01',
+          },
+        ),
+        throwsA(isA<ServerRejection>()),
+      );
+    },
+  );
+
+  test('falls back to docname when name is missing', () async {
+    final outboxRow = (await outbox.findByState(OutboxState.pending)).first;
+    await ResponseWriteback.apply(
+      db: db,
+      row: outboxRow,
+      parentTable: 'docs__sales_order',
+      childTablesByFieldname: const {},
+      response: const {'docname': 'T-99', 'modified': '2026-01-01 00:00:00'},
+    );
+    final updated = (await db.query('docs__sales_order')).first;
+    expect(updated['server_name'], 'T-99');
   });
 
   test('matches children by (parent_uuid, parentfield, idx)', () async {

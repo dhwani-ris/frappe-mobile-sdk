@@ -69,22 +69,37 @@ class PullEngine {
     this.writeQueueResolver,
   });
 
-  Future<void> run(ClosureResult closure) async {
+  /// Returns the set of doctypes that were deferred (skipped because a
+  /// push was active for them). Caller (SyncController) is expected to
+  /// re-run [run] for this subset after the push engine completes — see
+  /// SIG-2.
+  Future<Set<String>> run(ClosureResult closure) async {
     notifier.value = notifier.value.copyWith(isPulling: true);
+    final deferred = <String>{};
     final futures = <Future<void>>[];
     for (final dt in closure.doctypes) {
       if (closure.childDoctypes.contains(dt)) continue;
-      futures.add(pool.submit<void>(() => _runDoctype(dt, closure)));
+      futures.add(pool.submit<void>(() => _runDoctype(dt, closure, deferred)));
     }
     await Future.wait(futures);
     notifier.value = notifier.value.copyWith(
       isPulling: false,
       lastSyncAt: DateTime.now().toUtc(),
     );
+    return deferred;
   }
 
-  Future<void> _runDoctype(String doctype, ClosureResult closure) async {
+  Future<void> _runDoctype(
+    String doctype,
+    ClosureResult closure,
+    Set<String> deferred,
+  ) async {
     if (await outboxDao.hasActivePushFor(doctype)) {
+      // Dart's main isolate is single-threaded so add() on a shared Set
+      // across parallel `pool.submit` futures is safe in practice. If the
+      // pool ever moves work off-isolate, switch to gathering deferred
+      // doctypes from the futures' return values.
+      deferred.add(doctype);
       notifier.value = notifier.value.updatePerDoctype(
         doctype,
         const DoctypeSyncState(
@@ -108,15 +123,17 @@ class PullEngine {
       DoctypeSyncState(startedAt: startedAt),
     );
 
-    final parentTable = await metaDao.getTableName(doctype) ??
+    final parentTable =
+        await metaDao.getTableName(doctype) ??
         normalizeDoctypeTableName(doctype);
 
     // Resolve child metas for every Table / Table MultiSelect outgoing edge.
     final childInfo = <String, PullApplyChildInfo>{};
     final graph = closure.graph[doctype];
     if (graph != null) {
-      for (final edge
-          in graph.outgoing.where((e) => e.kind == DepEdgeKind.child)) {
+      for (final edge in graph.outgoing.where(
+        (e) => e.kind == DepEdgeKind.child,
+      )) {
         final childMeta = await metaResolver(edge.targetDoctype);
         childInfo[edge.field] = PullApplyChildInfo(
           edge.targetDoctype,
@@ -182,8 +199,15 @@ class PullEngine {
 
       // Cursor is persisted only when the doctype drains fully — partial
       // pulls leave the on-disk cursor untouched so a relaunch resumes
-      // from the last fully-applied page.
-      final cursorJson = scratch.toJson();
+      // from the last fully-applied page. We flip `complete: true` here
+      // (and ONLY here) so the next pull treats the doctype as
+      // INCREMENTAL — same semantics as SyncService._pullOneInternal's
+      // final-page complete flip. Without this, the two pull paths wrote
+      // conflicting cursor formats (SIG-9): SyncService persisted with
+      // `complete`, PullEngine dropped it, the next SyncService read saw
+      // missing `complete` and re-fetched the entire dataset.
+      final scratchComplete = scratch.markComplete();
+      final cursorJson = scratchComplete.toJson();
       if (cursorJson != null) {
         await metaDao.setLastOkCursor(doctype, jsonEncode(cursorJson));
       }
@@ -195,7 +219,7 @@ class PullEngine {
           hasMore: false,
           startedAt: startedAt,
           completedAt: DateTime.now().toUtc(),
-          lastOkCursor: scratch,
+          lastOkCursor: scratchComplete,
         ),
       );
     } catch (e) {

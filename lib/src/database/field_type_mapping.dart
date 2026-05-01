@@ -3,27 +3,40 @@
 // (layout breaks, buttons, or child tables stored in their own tables).
 
 const _textTypes = <String>{
-  'Data', 'Small Text', 'Long Text', 'Text', 'Code', 'HTML', 'JSON',
-  'Read Only', 'Password', 'Color', 'Select', 'Barcode',
-  'Link', 'Dynamic Link', 'Attach', 'Attach Image', 'Signature',
+  'Data',
+  'Small Text',
+  'Long Text',
+  'Text',
+  'Code',
+  'HTML',
+  'JSON',
+  'Read Only',
+  'Color',
+  'Select',
+  'Barcode',
+  'Link',
+  'Dynamic Link',
+  'Attach',
+  'Attach Image',
+  'Signature',
   'Geolocation',
 };
 
-const _integerTypes = <String>{
-  'Int', 'Check', 'Duration', 'Rating',
-};
+const _integerTypes = <String>{'Int', 'Check', 'Duration', 'Rating'};
 
-const _realTypes = <String>{
-  'Float', 'Currency', 'Percent',
-};
+const _realTypes = <String>{'Float', 'Currency', 'Percent'};
 
-const _textDateTypes = <String>{
-  'Date', 'Datetime', 'Time',
-};
+const _textDateTypes = <String>{'Date', 'Datetime', 'Time'};
 
 const _noColumnTypes = <String>{
   'Section Break', 'Column Break', 'Tab Break', 'Heading', 'Button',
   'Table', 'Table MultiSelect',
+  // Password values must never land in the on-device SQLite mirror —
+  // sqflite is unencrypted, so persisting Password fields would expose
+  // them on rooted/extracted devices. PullApply, schema generation, and
+  // push payload assembly all key off `sqliteColumnTypeFor(...) == null`,
+  // so this single mapping is the complete fix.
+  'Password',
 };
 
 const _linkTypes = <String>{'Link', 'Dynamic Link'};
