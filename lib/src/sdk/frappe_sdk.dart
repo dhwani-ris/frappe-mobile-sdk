@@ -1,6 +1,8 @@
 // Copyright (c) 2026, Bhushan Barbuddhe and contributors
 // For license information, please see license.txt
 
+import 'dart:async';
+
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart';
 
@@ -236,18 +238,38 @@ class FrappeSDK {
     if (autoRestoreAndSync) {
       final restored = await _authService!.restoreSession();
       if (restored) {
-        // Reconcile the persisted flag against on-disk residue. The
-        // trigger only fires when the server explicitly told us to go
-        // online (isPersisted=true, enabled=false) and residue actually
-        // exists. Blocks until the drain completes or the user
-        // force-exits.
+        // Kick off the offline → online transition in the background
+        // (do NOT await). Reasoning: initialize() runs before runApp()
+        // mounts any widgets. Awaiting would deadlock on
+        // [TransitionDrainFailed] because no UI exists to call
+        // retry()/forceExit() — see Spec §10.4(b). Letting it run
+        // concurrently lets the consumer mount [OfflineTransitionGuard]
+        // and drive the flow once the widget tree is up.
         if (persistedMode.isPersisted &&
             !persistedMode.enabled &&
             await _hasResidualOfflineState()) {
-          await _offlineTransitionService!.runDrainAndWipe();
+          unawaited(_offlineTransitionService!.runDrainAndWipe());
         }
         await _initialMetaAndDataSync();
       }
+    }
+  }
+
+  /// Runs the offline → online transition if the trigger condition is
+  /// satisfied (persisted flag is `false`, residue exists). Idempotent
+  /// when no transition is needed.
+  ///
+  /// Use from inside a widget that has the SDK reference, after the UI
+  /// is mounted. [OfflineTransitionGuard] wraps this for convenience.
+  Future<void> runOfflineTransitionIfPending() async {
+    if (!_initialized) return;
+    final persisted = await SdkMetaDao(
+      _database!.rawDatabase,
+    ).readOfflineMode();
+    if (persisted.isPersisted &&
+        !persisted.enabled &&
+        await _hasResidualOfflineState()) {
+      await _offlineTransitionService!.runDrainAndWipe();
     }
   }
 

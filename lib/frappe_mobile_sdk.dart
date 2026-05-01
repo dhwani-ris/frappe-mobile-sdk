@@ -6,7 +6,7 @@
 /// - Offline-first architecture with SQLite
 /// - Bi-directional sync engine
 /// - Generic storage (no table per DocType)
-library frappe_mobile_sdk;
+library;
 
 // Core models
 export 'src/models/app_config.dart';
@@ -58,6 +58,20 @@ export 'src/services/workflow_service.dart';
 
 // Screens
 export 'src/screens/mobile_home_screen.dart';
+
+// Offline mode toggle (Spec §7)
+export 'src/models/offline_mode.dart' show OfflineMode;
+export 'src/services/offline_transition_service.dart'
+    show
+        OfflineTransitionService,
+        OfflineTransitionState,
+        TransitionIdle,
+        TransitionDraining,
+        TransitionDrainFailed,
+        TransitionWipingTables,
+        TransitionCompleted;
+export 'src/ui/offline_transition_screen.dart' show OfflineTransitionScreen;
+export 'src/ui/offline_transition_guard.dart' show OfflineTransitionGuard;
 
 // UI Components
 export 'src/ui/app_guard.dart';
@@ -118,8 +132,7 @@ export 'src/ui/screens/sync_errors_screen.dart' show SyncErrorsScreen;
 export 'src/ui/screens/sync_progress_screen.dart' show SyncProgressScreen;
 export 'src/ui/dialogs/logout_guard_dialog.dart'
     show showLogoutGuardDialog, LogoutGuardAction;
-export 'src/ui/dialogs/force_logout_confirm.dart'
-    show showForceLogoutConfirm;
+export 'src/ui/dialogs/force_logout_confirm.dart' show showForceLogoutConfirm;
 
 // Utils (debug tracer + user-friendly errors)
 export 'src/api/utils.dart' show extractErrorMessage, toUserFriendlyMessage;
