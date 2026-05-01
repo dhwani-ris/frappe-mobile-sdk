@@ -10,6 +10,8 @@ class PendingAttachmentDao {
     required String parentDoctype,
     required String parentUuid,
     required String parentFieldname,
+    required String topParentUuid,
+    required String topParentDoctype,
     required String localPath,
     String? fileName,
     String? mimeType,
@@ -20,6 +22,8 @@ class PendingAttachmentDao {
       'parent_doctype': parentDoctype,
       'parent_uuid': parentUuid,
       'parent_fieldname': parentFieldname,
+      'top_parent_uuid': topParentUuid,
+      'top_parent_doctype': topParentDoctype,
       'local_path': localPath,
       'file_name': fileName,
       'mime_type': mimeType,
@@ -42,14 +46,19 @@ class PendingAttachmentDao {
     return PendingAttachment.fromMap(rows.first);
   }
 
-  Future<List<PendingAttachment>> findPendingForParent(
-    String parentUuid,
+  /// Finds all pending/uploading attachments queued against [topParentUuid]
+  /// — that is, queued for the outbox row whose mobile_uuid is
+  /// [topParentUuid]. Includes attachments queued against child-row
+  /// uuids whose `top_parent_uuid` was set to the parent's uuid by the
+  /// caller at enqueue time.
+  Future<List<PendingAttachment>> findPendingForTopParent(
+    String topParentUuid,
   ) async {
     final rows = await _db.query(
       'pending_attachments',
-      where: 'parent_uuid = ? AND state IN (?, ?)',
+      where: 'top_parent_uuid = ? AND state IN (?, ?)',
       whereArgs: [
-        parentUuid,
+        topParentUuid,
         AttachmentState.pending.wireName,
         AttachmentState.uploading.wireName,
       ],

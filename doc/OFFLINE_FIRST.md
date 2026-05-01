@@ -271,12 +271,48 @@ final result = await ClosureBuilder.build(
 
 ---
 
+## Attachments
+
+Attachments queued for offline upload live in `pending_attachments`. Each row holds:
+
+- `parent_uuid` / `parent_doctype` — the row that **owns** the Attach field (parent doc OR a child row).
+- `top_parent_uuid` / `top_parent_doctype` — the outbox row that will carry this attachment to the server. Set to the **parent doc's** `mobile_uuid` even when the file lives on a child row.
+- `local_path`, `file_name`, `mime_type`, `is_private`, `state` (`pending|uploading|done|failed`), retry/error metadata.
+
+### Push flow
+
+1. `PushEngine` picks an outbox row, looks up its `mobile_uuid`.
+2. `AttachmentPipeline.uploadPendingForTopParent(topParentUuid)` finds every row keyed on that uuid (parent's own attachments **and** any child-row attachments whose `top_parent_uuid` was set to the same value at enqueue time) and uploads each.
+3. Each upload is `POST /api/method/upload_file` with **only** `file`, `file_name`, `is_private`. The File row is created **fully unattached** (all `attached_to_*` columns NULL). Frappe v16 requires File rows to be either fully attached (with both `attached_to_doctype` and `attached_to_name`) or fully unattached — a partial state is rejected by the File controller — so the SDK cannot ship `dt` alone before the parent doc has its server name.
+4. The returned `file_url` is inlined into the parent payload via `pending:<id>` markers.
+5. The parent INSERT/UPDATE commits. Server-side relink handlers wire each File row to its real `(doctype, name, attached_to_field)`.
+
+### Server-side relink
+
+| Owner | Handled by | Where |
+|---|---|---|
+| **Parent doc Attach fields** | Frappe stock `attach_files_to_document` | Registered on `*.on_update` in core `frappe.hooks` |
+| **Child row Attach fields** | `mobile_control.attachment_relink.relink_mobile_files` | Registered on `*.on_update` and `*.on_update_after_submit` in `mobile_control` |
+
+The `mobile_control` hook walks `doc.meta.get_table_fields()` and, for each child row's Attach/Attach Image field, finds the matching unattached File row by `file_url` and rewires its `attached_to_doctype` / `attached_to_name` / `attached_to_field` columns. It exists because Frappe v16 child rows save via raw `db_update()` and skip lifecycle hooks — stock never reaches them. The hook fast-exits when `doc.mobile_uuid` is missing, so the cost on non-mobile saves is one attribute lookup.
+
+Relink is durable: the match key is `file_url`, with no time window between upload and parent save. An offline device that uploads files now and finally pushes the parent days later will still link everything correctly when the push lands.
+
+### Failure modes
+
+| State | What happened | What to do |
+|---|---|---|
+| `pending_attachments.state='failed'` | Upload exhausted retries (default 2s/5s/10s × 3) | Outbox row is `blocked` — user reattaches; SDK clears the failed row and re-queues. |
+| File uploaded but parent push permanently fails | Outbox row stuck in `failed` / `blocked` | File row stays orphan with all `attached_to_*` NULL. Frappe's existing `cleanup_unattached_files` cron reaps it on its retention schedule. |
+| `mobile_control` not installed | Child-row Attach fields don't get linked | Files for parent Attach fields still link via Frappe stock; child-row files stay orphan. Install `frappe-mobile-control` (see [SETUP](SETUP.md)) to enable the child-row relink hook. |
+
 ## Server Requirements
 
-| Endpoint | Required for | Fallback |
-|----------|-------------|---------|
+| Endpoint / hook | Required for | Fallback |
+|---|---|---|
 | `mobile_auth.login` | All login flows | None |
 | `mobile_auth.me` | OAuth / API-key session | Partial SessionUser from login response |
 | `mobile_sync.get_docs_with_children` | Efficient pull for doctypes with child tables | Per-name GET (slow for large doctypes) |
+| `mobile_control.attachment_relink.relink_mobile_files` | Linking SDK-uploaded files to **child row** Attach fields | None — child files stay orphan without it. Parent-only Attach fields still work via Frappe stock. |
 
-The `mobile_sync.get_docs_with_children` endpoint is part of the `frappe-mobile-control` companion app. It accepts `{ "doctype": "...", "names": [...] }` (max 200 names per call) and returns full documents including embedded child rows.
+The `mobile_sync.get_docs_with_children` endpoint and the `attachment_relink` hook both live in the `frappe-mobile-control` companion app. The endpoint accepts `{ "doctype": "...", "names": [...] }` (max 200 names per call) and returns full documents including embedded child rows.

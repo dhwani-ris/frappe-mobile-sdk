@@ -15,6 +15,8 @@ class PendingAttachment {
   final String parentUuid;
   final String parentDoctype;
   final String parentFieldname;
+  final String topParentUuid;
+  final String topParentDoctype;
   final String localPath;
   final String? fileName;
   final String? mimeType;
@@ -33,6 +35,8 @@ class PendingAttachment {
     required this.parentUuid,
     required this.parentDoctype,
     required this.parentFieldname,
+    required this.topParentUuid,
+    required this.topParentDoctype,
     required this.localPath,
     this.fileName,
     this.mimeType,
@@ -53,6 +57,8 @@ class PendingAttachment {
       parentUuid: row['parent_uuid'] as String,
       parentDoctype: row['parent_doctype'] as String,
       parentFieldname: row['parent_fieldname'] as String,
+      topParentUuid: row['top_parent_uuid'] as String,
+      topParentDoctype: row['top_parent_doctype'] as String,
       localPath: row['local_path'] as String,
       fileName: row['file_name'] as String?,
       mimeType: row['mime_type'] as String?,
