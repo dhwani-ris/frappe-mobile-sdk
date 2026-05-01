@@ -32,7 +32,7 @@ Frappe Mobile SDK provides:
 
 - **Direct Frappe API access** – Auth, CRUD, file upload, custom method calls.
 - **Dynamic form rendering** – Forms generated from Frappe DocType metadata.
-- **Offline‑first architecture** – SQLite storage with optional bi‑directional sync.
+- **Offline‑first architecture** – SQLite storage with optional bi‑directional sync. Can be toggled off per deployment via a server-side flag — see [`doc/OFFLINE_MODE_TOGGLE.md`](doc/OFFLINE_MODE_TOGGLE.md).
 - **Ready‑made UI screens** – Login, doctype listing, document listing, document forms, sync status.
 - **Server‑driven app control** – App status check and force‑update via backend.
 
@@ -576,6 +576,7 @@ In‑repo documentation:
 
 - `doc/DOCUMENTATION.md` – Full SDK documentation index.
 - `doc/OFFLINE_FIRST.md` – Offline-first architecture: two-store design, pull phases, SyncController, SessionUser, new UI components.
+- `doc/OFFLINE_MODE_TOGGLE.md` – Server-driven on/off switch for the offline-first layer; default is off (online mode).
 - `doc/SETUP.md` – Environment and platform setup.
 - `doc/CUSTOMIZATION.md` – UI customization guide.
 - `doc/FIELD_TYPES.md` – Field type reference.

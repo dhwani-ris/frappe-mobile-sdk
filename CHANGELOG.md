@@ -1,3 +1,34 @@
+# [2.1.0] - 2026-05-01
+
+### Added
+
+- **Server-driven offline mode toggle** — new `offline_enabled` Check field on `Mobile Configuration` (server-side) controls whether the SDK runs as an offline-first client or a thin online client. Default is off (online). Companion server release: `frappe-mobile-control` 1.x with the `offline_enabled` field surfaced on every authenticated login response.
+- **`OfflineMode`** value object exposed via `OfflineMode(enabled, isPersisted)` and `OfflineMode.fallback`.
+- **`SdkMetaDao`** — read/write helpers for the persisted offline-mode flag on the existing `sdk_meta` table.
+- **`OfflineTransitionService`** — sealed-state stream (`TransitionIdle` / `TransitionDraining` / `TransitionDrainFailed` / `TransitionWipingTables` / `TransitionCompleted`) plus `runDrainAndWipe()`, `retry()`, `forceExit()`. Drives the offline → online migration: pushes pending records, then drops local tables.
+- **`OfflineTransitionScreen`** — full-screen UI with `PopScope` guard for drain progress, drain failure, retry, and force-exit confirmation.
+- **`OfflineTransitionGuard`** — wraps a child widget and overlays the transition screen for as long as the SDK's transition stream is non-idle. Recommended integration point for consumer apps.
+- **`AppDatabase.wipeOfflineDocumentTables()`** — drops every `docs__<doctype>` table and clears `outbox`, `pending_attachments`, `link_options`. Preserves `doctype_meta`, `auth_tokens`, `doctype_permission`, `sdk_meta`.
+- **`FrappeSDK.offlineTransition`** getter and **`runOfflineTransitionIfPending()`** public method for explicit foreground orchestration.
+- **`doc/OFFLINE_MODE_TOGGLE.md`** — feature documentation, integration guide, and known limitations.
+
+### Changed
+
+- **Schema bump v4 → v5.** `sdk_meta` gains two columns: `offline_enabled INTEGER NOT NULL DEFAULT 0` and `offline_enabled_set_at INTEGER` (epoch ms; NULL until the first login response carries the flag). Migration is automatic and idempotent.
+- **`UnifiedResolver`** accepts optional `offlineMode` and `client` parameters. When `offlineMode.enabled = false`, `resolve()` short-circuits to a REST passthrough via `client.doctype.list`. No DB read, no `LinkDecorator`, no background-refresh dedupe.
+- **`OfflineRepository`** accepts the same two parameters. `create` / `updateDocumentData` / `deleteDocument` route to `FrappeClient` directly when offline mode is off; `getDirtyDocuments` returns empty.
+- **`SyncService`** accepts `offlineMode`. Every public method (`pushSync`, `pullSync`, `pullSyncMany`, `syncDoctype`, `getSyncStats`) returns `SyncResult.empty()` (or zeros) when offline mode is off. Adds `SyncResult.empty()` factory.
+- **`FrappeSDK.initialize()`** reads the persisted flag, resolves the session-bound mode via `_resolveBootMode`, and gates the closure pull in `_initialMetaAndDataSync` accordingly.
+- **`FrappeSDK.forTesting`** accepts an `offlineMode` parameter (default: offline) so existing tests continue to exercise the offline path without changes.
+- **`DoctypeService.list`** now accepts an optional `orFilters` parameter (additive; passes Frappe's `or_filters` query param through).
+- **`Mobile Configuration` doctype** (server-side) gains the `offline_enabled` Check field with `depends_on: eval:doc.enabled`. Field is the source of truth for the SDK's behavior.
+
+### Notes for upgraders
+
+- All new constructor parameters are optional with sensible defaults; existing call sites continue to compile and run.
+- An existing offline deployment that does **not** flip `offline_enabled = true` on the server before upgrading the SDK to 2.1 will see clients persist `false` on first login and will eventually drain + wipe local data on the next launch. Deploy the server-side update first if you want offline to remain on.
+- Token refresh does not refresh the flag; long-lived sessions stay in their previous mode until the user re-authenticates via password / OTP / OAuth / API key.
+
 # [2.0.0] - 2026-04-27
 
 ### Added

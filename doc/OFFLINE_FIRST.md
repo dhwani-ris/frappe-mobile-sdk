@@ -2,6 +2,12 @@
 
 This document describes the offline-first data layer introduced in the 2.0 rewrite. It covers the two-store design, pull/push lifecycle, sync controller, and the new UI surface.
 
+> **Note:** the entire offline-first layer described here can be turned
+> off per deployment via a server-side flag. See
+> [`OFFLINE_MODE_TOGGLE.md`](OFFLINE_MODE_TOGGLE.md) — when
+> `offline_enabled` is `false` (the default in 2.1+), the SDK becomes a
+> thin online client and most of this document does not apply.
+
 ---
 
 ## Overview
