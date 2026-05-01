@@ -20,6 +20,7 @@ import '../services/permission_service.dart';
 import '../services/session_user_service.dart';
 import '../services/sync_service.dart';
 import '../services/offline_repository.dart';
+import '../services/offline_transition_service.dart';
 import '../services/link_option_service.dart';
 import '../services/translation_service.dart';
 
@@ -47,6 +48,7 @@ class FrappeSDK {
   TranslationService? _translationService;
   SyncService? _syncService;
   OfflineRepository? _repository;
+  OfflineTransitionService? _offlineTransitionService;
   LinkOptionService? _linkOptionService;
   SessionUserService? _sessionUserService;
 
@@ -128,6 +130,17 @@ class FrappeSDK {
       client: _client,
     );
     _linkOptionService = LinkOptionService(testResolver, testMetaFn);
+    _offlineTransitionService = OfflineTransitionService(
+      database: _database!,
+      drainSyncFactory: () async => SyncService(
+        _client!,
+        _repository!,
+        _database!,
+        getMobileUuid: () async => 'test-uuid',
+        offlineMode: const OfflineMode(enabled: true, isPersisted: true),
+      ),
+      residueCounter: _residueCount,
+    );
     _sessionUserService = SessionUserService(_database!.rawDatabase);
     _initialized = true;
   }
@@ -195,6 +208,24 @@ class FrappeSDK {
       client: _client!,
     );
     _linkOptionService = LinkOptionService(resolver, metaFn);
+
+    // Build the offline-transition service. It owns its own broadcast
+    // stream; consumers subscribe via `sdk.offlineTransition.stream`.
+    // The drain factory builds a one-shot SyncService with offline mode
+    // forced on so its public methods actually run, regardless of the
+    // session-bound mode (which is `false` when the transition fires).
+    _offlineTransitionService = OfflineTransitionService(
+      database: _database!,
+      drainSyncFactory: () async => SyncService(
+        _client!,
+        _repository!,
+        _database!,
+        getMobileUuid: () => _authService!.getOrCreateMobileUuid(),
+        offlineMode: const OfflineMode(enabled: true, isPersisted: true),
+      ),
+      residueCounter: _residueCount,
+    );
+
     _sessionUserService = SessionUserService(_database!.rawDatabase);
     // Best-effort: re-hydrate any persisted SessionUser from the previous
     // app run. Idempotent — no-op when sdk_meta.session_user_json is null.
@@ -205,6 +236,16 @@ class FrappeSDK {
     if (autoRestoreAndSync) {
       final restored = await _authService!.restoreSession();
       if (restored) {
+        // Reconcile the persisted flag against on-disk residue. The
+        // trigger only fires when the server explicitly told us to go
+        // online (isPersisted=true, enabled=false) and residue actually
+        // exists. Blocks until the drain completes or the user
+        // force-exits.
+        if (persistedMode.isPersisted &&
+            !persistedMode.enabled &&
+            await _hasResidualOfflineState()) {
+          await _offlineTransitionService!.runDrainAndWipe();
+        }
         await _initialMetaAndDataSync();
       }
     }
@@ -261,30 +302,34 @@ class FrappeSDK {
 
   /// Resolves the session-bound offline mode from the persisted record.
   ///
-  /// - Persisted value present → use it verbatim.
+  /// - Persisted value present → use it verbatim. The
+  ///   persisted=online + residue case is handled by the explicit
+  ///   transition flow in [_runOfflineToOnlineTransitionIfNeeded] —
+  ///   this method does not stay-offline as a guard (P3 replaced the
+  ///   P2 guard with the real drain/wipe path).
   /// - Unpersisted + residue on disk → assume legacy offline install,
-  ///   boot offline (P2 conservative guard for the
-  ///   persisted=online + residue case is also applied here; P3
-  ///   removes the guard and runs an explicit drain/wipe transition).
+  ///   boot offline this session (the next login persists the real value).
   /// - Unpersisted + no residue → fresh install, boot online.
   Future<OfflineMode> _resolveBootMode(OfflineMode persisted) async {
-    if (persisted.isPersisted) {
-      // P2 RESIDUE GUARD: server says online but residue exists.
-      // Stay offline this session and log a warning. P3 replaces this
-      // guard with a real drain/wipe transition.
-      if (!persisted.enabled && await _hasResidualOfflineState()) {
-        // ignore: avoid_print
-        print(
-          'FrappeSDK: residue detected with offline_enabled=false — '
-          'staying offline this session. P3 will replace this guard with '
-          'a drain/wipe transition.',
-        );
-        return const OfflineMode(enabled: true, isPersisted: true);
-      }
-      return persisted;
-    }
+    if (persisted.isPersisted) return persisted;
     final hasResidue = await _hasResidualOfflineState();
     return OfflineMode(enabled: hasResidue, isPersisted: false);
+  }
+
+  /// Counts pending records that need to be drained before the
+  /// offline → online transition can wipe local state. Used by
+  /// [OfflineTransitionService] for both the trigger check and the
+  /// progress UI.
+  Future<int> _residueCount() async {
+    if (_database == null) return 0;
+    final raw = _database!.rawDatabase;
+    final outboxRows = await raw.rawQuery('SELECT COUNT(*) AS c FROM outbox');
+    final attachRows = await raw.rawQuery(
+      'SELECT COUNT(*) AS c FROM pending_attachments',
+    );
+    final outboxCount = (outboxRows.first['c'] as int?) ?? 0;
+    final attachCount = (attachRows.first['c'] as int?) ?? 0;
+    return outboxCount + attachCount;
   }
 
   /// Returns true iff any of the offline-only data structures contain
@@ -496,6 +541,19 @@ class FrappeSDK {
       throw Exception('SDK not initialized. Call initialize() first.');
     }
     return _repository!;
+  }
+
+  /// Get the offline → online transition service.
+  ///
+  /// Subscribers listen on [OfflineTransitionService.stream] to react
+  /// to drain progress, drain failures, and the wipe step. Consumer
+  /// apps mount [OfflineTransitionScreen] above their router driven by
+  /// this stream. Spec §7.
+  OfflineTransitionService get offlineTransition {
+    if (!_initialized) {
+      throw Exception('SDK not initialized. Call initialize() first.');
+    }
+    return _offlineTransitionService!;
   }
 
   /// Get Link Option Service
@@ -732,6 +790,8 @@ class FrappeSDK {
   Future<void> dispose() async {
     await _sessionUserService?.dispose();
     _sessionUserService = null;
+    await _offlineTransitionService?.dispose();
+    _offlineTransitionService = null;
     _initialized = false;
   }
 }

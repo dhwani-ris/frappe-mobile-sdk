@@ -11,29 +11,29 @@ void main() {
   });
 
   group('residue guard (P2)', () {
-    test(
-      'persisted=online + residue (docs__ table) → guarded offline',
-      () async {
-        final db = await AppDatabase.inMemoryDatabase();
-        await db.rawDatabase.execute(
-          'CREATE TABLE docs__customer (mobile_uuid TEXT)',
-        );
-        final sdk = FrappeSDK.forTesting('http://localhost', db);
+    test('persisted=online + residue → boot stays online '
+        '(P3 transition runs separately from boot-mode resolver)', () async {
+      final db = await AppDatabase.inMemoryDatabase();
+      await db.rawDatabase.execute(
+        'CREATE TABLE docs__customer (mobile_uuid TEXT)',
+      );
+      final sdk = FrappeSDK.forTesting('http://localhost', db);
 
-        final mode = await sdk.resolveBootModeForTesting(
-          const OfflineMode(enabled: false, isPersisted: true),
-        );
-        expect(
-          mode.enabled,
-          isTrue,
-          reason: 'P2 guard keeps offline mode when residue exists',
-        );
-        expect(mode.isPersisted, isTrue);
+      final mode = await sdk.resolveBootModeForTesting(
+        const OfflineMode(enabled: false, isPersisted: true),
+      );
+      expect(
+        mode.enabled,
+        isFalse,
+        reason:
+            'P3 removed the P2 guard — the transition handler '
+            'is invoked from initialize() instead and runs the real '
+            'drain/wipe before _initialMetaAndDataSync.',
+      );
 
-        await sdk.dispose();
-        await db.close();
-      },
-    );
+      await sdk.dispose();
+      await db.close();
+    });
 
     test('persisted=online + no residue → online', () async {
       final db = await AppDatabase.inMemoryDatabase();

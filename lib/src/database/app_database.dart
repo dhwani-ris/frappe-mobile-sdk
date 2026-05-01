@@ -310,6 +310,26 @@ class AppDatabase {
     }
   }
 
+  /// Drops every `docs__<doctype>` table and clears `outbox`,
+  /// `pending_attachments`, `link_options`. Preserves `doctype_meta`,
+  /// `auth_tokens`, `doctype_permission`, `sdk_meta`. Used by the
+  /// offline → online transition (Spec §7.5).
+  Future<void> wipeOfflineDocumentTables() async {
+    await _db.transaction((txn) async {
+      final tables = await txn.rawQuery(
+        "SELECT name FROM sqlite_master WHERE type='table' "
+        "AND name LIKE 'docs\\_\\_%' ESCAPE '\\'",
+      );
+      for (final r in tables) {
+        final name = r['name'] as String;
+        await txn.execute('DROP TABLE IF EXISTS "$name"');
+      }
+      await txn.delete('outbox');
+      await txn.delete('pending_attachments');
+      await txn.delete('link_options');
+    });
+  }
+
   /// Clear all local data. Call on logout to wipe the device's local DB.
   /// Drops every application-owned table (mirrors, system tables, legacy
   /// `documents`, etc.) and rebuilds the base schema from scratch.
