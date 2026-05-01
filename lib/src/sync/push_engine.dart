@@ -26,19 +26,18 @@ import 'uuid_rewriter.dart';
 /// is fully-prepared (children nested, UUIDs rewritten, attachments
 /// inlined). [serverName] is null for INSERT and the server name for the
 /// rest.
-typedef PushHttpSendFn = Future<Map<String, dynamic>> Function(
-  String method,
-  Map<String, Object?> payload,
-  String? serverName,
-);
+typedef PushHttpSendFn =
+    Future<Map<String, dynamic>> Function(
+      String method,
+      Map<String, Object?> payload,
+      String? serverName,
+    );
 
 /// Fetches the current server snapshot of a doc — used by the
 /// TimestampMismatch auto-merge path, and by L1/L2 idempotency recovery
 /// after a `DuplicateEntryError`.
-typedef PushServerFetchFn = Future<Map<String, dynamic>> Function(
-  String doctype,
-  String serverName,
-);
+typedef PushServerFetchFn =
+    Future<Map<String, dynamic>> Function(String doctype, String serverName);
 
 /// L3 idempotency lookup: GET keyed on `mobile_uuid`. Returns the
 /// existing doc (with at least `name` + `modified`) if the server
@@ -48,10 +47,8 @@ typedef PushServerFetchFn = Future<Map<String, dynamic>> Function(
 /// no `before_insert` dedup hook). When unset, INSERT retries against
 /// stock Frappe may duplicate on flaky networks — IdempotencyStrategy's
 /// init warning surfaces this risk.
-typedef PushServerLookupByUuidFn = Future<Map<String, dynamic>?> Function(
-  String doctype,
-  String mobileUuid,
-);
+typedef PushServerLookupByUuidFn =
+    Future<Map<String, dynamic>?> Function(String doctype, String mobileUuid);
 
 /// Top-level orchestrator for the offline-first push path. Spec §5.2.
 ///
@@ -233,10 +230,13 @@ class PushEngine {
       uploader: attachmentUploader,
       backoff: attachmentBackoff,
     );
-    final uploaded = await attachments.uploadPendingFor(row.mobileUuid);
+    final uploaded = await attachments.uploadPendingForTopParent(
+      row.mobileUuid,
+    );
 
     final childMetas = await _childMetasFor(meta);
-    final parentTable = await metaDao.getTableName(row.doctype) ??
+    final parentTable =
+        await metaDao.getTableName(row.doctype) ??
         normalizeDoctypeTableName(row.doctype);
 
     var payload = await PayloadAssembler.assemble(
@@ -263,8 +263,7 @@ class PushEngine {
           decision.level == IdempotencyLevel.preRetryGetCheck &&
           serverLookupByUuid != null &&
           (lastTransient is NetworkError || lastTransient is TimeoutError)) {
-        final existing =
-            await serverLookupByUuid!(row.doctype, row.mobileUuid);
+        final existing = await serverLookupByUuid!(row.doctype, row.mobileUuid);
         if (existing != null) return existing;
       }
 
@@ -308,25 +307,23 @@ class PushEngine {
     // mobile_uuid lookup if the consumer wired it; otherwise re-raise so
     // the row goes to `failed` and the user can decide.
     if (serverLookupByUuid != null) {
-      final existing =
-          await serverLookupByUuid!(row.doctype, row.mobileUuid);
+      final existing = await serverLookupByUuid!(row.doctype, row.mobileUuid);
       if (existing != null) return existing;
     }
     throw err;
   }
 
-  Future<void> _writeBack(
-    OutboxRow row,
-    Map<String, dynamic> response,
-  ) async {
+  Future<void> _writeBack(OutboxRow row, Map<String, dynamic> response) async {
     final meta = await metaResolver(row.doctype);
     final childMetas = await _childMetasFor(meta);
     final childTablesByFieldname = <String, String>{};
     for (final entry in childMetas.entries) {
-      childTablesByFieldname[entry.key] =
-          normalizeDoctypeTableName(entry.value.doctype);
+      childTablesByFieldname[entry.key] = normalizeDoctypeTableName(
+        entry.value.doctype,
+      );
     }
-    final parentTable = await metaDao.getTableName(row.doctype) ??
+    final parentTable =
+        await metaDao.getTableName(row.doctype) ??
         normalizeDoctypeTableName(row.doctype);
     if (writeQueueResolver != null) {
       final wq = _writeQueues.putIfAbsent(
@@ -365,15 +362,15 @@ class PushEngine {
       return;
     }
     final fresh = await serverFetcher(row.doctype, row.serverName!);
-    final parentTable = await metaDao.getTableName(row.doctype) ??
+    final parentTable =
+        await metaDao.getTableName(row.doctype) ??
         normalizeDoctypeTableName(row.doctype);
     final currentRow = (await db.query(
       parentTable,
       where: 'mobile_uuid = ?',
       whereArgs: [row.mobileUuid],
       limit: 1,
-    ))
-        .first;
+    )).first;
     final base = row.payload == null
         ? <String, Object?>{}
         : Map<String, Object?>.from(jsonDecode(row.payload!) as Map);
@@ -387,9 +384,9 @@ class PushEngine {
     // The merged map may contain server-only keys (`name`, `creation`,
     // `owner`, etc.) that aren't columns on `docs__<doctype>` — filter
     // against the actual table schema to avoid SQLITE_ERROR.
-    final tableCols = (await db.rawQuery('PRAGMA table_info($parentTable)'))
-        .map((r) => r['name'] as String)
-        .toSet();
+    final tableCols = (await db.rawQuery(
+      'PRAGMA table_info($parentTable)',
+    )).map((r) => r['name'] as String).toSet();
     final mergedForUpdate = <String, Object?>{};
     for (final entry in merged.entries) {
       if (tableCols.contains(entry.key)) {
@@ -470,11 +467,7 @@ class PushEngine {
         if (f.options == null || f.fieldname == null) continue;
         final childMeta = await childMetaResolver(f.options!);
         final tableName = normalizeDoctypeTableName(f.options!);
-        map[f.fieldname!] = _ChildInfoImpl(
-          f.options!,
-          childMeta,
-          tableName,
-        );
+        map[f.fieldname!] = _ChildInfoImpl(f.options!, childMeta, tableName);
       }
     }
     return map;

@@ -34,65 +34,120 @@ void main() {
 
   tearDown(() async => db.close());
 
-  test('uploads pending files, returns id→AttachmentUploadResult map', () async {
-    final id1 = await dao.enqueue(
-      parentDoctype: 'O',
-      parentUuid: 'P',
-      parentFieldname: 'attachment',
-      localPath: '/tmp/x.jpg',
-    );
-    final id2 = await dao.enqueue(
-      parentDoctype: 'O',
-      parentUuid: 'P',
-      parentFieldname: 'attachment2',
-      localPath: '/tmp/y.jpg',
-    );
+  test(
+    'uploads with NO doctype and NO docname (fully unattached File row)',
+    () async {
+      String? capturedDoctype;
+      String? capturedDocname;
 
-    final pipeline = AttachmentPipeline(
-      dao: dao,
-      uploader:
-          (file, {doctype, docname, isPrivate = true, fileName}) async {
-        return {
-          'name': 'FILE-${file.path}',
-          'file_url': '/files${file.path}.url',
-        };
-      },
-      backoff: const [Duration.zero, Duration.zero, Duration.zero],
-      fileFromPath: (p) => _FakeFile(p),
-    );
+      await dao.enqueue(
+        parentDoctype: 'Survey',
+        parentUuid: 'survey-1',
+        parentFieldname: 'cover',
+        topParentUuid: 'survey-1',
+        topParentDoctype: 'Survey',
+        localPath: '/tmp/cover.jpg',
+      );
 
-    final result = await pipeline.uploadPendingFor('P');
-    expect(result.keys, containsAll(<int>{id1, id2}));
-    expect(result[id1]!.fileUrl, contains('/files'));
-  });
+      final pipeline = AttachmentPipeline(
+        dao: dao,
+        uploader: (file, {doctype, docname, isPrivate = true, fileName}) async {
+          capturedDoctype = doctype;
+          capturedDocname = docname;
+          return {'name': 'FILE-1', 'file_url': '/private/files/cover.jpg'};
+        },
+        backoff: const [Duration.zero, Duration.zero, Duration.zero],
+        fileFromPath: (p) => _FakeFile(p),
+      );
 
-  test('retries then throws BlockedByUpstream after exhausted attempts',
-      () async {
-    final id = await dao.enqueue(
-      parentDoctype: 'O',
-      parentUuid: 'P',
-      parentFieldname: 'a',
-      localPath: '/tmp/fail.jpg',
-    );
-    var attempts = 0;
-    final pipeline = AttachmentPipeline(
-      dao: dao,
-      uploader:
-          (file, {doctype, docname, isPrivate = true, fileName}) async {
-        attempts++;
-        throw Exception('network');
-      },
-      backoff: const [Duration.zero, Duration.zero, Duration.zero],
-      fileFromPath: (p) => _FakeFile(p),
-    );
-    await expectLater(
-      pipeline.uploadPendingFor('P'),
-      throwsA(isA<BlockedByUpstream>()),
-    );
-    expect(attempts, 3);
-    final row = await dao.findById(id);
-    expect(row!.state, AttachmentState.failed);
-  });
+      await pipeline.uploadPendingForTopParent('survey-1');
+
+      expect(
+        capturedDoctype,
+        isNull,
+        reason:
+            'doctype must be null — Frappe v16 rejects File insert with '
+            'attached_to_doctype set but attached_to_name empty/NULL '
+            '(file.py:151), so the SDK uploads fully unattached.',
+      );
+      expect(
+        capturedDocname,
+        isNull,
+        reason:
+            'docname must be null — sentinel like "new-survey" creates '
+            'orphaned File rows that the relink hooks cannot find.',
+      );
+    },
+  );
+
+  test(
+    'uploads pending files, returns id→AttachmentUploadResult map',
+    () async {
+      final id1 = await dao.enqueue(
+        parentDoctype: 'O',
+        parentUuid: 'P',
+        parentFieldname: 'attachment',
+        topParentUuid: 'P',
+        topParentDoctype: 'O',
+        localPath: '/tmp/x.jpg',
+      );
+      final id2 = await dao.enqueue(
+        parentDoctype: 'O',
+        parentUuid: 'P',
+        parentFieldname: 'attachment2',
+        topParentUuid: 'P',
+        topParentDoctype: 'O',
+        localPath: '/tmp/y.jpg',
+      );
+
+      final pipeline = AttachmentPipeline(
+        dao: dao,
+        uploader: (file, {doctype, docname, isPrivate = true, fileName}) async {
+          return {
+            'name': 'FILE-${file.path}',
+            'file_url': '/files${file.path}.url',
+          };
+        },
+        backoff: const [Duration.zero, Duration.zero, Duration.zero],
+        fileFromPath: (p) => _FakeFile(p),
+      );
+
+      final result = await pipeline.uploadPendingForTopParent('P');
+      expect(result.keys, containsAll(<int>{id1, id2}));
+      expect(result[id1]!.fileUrl, contains('/files'));
+    },
+  );
+
+  test(
+    'retries then throws BlockedByUpstream after exhausted attempts',
+    () async {
+      final id = await dao.enqueue(
+        parentDoctype: 'O',
+        parentUuid: 'P',
+        parentFieldname: 'a',
+        topParentUuid: 'P',
+        topParentDoctype: 'O',
+        localPath: '/tmp/fail.jpg',
+      );
+      var attempts = 0;
+      final pipeline = AttachmentPipeline(
+        dao: dao,
+        uploader: (file, {doctype, docname, isPrivate = true, fileName}) async {
+          attempts++;
+          throw Exception('network');
+        },
+        backoff: const [Duration.zero, Duration.zero, Duration.zero],
+        fileFromPath: (p) => _FakeFile(p),
+      );
+      await expectLater(
+        pipeline.uploadPendingForTopParent('P'),
+        throwsA(isA<BlockedByUpstream>()),
+      );
+      expect(attempts, 3);
+      final row = await dao.findById(id);
+      expect(row!.state, AttachmentState.failed);
+    },
+  );
 
   test('inlinePayload rewrites pending:<id> markers with file_url', () async {
     final payload = <String, Object?>{
@@ -129,9 +184,7 @@ void main() {
   test(
     'inlinePayload leaves pending:<id> alone when the id has no resolved entry',
     () {
-      final payload = <String, Object?>{
-        'logo': 'pending:42',
-      };
+      final payload = <String, Object?>{'logo': 'pending:42'};
       final out = AttachmentPipeline.inlinePayload(payload, resolved: {});
       expect(out['logo'], 'pending:42');
     },

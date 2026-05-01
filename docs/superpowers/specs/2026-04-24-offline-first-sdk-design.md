@@ -186,26 +186,37 @@ CREATE INDEX ix_outbox_uuid  ON outbox(mobile_uuid);
 -- Dependency order: tiers computed in memory per run from current payload
 --   (§5.2); no persistent depends_on column.
 
+-- parent_uuid / parent_doctype     : the field-OWNING row (parent doc OR a child row).
+-- top_parent_uuid / top_parent_doctype: the outbox row that will carry these to the server.
+--   For attachments on the parent doc, top_parent_* equals parent_*.
+--   For attachments on a child row, top_parent_* equals the parent doc's identity.
+-- DAO enforces non-null on both pairs at insert; columns are nullable in the schema only
+-- because SQLite's `ALTER TABLE ADD COLUMN` cannot add `NOT NULL` without a `DEFAULT`,
+-- so fresh and migrated databases would otherwise diverge.
+
 CREATE TABLE pending_attachments (
-  id                INTEGER PRIMARY KEY AUTOINCREMENT,
-  parent_uuid       TEXT NOT NULL,
-  parent_doctype    TEXT NOT NULL,
-  parent_fieldname  TEXT NOT NULL,
-  local_path        TEXT NOT NULL,
-  file_name         TEXT,
-  mime_type         TEXT,
-  is_private        INTEGER NOT NULL DEFAULT 1,
-  size_bytes        INTEGER,
-  state             TEXT NOT NULL,                   -- pending|uploading|done|failed
-  retry_count       INTEGER NOT NULL DEFAULT 0,
-  last_attempt_at   INTEGER,
-  error_message     TEXT,
-  server_file_name  TEXT,
-  server_file_url   TEXT,
-  created_at        INTEGER NOT NULL
+  id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+  parent_uuid         TEXT NOT NULL,
+  parent_doctype      TEXT NOT NULL,
+  parent_fieldname    TEXT NOT NULL,
+  top_parent_uuid     TEXT,
+  top_parent_doctype  TEXT,
+  local_path          TEXT NOT NULL,
+  file_name           TEXT,
+  mime_type           TEXT,
+  is_private          INTEGER NOT NULL DEFAULT 1,
+  size_bytes          INTEGER,
+  state               TEXT NOT NULL,                 -- pending|uploading|done|failed
+  retry_count         INTEGER NOT NULL DEFAULT 0,
+  last_attempt_at     INTEGER,
+  error_message       TEXT,
+  server_file_name    TEXT,
+  server_file_url     TEXT,
+  created_at          INTEGER NOT NULL
 );
-CREATE INDEX ix_attach_state  ON pending_attachments(state);
-CREATE INDEX ix_attach_parent ON pending_attachments(parent_uuid, parent_fieldname);
+CREATE INDEX ix_attach_state      ON pending_attachments(state);
+CREATE INDEX ix_attach_parent     ON pending_attachments(parent_uuid, parent_fieldname);
+CREATE INDEX ix_attach_top_parent ON pending_attachments(top_parent_uuid, state);
 
 CREATE TABLE sdk_meta (
   schema_version    INTEGER,
@@ -478,14 +489,19 @@ The two stay synchronized: `WriteQueue[doctype].submit(...)` updates both in the
 
 Runs as a prerequisite stage for any outbox row whose assembled payload references `pending:<attach_id>`.
 
+Discovery is keyed on `top_parent_uuid` (the outbox row's `mobile_uuid`) — that key catches attachments queued against the parent doc AND attachments queued against any of its child rows in a single query. `pending_attachments.parent_uuid` / `parent_doctype` continue to identify the field-owning row (parent OR child); `top_parent_uuid` / `top_parent_doctype` identify the outbox row that will carry them to the server.
+
 ```
-for each pending_attachments p with state='pending' for this parent:
+for each pending_attachments p with top_parent_uuid = outbox.mobile_uuid AND state IN (pending, uploading):
     UPDATE pending_attachments SET state='uploading' WHERE id=p.id
     try:
         resp ← POST /api/method/upload_file multipart,
                     file=p.local_path,
-                    dt=doctype, dn='new-' + doctype_snake_case,   -- placeholder ok
                     is_private=p.is_private
+                    -- NO dt, NO dn. Frappe v16's File controller
+                    -- (file.py:151) rejects attached_to_doctype set with
+                    -- empty/null attached_to_name, so the upload must
+                    -- create a fully-unattached File row.
         UPDATE pending_attachments SET state='done',
                                        server_file_name=resp.name,
                                        server_file_url=resp.file_url
@@ -500,6 +516,13 @@ for each pending_attachments p with state='pending' for this parent:
 ```
 
 After all attachments for a parent are `done`: inline `server_file_url` into payload, proceed with parent push. Failed final → parent outbox row stays `blocked` (policy 7d(α)); user reattaches to retry.
+
+**Server-side relink.** The SDK leaves all `attached_to_*` columns on the File row NULL. Once the parent INSERT/UPDATE commits:
+
+- **Parent docs**: Frappe's stock `attach_files_to_document` (registered on `*.on_update` in `apps/frappe/frappe/hooks.py`) walks the parent's `Attach`/`Attach Image` fields, finds File rows where all three `attached_to_*` are NULL and `file_url` matches, and rewires them to `(doc.doctype, doc.name, df.fieldname)`.
+- **Child rows**: Frappe v16 child rows save via raw `db_update()` (`frappe/model/document.py:613-648`) and skip lifecycle hooks, so stock never reaches them. The `mobile_control` app registers `relink_mobile_files` on `*.on_update` and `*.on_update_after_submit` (fast-exit when `doc.mobile_uuid` is missing) to walk `meta.get_table_fields()` and replicate the same relink for each child row's Attach/Attach Image fields.
+
+Why no `dt + dn=<temporary_name>` flow: v16's `relink_mismatched_files` (`apps/frappe/frappe/core/doctype/file/utils.py:410`) has a 60-minute window in `relink_files`, which is too short for offline retries. The fully-unattached + post-save relink approach has no time bound.
 
 Cap optional on client side via `SDKConfig(maxAttachmentBytes: 104_857_600)` (100 MB). Default = no client cap; relies on Frappe site limit.
 

@@ -4,23 +4,21 @@ import '../database/daos/pending_attachment_dao.dart';
 import '../models/pending_attachment.dart';
 import 'push_error.dart';
 
-typedef AttachmentUploadFn = Future<Map<String, dynamic>> Function(
-  File file, {
-  String? doctype,
-  String? docname,
-  String? fileName,
-  bool isPrivate,
-});
+typedef AttachmentUploadFn =
+    Future<Map<String, dynamic>> Function(
+      File file, {
+      String? doctype,
+      String? docname,
+      String? fileName,
+      bool isPrivate,
+    });
 
 typedef FileFromPathFn = File Function(String path);
 
 class AttachmentUploadResult {
   final String fileName;
   final String fileUrl;
-  const AttachmentUploadResult({
-    required this.fileName,
-    required this.fileUrl,
-  });
+  const AttachmentUploadResult({required this.fileName, required this.fileUrl});
 }
 
 /// Uploads any `pending_attachments` rows queued for a given parent doc
@@ -53,13 +51,15 @@ class AttachmentPipeline {
 
   static File _defaultFileFromPath(String p) => File(p);
 
-  /// Uploads every pending attachment for [parentUuid]. Returns a map of
-  /// `pending_attachments.id` → upload result. Throws BlockedByUpstream
-  /// if any attachment exhausts its retries.
-  Future<Map<int, AttachmentUploadResult>> uploadPendingFor(
-    String parentUuid,
+  /// Uploads every pending attachment for [topParentUuid] (the outbox
+  /// row's mobile_uuid). Includes attachments queued against child-row
+  /// uuids whose `top_parent_uuid` was set to [topParentUuid] at enqueue.
+  /// Returns a map of `pending_attachments.id` → upload result. Throws
+  /// BlockedByUpstream if any attachment exhausts its retries.
+  Future<Map<int, AttachmentUploadResult>> uploadPendingForTopParent(
+    String topParentUuid,
   ) async {
-    final pending = await dao.findPendingForParent(parentUuid);
+    final pending = await dao.findPendingForTopParent(topParentUuid);
     final results = <int, AttachmentUploadResult>{};
     for (final p in pending) {
       results[p.id] = await _uploadOne(p);
@@ -72,11 +72,22 @@ class AttachmentPipeline {
     Object? lastError;
     for (var attempt = 0; attempt < backoff.length; attempt++) {
       try {
+        // No `doctype` and no `docname` — File row is created fully
+        // unattached (all attached_to_* are NULL). v16's File controller
+        // rejects `attached_to_doctype` without a non-empty
+        // `attached_to_name` (file.py:151), so we can't ship `dt` alone.
+        //
+        // Relink path:
+        //   - Parent docs: Frappe's stock `attach_files_to_document`
+        //     (registered on `*.on_update` in apps/frappe/frappe/hooks.py)
+        //     finds unattached File rows by file_url and rewires them.
+        //   - Child rows: stock skips children (they save via raw
+        //     `db_update`, no lifecycle hooks). The mobile_control hook
+        //     `relink_mobile_files` walks the parent's child tables on
+        //     `*.on_update` and rewires per-child.
+        // Spec §5.3.
         final resp = await uploader(
           fileFromPath(p.localPath),
-          doctype: p.parentDoctype,
-          docname:
-              'new-${p.parentDoctype.toLowerCase().replaceAll(" ", "-")}',
           fileName: p.fileName,
           isPrivate: p.isPrivate,
         );

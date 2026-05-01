@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:path/path.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:sqflite/sqflite.dart';
@@ -9,7 +10,7 @@ import 'daos/doctype_permission_dao.dart';
 import 'schema/system_tables.dart';
 
 class AppDatabase {
-  static const int _version = 3;
+  static const int _version = 4;
 
   /// Singleton instance for the production (on-disk) database. The in-memory
   /// factory does NOT touch this — each call returns an independent instance
@@ -129,8 +130,31 @@ class AppDatabase {
         await db.execute(stmt);
       }
       for (final stmt in doctypeMetaExtensionsDDL()) {
-        await db.execute(stmt);
+        // ALTER TABLE ADD COLUMN throws "duplicate column" on re-entry
+        // after a partial migration. Tolerate that one error so
+        // _onUpgrade is idempotent. Any other DatabaseException still
+        // rethrows.
+        try {
+          await db.execute(stmt);
+        } on DatabaseException catch (e) {
+          if (!e.toString().toLowerCase().contains('duplicate column')) {
+            rethrow;
+          }
+        }
       }
+    }
+    if (oldVersion < 4) {
+      for (final stmt in doctypeMetaV4ExtensionsDDL()) {
+        // Same duplicate-column guard as v3 — SIG-12 schema bump.
+        try {
+          await db.execute(stmt);
+        } on DatabaseException catch (e) {
+          if (!e.toString().toLowerCase().contains('duplicate column')) {
+            rethrow;
+          }
+        }
+      }
+      await applyV3ToV4Attachments(db);
     }
   }
 
@@ -179,9 +203,31 @@ class AppDatabase {
       'CREATE INDEX idx_doctype_meta_isMobileForm ON doctype_meta(isMobileForm)',
     );
 
-    // Apply v3 doctype_meta extensions on a fresh install.
+    // Apply v3 doctype_meta extensions on a fresh install. Wrapped in
+    // duplicate-column guard for symmetry with _onUpgrade — fresh
+    // installs shouldn't hit duplicates, but the symmetry prevents
+    // regressions if _onCreate is ever invoked twice (e.g. by
+    // clearAllData's recreate path on a partially-rebuilt DB).
     for (final stmt in doctypeMetaExtensionsDDL()) {
-      await db.execute(stmt);
+      try {
+        await db.execute(stmt);
+      } on DatabaseException catch (e) {
+        if (!e.toString().toLowerCase().contains('duplicate column')) {
+          rethrow;
+        }
+      }
+    }
+
+    // v4 doctype_meta extensions on a fresh install. Same duplicate-column
+    // guard as the v3 block above.
+    for (final stmt in doctypeMetaV4ExtensionsDDL()) {
+      try {
+        await db.execute(stmt);
+      } on DatabaseException catch (e) {
+        if (!e.toString().toLowerCase().contains('duplicate column')) {
+          rethrow;
+        }
+      }
     }
 
     // Link options table
@@ -253,13 +299,91 @@ class AppDatabase {
     }
   }
 
-  /// Clear all data from all tables. Call on logout to wipe local DB.
+  /// Clear all local data. Call on logout to wipe the device's local DB.
+  /// Drops every application-owned table (mirrors, system tables, legacy
+  /// `documents`, etc.) and rebuilds the base schema from scratch.
+  /// Per-doctype tables are rebuilt lazily on the next pull via
+  /// `OfflineRepository.ensureSchemaForClosure`.
   static Future<void> clearAllData() async {
     final db = await getInstance();
-    await db.doctypeMetaDao.deleteAll();
-    await db.documentDao.deleteAll();
-    await db.linkOptionDao.deleteAll();
-    await db.authTokenDao.deleteAll();
-    await db.doctypePermissionDao.deleteAll();
+    await _clearAllDataInternal(db._db);
   }
+
+  /// Test seam — same logic as [clearAllData] but operates on this
+  /// instance without going through [getInstance]. Production code should
+  /// call [clearAllData] (which routes through the singleton).
+  @visibleForTesting
+  Future<void> clearAllDataForTesting() => _clearAllDataInternal(_db);
+
+  /// Drops every application-owned table (anything not in SQLite's
+  /// internal namespace) and rebuilds the base schema by re-running
+  /// [_onCreate]. SQLite internals (`sqlite_master`, `sqlite_sequence`,
+  /// `sqlite_stat*`) are preserved.
+  ///
+  /// Tables wiped include — non-exhaustively — `documents`,
+  /// `doctype_meta`, `link_options`, `auth_tokens`, `doctype_permission`,
+  /// `outbox`, `pending_attachments`, `sdk_meta`, every `docs__*` mirror
+  /// table, and any future SDK-owned table. The contract is `NOT LIKE
+  /// 'sqlite_%'`: if it's not a SQLite internal, it gets dropped.
+  static Future<void> _clearAllDataInternal(Database db) async {
+    await db.transaction((txn) async {
+      final tables = await txn.rawQuery(
+        "SELECT name FROM sqlite_master "
+        "WHERE type='table' "
+        "AND name NOT LIKE 'sqlite_%'",
+      );
+      for (final r in tables) {
+        final tableName = r['name'] as String;
+        await txn.execute('DROP TABLE IF EXISTS "$tableName"');
+      }
+    });
+
+    // Recreate the base schema. _onCreate brings back: documents,
+    // doctype_meta (with v3 extensions), link_options, auth_tokens,
+    // doctype_permission, outbox, pending_attachments, sdk_meta, plus
+    // all associated indexes. Per-doctype docs__* tables are NOT
+    // recreated here — they are rebuilt lazily on the next pull via
+    // OfflineRepository.ensureSchemaForClosure.
+    await _onCreate(db, _version);
+
+    // _onCreate inserts sdk_meta with schema_version=0. Bump to 2 so
+    // V1ToV2Migration.run() correctly skips on next call — there is
+    // nothing to migrate from the now-empty `documents` table.
+    await db.update('sdk_meta', <String, Object?>{
+      'schema_version': 2,
+    }, where: 'id = 1');
+  }
+}
+
+/// Applied as part of `_onUpgrade(oldVersion < 4)`. Exposed at top level
+/// so the migration test can run it directly against an in-memory DB
+/// shaped like a pre-v4 schema, without dragging in the SIG-12 column work.
+///
+/// Adds `top_parent_uuid` + `top_parent_doctype` to `pending_attachments`
+/// (nullable; DAO enforces non-null at insert) and creates the
+/// `ix_attach_top_parent` index. Backfills pre-existing rows from
+/// `parent_uuid` / `parent_doctype` — pre-fix only parent-level attaches
+/// existed because attach_field.dart never wired `dao.enqueue`.
+Future<void> applyV3ToV4Attachments(Database db) async {
+  const stmts = <String>[
+    'ALTER TABLE pending_attachments ADD COLUMN top_parent_uuid TEXT',
+    'ALTER TABLE pending_attachments ADD COLUMN top_parent_doctype TEXT',
+    'CREATE INDEX IF NOT EXISTS ix_attach_top_parent '
+        'ON pending_attachments(top_parent_uuid, state)',
+  ];
+  for (final stmt in stmts) {
+    try {
+      await db.execute(stmt);
+    } on DatabaseException catch (e) {
+      if (!e.toString().toLowerCase().contains('duplicate column')) {
+        rethrow;
+      }
+    }
+  }
+  await db.execute(
+    'UPDATE pending_attachments '
+    'SET top_parent_uuid = parent_uuid, '
+    '    top_parent_doctype = parent_doctype '
+    'WHERE top_parent_uuid IS NULL',
+  );
 }
