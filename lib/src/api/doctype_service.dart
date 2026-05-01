@@ -54,6 +54,7 @@ class DoctypeService {
     String doctype, {
     List<String>? fields,
     List<List<dynamic>>? filters,
+    List<List<dynamic>>? orFilters,
     int limitStart = 0,
     int limitPageLength = 20,
     String? orderBy,
@@ -66,6 +67,9 @@ class DoctypeService {
 
     if (fields != null) methodParams['fields'] = jsonEncode(fields);
     if (filters != null) methodParams['filters'] = jsonEncode(filters);
+    if (orFilters != null && orFilters.isNotEmpty) {
+      methodParams['or_filters'] = jsonEncode(orFilters);
+    }
     if (orderBy != null) methodParams['order_by'] = orderBy;
 
     final response = await _restHelper.get(
@@ -139,8 +143,9 @@ class DoctypeService {
       '/api/method/mobile_sync.get_docs_with_children',
       body: {'doctype': doctype, 'names': names},
     );
-    final dynamic message =
-        response is Map<String, dynamic> ? response['message'] : response;
+    final dynamic message = response is Map<String, dynamic>
+        ? response['message']
+        : response;
     if (message is! List) return [];
     return [
       for (final row in message)

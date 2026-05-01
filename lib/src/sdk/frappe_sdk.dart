@@ -10,6 +10,7 @@ import '../database/daos/doctype_meta_dao.dart';
 import '../database/daos/sdk_meta_dao.dart';
 import '../database/migrations/v1_to_v2.dart';
 import '../models/doc_type_meta.dart';
+import '../models/offline_mode.dart';
 import '../models/session_user.dart';
 import '../query/unified_resolver.dart';
 import '../services/auth_service.dart';
@@ -57,15 +58,39 @@ class FrappeSDK {
   /// check resolves.
   bool _cachedOnline = false;
 
+  /// Session-bound offline mode. Set in [initialize] from the persisted
+  /// `sdk_meta.offline_enabled` (via [_resolveBootMode]) and immutable
+  /// for the rest of the session. Forced offline in `forTesting` to keep
+  /// test behaviour identical to pre-P2 builds.
+  OfflineMode _offlineMode = const OfflineMode(
+    enabled: true,
+    isPersisted: true,
+  );
+
+  @visibleForTesting
+  OfflineMode get offlineModeForTesting => _offlineMode;
+
   FrappeSDK({required this.baseUrl, this.databaseAppName});
 
   /// Test-only constructor: accepts a pre-built [AppDatabase] (e.g. in-memory).
   /// Wires all services directly without calling [initialize()].
   /// Avoids FlutterSecureStorage (not available in unit/widget tests).
+  ///
+  /// Defaults to offline-mode (`enabled: true, isPersisted: true`) so
+  /// existing tests that don't pass [offlineMode] keep their previous
+  /// behaviour. Tests exercising the online-mode passthroughs should
+  /// pass `offlineMode: const OfflineMode(enabled: false, isPersisted: true)`.
   @visibleForTesting
-  FrappeSDK.forTesting(this.baseUrl, AppDatabase database)
-    : databaseAppName = null {
+  FrappeSDK.forTesting(
+    this.baseUrl,
+    AppDatabase database, {
+    OfflineMode offlineMode = const OfflineMode(
+      enabled: true,
+      isPersisted: true,
+    ),
+  }) : databaseAppName = null {
     _database = database;
+    _offlineMode = offlineMode;
     // Create FrappeClient directly — avoids AuthService.initialize() which
     // writes to FlutterSecureStorage and is unavailable in widget tests.
     _client = FrappeClient(baseUrl);
@@ -78,7 +103,12 @@ class FrappeSDK {
     final testMetaService = _metaService!;
     final testMetaFn = testMetaService.getMeta;
     final testLocalWriter = LocalWriter(database.rawDatabase, testMetaFn);
-    _repository = OfflineRepository(_database!, localWriter: testLocalWriter);
+    _repository = OfflineRepository(
+      _database!,
+      localWriter: testLocalWriter,
+      offlineMode: offlineMode,
+      client: _client,
+    );
     _permissionService = PermissionService(_client!, _database!);
     _translationService = TranslationService(_client!);
     _syncService = SyncService(
@@ -86,6 +116,7 @@ class FrappeSDK {
       _repository!,
       _database!,
       getMobileUuid: () async => 'test-uuid',
+      offlineMode: offlineMode,
     );
     final testResolver = UnifiedResolver(
       db: database.rawDatabase,
@@ -93,6 +124,8 @@ class FrappeSDK {
       isOnline: () => false,
       backgroundFetch: (_, _) async {},
       metaResolver: testMetaFn,
+      offlineMode: offlineMode,
+      client: _client,
     );
     _linkOptionService = LinkOptionService(testResolver, testMetaFn);
     _sessionUserService = SessionUserService(_database!.rawDatabase);
@@ -115,12 +148,24 @@ class FrappeSDK {
     // meta/sync/link-options calls always carry the Bearer token / API key.
     _client = _authService!.client;
 
+    // Resolve session-bound offline mode BEFORE constructing services so
+    // every service receives the correct mode through its constructor.
+    final persistedMode = await SdkMetaDao(
+      _database!.rawDatabase,
+    ).readOfflineMode();
+    _offlineMode = await _resolveBootMode(persistedMode);
+
     _metaService = MetaService(_client!, _database!);
     final rawDb = _database!.rawDatabase;
     final metaSvc = _metaService!;
     final metaFn = metaSvc.getMeta;
     final localWriter = LocalWriter(rawDb, metaFn);
-    _repository = OfflineRepository(_database!, localWriter: localWriter);
+    _repository = OfflineRepository(
+      _database!,
+      localWriter: localWriter,
+      offlineMode: _offlineMode,
+      client: _client!,
+    );
     _permissionService = PermissionService(_client!, _database!);
     _translationService = TranslationService(_client!);
     _syncService = SyncService(
@@ -128,6 +173,7 @@ class FrappeSDK {
       _repository!,
       _database!,
       getMobileUuid: () => _authService!.getOrCreateMobileUuid(),
+      offlineMode: _offlineMode,
     );
     // Build UnifiedResolver — single read path for all offline queries.
     // Probe connectivity once here; downstream callers (resolver,
@@ -145,6 +191,8 @@ class FrappeSDK {
         } catch (_) {}
       },
       metaResolver: metaFn,
+      offlineMode: _offlineMode,
+      client: _client!,
     );
     _linkOptionService = LinkOptionService(resolver, metaFn);
     _sessionUserService = SessionUserService(_database!.rawDatabase);
@@ -210,6 +258,65 @@ class FrappeSDK {
         result.contains(ConnectivityResult.wifi) ||
         result.contains(ConnectivityResult.ethernet);
   }
+
+  /// Resolves the session-bound offline mode from the persisted record.
+  ///
+  /// - Persisted value present → use it verbatim.
+  /// - Unpersisted + residue on disk → assume legacy offline install,
+  ///   boot offline (P2 conservative guard for the
+  ///   persisted=online + residue case is also applied here; P3
+  ///   removes the guard and runs an explicit drain/wipe transition).
+  /// - Unpersisted + no residue → fresh install, boot online.
+  Future<OfflineMode> _resolveBootMode(OfflineMode persisted) async {
+    if (persisted.isPersisted) {
+      // P2 RESIDUE GUARD: server says online but residue exists.
+      // Stay offline this session and log a warning. P3 replaces this
+      // guard with a real drain/wipe transition.
+      if (!persisted.enabled && await _hasResidualOfflineState()) {
+        // ignore: avoid_print
+        print(
+          'FrappeSDK: residue detected with offline_enabled=false — '
+          'staying offline this session. P3 will replace this guard with '
+          'a drain/wipe transition.',
+        );
+        return const OfflineMode(enabled: true, isPersisted: true);
+      }
+      return persisted;
+    }
+    final hasResidue = await _hasResidualOfflineState();
+    return OfflineMode(enabled: hasResidue, isPersisted: false);
+  }
+
+  /// Returns true iff any of the offline-only data structures contain
+  /// state from a previous offline-mode session.
+  Future<bool> _hasResidualOfflineState() async {
+    if (_database == null) return false;
+    final raw = _database!.rawDatabase;
+
+    final tableRows = await raw.rawQuery(
+      "SELECT name FROM sqlite_master "
+      "WHERE type='table' AND name LIKE 'docs\\_\\_%' ESCAPE '\\' LIMIT 1",
+    );
+    if (tableRows.isNotEmpty) return true;
+
+    final outboxRows = await raw.rawQuery('SELECT 1 FROM outbox LIMIT 1');
+    if (outboxRows.isNotEmpty) return true;
+
+    final attachRows = await raw.rawQuery(
+      'SELECT 1 FROM pending_attachments LIMIT 1',
+    );
+    if (attachRows.isNotEmpty) return true;
+
+    return false;
+  }
+
+  @visibleForTesting
+  Future<bool> hasResidualOfflineStateForTesting() =>
+      _hasResidualOfflineState();
+
+  @visibleForTesting
+  Future<OfflineMode> resolveBootModeForTesting(OfflineMode persisted) =>
+      _resolveBootMode(persisted);
 
   Future<int> _readSchemaVersion(dynamic db) async {
     final rows = await db.rawQuery(
@@ -572,6 +679,9 @@ class FrappeSDK {
     } catch (_) {
       // ignore
     }
+
+    // Online mode stops here — closure pull is offline-only.
+    if (!_offlineMode.enabled) return;
 
     try {
       // Pull data for entry-point (mobile form) doctypes AND every doctype

@@ -4,9 +4,11 @@ import 'dart:convert';
 import 'package:crypto/crypto.dart';
 import 'package:sqflite/sqflite.dart';
 
+import '../api/client.dart';
 import '../database/daos/doctype_meta_dao.dart';
 import '../database/table_name.dart';
 import '../models/meta_resolver.dart';
+import '../models/offline_mode.dart';
 import 'filter_parser.dart';
 import 'link_decorator.dart';
 import 'query_result.dart';
@@ -17,10 +19,8 @@ typedef IsOnlineFn = bool Function();
 /// Wired at SDK init to a single-doctype pull adapter — typically
 /// `PullEngine.fetchAndApplyOne`. Receives a copy of the request params
 /// so it can shape the upstream call (filters, paging) however it likes.
-typedef BackgroundFetcher = Future<void> Function(
-  String doctype,
-  Map<String, Object?> params,
-);
+typedef BackgroundFetcher =
+    Future<void> Function(String doctype, Map<String, Object?> params);
 
 /// The single read path for the offline-first SDK. Spec §6.1–§6.3.
 ///
@@ -53,6 +53,8 @@ class UnifiedResolver {
   final IsOnlineFn isOnline;
   final BackgroundFetcher backgroundFetch;
   final MetaResolverFn metaResolver;
+  final OfflineMode offlineMode;
+  final FrappeClient? client;
 
   /// Active background refreshes keyed by request hash. Holds the
   /// in-flight Future so concurrent callers can `await` the same one
@@ -65,6 +67,8 @@ class UnifiedResolver {
     required this.isOnline,
     required this.backgroundFetch,
     required this.metaResolver,
+    this.offlineMode = const OfflineMode(enabled: true, isPersisted: true),
+    this.client,
   });
 
   Future<QueryResult<Map<String, Object?>>> resolve({
@@ -76,8 +80,19 @@ class UnifiedResolver {
     int pageSize = 50,
     bool includeFailed = false,
   }) async {
+    if (!offlineMode.enabled) {
+      return _onlinePassthrough(
+        doctype: doctype,
+        filters: filters,
+        orFilters: orFilters,
+        orderBy: orderBy,
+        page: page,
+        pageSize: pageSize,
+      );
+    }
     final meta = await metaResolver(doctype);
-    final tableName = await metaDao.getTableName(doctype) ??
+    final tableName =
+        await metaDao.getTableName(doctype) ??
         normalizeDoctypeTableName(doctype);
 
     // For child tables, Frappe link_filters reference Frappe's virtual
@@ -111,14 +126,16 @@ class UnifiedResolver {
       pageSize: pageSize,
     );
     final rawRows = await db.rawQuery(parsed.sql, parsed.params);
-    final rows = await Future.wait(rawRows.map((r) async {
-      return LinkDecorator.decorate(
-        db: db,
-        parentMeta: meta,
-        row: Map<String, Object?>.from(r),
-        targetMetaResolver: metaResolver,
-      );
-    }));
+    final rows = await Future.wait(
+      rawRows.map((r) async {
+        return LinkDecorator.decorate(
+          db: db,
+          parentMeta: meta,
+          row: Map<String, Object?>.from(r),
+          targetMetaResolver: metaResolver,
+        );
+      }),
+    );
 
     if (isOnline()) {
       _scheduleBackgroundRefresh(
@@ -143,6 +160,44 @@ class UnifiedResolver {
       hasMore: rows.length == pageSize,
       returnedCount: rows.length,
       originBreakdown: breakdown,
+    );
+  }
+
+  Future<QueryResult<Map<String, Object?>>> _onlinePassthrough({
+    required String doctype,
+    required List<List> filters,
+    required List<List> orFilters,
+    required String? orderBy,
+    required int page,
+    required int pageSize,
+  }) async {
+    if (client == null) {
+      throw StateError(
+        'UnifiedResolver: online mode requires a non-null FrappeClient. '
+        'Pass `client:` to the constructor when offlineMode.enabled = false.',
+      );
+    }
+    final raw = await client!.doctype.list(
+      doctype,
+      filters: filters.map((f) => f.cast<dynamic>()).toList(),
+      orFilters: orFilters.isEmpty
+          ? null
+          : orFilters.map((f) => f.cast<dynamic>()).toList(),
+      orderBy: orderBy,
+      limitStart: page * pageSize,
+      limitPageLength: pageSize,
+    );
+    final rows = raw
+        .whereType<Map<String, dynamic>>()
+        .map((r) => Map<String, Object?>.from(r))
+        .toList();
+    return QueryResult<Map<String, Object?>>(
+      rows: rows,
+      hasMore: rows.length == pageSize,
+      returnedCount: rows.length,
+      originBreakdown: rows.isEmpty
+          ? const {}
+          : {RowOrigin.server: rows.length},
     );
   }
 
@@ -221,10 +276,7 @@ class UnifiedResolver {
   /// 1. Direct match — value is already a mobile_uuid stored in parent_uuid.
   /// 2. For each distinct parent_doctype in the child table, look up the
   ///    parent's mobile_uuid via server_name = [value].
-  Future<String?> _resolveParentUuid(
-    String childTable,
-    String value,
-  ) async {
+  Future<String?> _resolveParentUuid(String childTable, String value) async {
     // 1. Direct match (offline case: value IS the mobile_uuid).
     final direct = await db.rawQuery(
       'SELECT 1 FROM $childTable WHERE parent_uuid = ? LIMIT 1',

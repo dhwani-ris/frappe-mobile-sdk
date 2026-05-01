@@ -5,6 +5,7 @@ import '../concurrency/sync_mutex.dart';
 import '../database/app_database.dart';
 import '../database/table_name.dart';
 import '../models/doc_type_meta.dart';
+import '../models/offline_mode.dart';
 import 'offline_repository.dart';
 
 /// Per-doctype sync phase observable from outside the SDK. Drives UX:
@@ -35,11 +36,14 @@ class SyncService {
   final Future<String?> Function()? _getMobileUuid;
   final SyncMutex _syncMutex = SyncMutex();
 
+  final OfflineMode offlineMode;
+
   SyncService(
     this._client,
     this._repository,
     this._database, {
     Future<String?> Function()? getMobileUuid,
+    this.offlineMode = const OfflineMode(enabled: true, isPersisted: true),
   }) : _getMobileUuid = getMobileUuid;
 
   /// Check if device is online
@@ -54,6 +58,7 @@ class SyncService {
   /// [_syncMutex] so concurrent callers see "already in progress" rather
   /// than racing each other.
   Future<SyncResult> pushSync({String? doctype}) async {
+    if (!offlineMode.enabled) return SyncResult.empty();
     if (!await isOnline()) {
       return SyncResult(0, 0, 0, 'No internet connection', errors: []);
     }
@@ -199,6 +204,7 @@ class SyncService {
 
   /// Pull updates from server. Public entrypoint — guarded by [_syncMutex].
   Future<SyncResult> pullSync({required String doctype, int? since}) async {
+    if (!offlineMode.enabled) return SyncResult.empty();
     if (!await isOnline()) {
       return SyncResult(0, 0, 0, 'No internet connection', errors: []);
     }
@@ -219,6 +225,9 @@ class SyncService {
     required List<String> doctypes,
     int concurrency = 4,
   }) async {
+    if (!offlineMode.enabled) {
+      return {for (final dt in doctypes) dt: SyncResult.empty()};
+    }
     if (!await isOnline()) {
       return {
         for (final dt in doctypes)
@@ -662,6 +671,7 @@ class SyncService {
   /// gated on `_isSyncing` and silently turned the push leg into a no-op
   /// (CRIT-1).
   Future<SyncResult> syncDoctype(String doctype) async {
+    if (!offlineMode.enabled) return SyncResult.empty();
     if (!await isOnline()) {
       return SyncResult(0, 0, 0, 'No internet connection', errors: []);
     }
@@ -699,6 +709,9 @@ class SyncService {
 
   /// Get sync statistics
   Future<Map<String, int>> getSyncStats({String? doctype}) async {
+    if (!offlineMode.enabled) {
+      return const {'dirty': 0, 'deleted': 0, 'total': 0};
+    }
     final dirtyDocs = doctype != null
         ? await _repository.getDirtyDocumentsByDoctype(doctype)
         : await _repository.getDirtyDocuments();
@@ -729,6 +742,10 @@ class SyncResult {
     this.error, {
     List<SyncError>? errors,
   }) : errors = errors ?? [];
+
+  /// Returns a no-op result used by short-circuited public methods
+  /// when offline mode is disabled.
+  factory SyncResult.empty() => SyncResult(0, 0, 0, null);
 }
 
 /// Individual sync error details

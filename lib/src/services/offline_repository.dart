@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:developer' as developer;
 import 'package:uuid/uuid.dart';
+import '../api/client.dart';
 import '../database/app_database.dart';
 import '../database/entities/document_entity.dart';
 import '../database/schema/child_schema.dart';
@@ -8,6 +9,7 @@ import '../database/schema/parent_schema.dart';
 import '../database/table_name.dart';
 import '../models/doc_type_meta.dart';
 import '../models/document.dart';
+import '../models/offline_mode.dart';
 import '../sync/pull_apply.dart';
 import 'local_writer.dart';
 
@@ -15,6 +17,8 @@ import 'local_writer.dart';
 class OfflineRepository {
   final AppDatabase _database;
   final LocalWriter? _localWriter;
+  final OfflineMode offlineMode;
+  final FrappeClient? client;
   final Uuid _uuid = const Uuid();
 
   /// Cache: doctype → parsed meta. Avoids re-decoding `metaJson` on every
@@ -36,8 +40,12 @@ class OfflineRepository {
   /// child rows into the per-doctype `docs__<doctype>` tables so the
   /// offline read path ([UnifiedResolver]) sees newly-saved data
   /// immediately. Spec §3.2.
-  OfflineRepository(this._database, {LocalWriter? localWriter})
-    : _localWriter = localWriter;
+  OfflineRepository(
+    this._database, {
+    LocalWriter? localWriter,
+    this.offlineMode = const OfflineMode(enabled: true, isPersisted: true),
+    this.client,
+  }) : _localWriter = localWriter;
 
   /// Drops the in-memory meta cache. Call this after a meta refresh so
   /// schema-bumping fields (new column, dropped Link) take effect on the
@@ -155,6 +163,18 @@ class OfflineRepository {
     required String doctype,
     required Map<String, dynamic> data,
   }) async {
+    if (!offlineMode.enabled) {
+      _requireOnlineClient('createDocument');
+      final response = await client!.document.createDocument(doctype, data);
+      final serverName = response['name'] as String? ?? '';
+      return Document.fromServer(
+        doctype: doctype,
+        serverId: serverName,
+        data: response,
+        localId: serverName,
+      );
+    }
+
     final rawUuid = data['mobile_uuid'] as String?;
     final mobileUuid = (rawUuid != null && rawUuid.isNotEmpty)
         ? rawUuid
@@ -182,6 +202,16 @@ class OfflineRepository {
     }
 
     return document;
+  }
+
+  void _requireOnlineClient(String method) {
+    if (client == null) {
+      throw StateError(
+        'OfflineRepository.$method: online mode requires a non-null '
+        'FrappeClient. Pass `client:` to the constructor when '
+        'offlineMode.enabled = false.',
+      );
+    }
   }
 
   /// Get document by local ID
@@ -243,11 +273,13 @@ class OfflineRepository {
 
   /// Get dirty documents (need sync)
   Future<List<Document>> getDirtyDocuments() async {
+    if (!offlineMode.enabled) return const [];
     return await getDocumentsByStatus('dirty');
   }
 
   /// Get dirty documents for a specific DocType
   Future<List<Document>> getDirtyDocumentsByDoctype(String doctype) async {
+    if (!offlineMode.enabled) return const [];
     final entities = await _database.documentDao.findByDoctypeAndStatus(
       doctype,
       'dirty',
@@ -267,6 +299,30 @@ class OfflineRepository {
     String localId,
     Map<String, dynamic> data,
   ) async {
+    if (!offlineMode.enabled) {
+      _requireOnlineClient('updateDocumentData');
+      // In online mode, [localId] is the server-assigned name.
+      final document = await getDocumentByLocalId(localId);
+      final doctype = document?.doctype ?? data['doctype'] as String? ?? '';
+      if (doctype.isEmpty) {
+        throw ArgumentError(
+          'updateDocumentData in online mode needs the doctype in data '
+          'when no local document exists for the given name.',
+        );
+      }
+      final response = await client!.document.updateDocument(
+        doctype,
+        localId,
+        data,
+      );
+      return Document.fromServer(
+        doctype: doctype,
+        serverId: localId,
+        data: response,
+        localId: localId,
+      );
+    }
+
     final document = await getDocumentByLocalId(localId);
     if (document == null) {
       throw Exception('Document not found: $localId');
@@ -290,6 +346,28 @@ class OfflineRepository {
 
   /// Delete document (soft delete - marks as deleted)
   Future<Document> deleteDocument(String localId) async {
+    if (!offlineMode.enabled) {
+      _requireOnlineClient('deleteDocument');
+      final document = await getDocumentByLocalId(localId);
+      final doctype = document?.doctype ?? '';
+      if (doctype.isEmpty) {
+        throw ArgumentError(
+          'deleteDocument in online mode needs a known doctype. '
+          'Either pre-load the document or call client.document.deleteDocument '
+          'directly.',
+        );
+      }
+      await client!.document.deleteDocument(doctype, localId);
+      return Document(
+        localId: localId,
+        doctype: doctype,
+        serverId: localId,
+        data: const {},
+        status: 'deleted',
+        modified: DateTime.now().millisecondsSinceEpoch,
+      );
+    }
+
     final document = await getDocumentByLocalId(localId);
     if (document == null) {
       throw Exception('Document not found: $localId');
