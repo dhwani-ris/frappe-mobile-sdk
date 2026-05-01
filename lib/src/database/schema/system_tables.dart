@@ -59,10 +59,22 @@ List<String> systemTablesDDL() => <String>[
         id INTEGER PRIMARY KEY CHECK (id = 1),
         schema_version INTEGER NOT NULL DEFAULT 0,
         session_user_json TEXT,
-        bootstrap_done INTEGER NOT NULL DEFAULT 0
+        bootstrap_done INTEGER NOT NULL DEFAULT 0,
+        offline_enabled INTEGER NOT NULL DEFAULT 0,
+        offline_enabled_set_at INTEGER
       )
       ''',
   'INSERT OR IGNORE INTO sdk_meta (id, schema_version) VALUES (1, 0)',
+];
+
+/// v5 extension: server-driven offline mode toggle.
+///
+/// Adds two columns to `sdk_meta`. NOT idempotent on its own — the call
+/// site in `app_database.dart` wraps each ALTER in try/catch on
+/// "duplicate column name" so the upgrade tolerates partial reruns.
+List<String> sdkMetaV5ExtensionsDDL() => <String>[
+  'ALTER TABLE sdk_meta ADD COLUMN offline_enabled INTEGER NOT NULL DEFAULT 0',
+  'ALTER TABLE sdk_meta ADD COLUMN offline_enabled_set_at INTEGER',
 ];
 
 /// ALTER statements to add the new columns to a pre-existing

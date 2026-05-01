@@ -10,7 +10,7 @@ import 'daos/doctype_permission_dao.dart';
 import 'schema/system_tables.dart';
 
 class AppDatabase {
-  static const int _version = 4;
+  static const int _version = 5;
 
   /// Singleton instance for the production (on-disk) database. The in-memory
   /// factory does NOT touch this — each call returns an independent instance
@@ -155,6 +155,17 @@ class AppDatabase {
         }
       }
       await applyV3ToV4Attachments(db);
+    }
+    if (oldVersion < 5) {
+      for (final stmt in sdkMetaV5ExtensionsDDL()) {
+        try {
+          await db.execute(stmt);
+        } on DatabaseException catch (e) {
+          if (!e.toString().toLowerCase().contains('duplicate column')) {
+            rethrow;
+          }
+        }
+      }
     }
   }
 

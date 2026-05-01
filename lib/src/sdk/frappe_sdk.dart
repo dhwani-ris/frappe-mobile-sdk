@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 import '../api/client.dart';
 import '../database/app_database.dart';
 import '../database/daos/doctype_meta_dao.dart';
+import '../database/daos/sdk_meta_dao.dart';
 import '../database/migrations/v1_to_v2.dart';
 import '../models/doc_type_meta.dart';
 import '../models/session_user.dart';
@@ -228,6 +229,7 @@ class FrappeSDK {
       await _translationService?.setLocale(lang);
     }
     _setSessionUserFromLoginResponse(response);
+    await _persistOfflineFlagFromLogin(response);
     return response;
   }
 
@@ -247,6 +249,7 @@ class FrappeSDK {
       await _translationService?.setLocale(lang);
     }
     _setSessionUserFromLoginResponse(response);
+    await _persistOfflineFlagFromLogin(response);
     return response;
   }
 
@@ -462,6 +465,7 @@ class FrappeSDK {
     if (lang != null && lang.isNotEmpty) {
       await _translationService?.setLocale(lang);
     }
+    await _persistOfflineFlagFromLogin(userInfo);
     // mobile_auth.me returns a Frappe user document — 'name' is the user email.
     final name = userInfo['name'] as String?;
     if (name != null && name.isNotEmpty) {
@@ -483,6 +487,33 @@ class FrappeSDK {
       );
     }
   }
+
+  /// Persists the `offline_enabled` flag from a login response to
+  /// `sdk_meta`. Treats a missing or non-`true` value as `false`.
+  ///
+  /// Non-fatal: write failures are logged and swallowed so a transient
+  /// SQLite error doesn't fail the login itself. The persisted value
+  /// takes effect on the next [initialize] call.
+  Future<void> _persistOfflineFlagFromLogin(
+    Map<String, dynamic> response,
+  ) async {
+    if (_database == null) return;
+    final incoming = response['offline_enabled'] == true;
+    try {
+      await SdkMetaDao(_database!.rawDatabase).writeOfflineMode(
+        enabled: incoming,
+        setAtMs: DateTime.now().millisecondsSinceEpoch,
+      );
+    } catch (e, st) {
+      // ignore: avoid_print
+      print('FrappeSDK: failed to persist offline_enabled — $e\n$st');
+    }
+  }
+
+  @visibleForTesting
+  Future<void> persistOfflineFlagFromLoginForTesting(
+    Map<String, dynamic> response,
+  ) => _persistOfflineFlagFromLogin(response);
 
   /// Builds a [SessionUser] from a login/OTP response and persists it.
   /// The login response uses `user` (not `name`) for the username.
