@@ -81,6 +81,37 @@ class Document {
     );
   }
 
+  /// Build a Document from a [UnifiedResolver.resolve] row.
+  ///
+  /// The resolver returns rows shaped by the underlying source:
+  /// - offline mode → row of `docs__<doctype>` (includes `mobile_uuid`,
+  ///   `name`, `sync_status`, plus all native columns)
+  /// - online mode → row of `frappe.client.get_list` (includes `name`
+  ///   and the requested fields; no `mobile_uuid` or `sync_status`)
+  ///
+  /// `localId` falls back to `name` when `mobile_uuid` is absent (online
+  /// mode) so list-tile keys remain stable.
+  factory Document.fromResolverRow(String doctype, Map<String, Object?> row) {
+    final name = row['name']?.toString();
+    final mobileUuid = row['mobile_uuid']?.toString();
+    final syncStatus = (row['sync_status']?.toString()) ?? 'synced';
+    final status = switch (syncStatus) {
+      'dirty' => 'dirty',
+      'sync_error' || 'sync_blocked' => 'sync_error',
+      _ => 'clean',
+    };
+    return Document(
+      localId: (mobileUuid != null && mobileUuid.isNotEmpty)
+          ? mobileUuid
+          : (name ?? ''),
+      doctype: doctype,
+      serverId: name,
+      data: Map<String, dynamic>.from(row),
+      status: status,
+      modified: _parseModified(row['modified']),
+    );
+  }
+
   /// Mark as dirty (needs sync)
   Document markDirty() {
     return Document(
@@ -131,6 +162,19 @@ class Document {
       status: newStatus,
       modified: DateTime.now().millisecondsSinceEpoch,
     )..serverId = serverId;
+  }
+
+  /// Parses a Frappe `modified` value (ISO string from REST or epoch-ms
+  /// int from local) into millis-since-epoch. Falls back to "now" so list
+  /// rendering and sort keys never receive null.
+  static int _parseModified(Object? raw) {
+    if (raw is int) return raw;
+    if (raw is num) return raw.toInt();
+    if (raw is String) {
+      final parsed = DateTime.tryParse(raw);
+      if (parsed != null) return parsed.millisecondsSinceEpoch;
+    }
+    return DateTime.now().millisecondsSinceEpoch;
   }
 
   /// Copy with method for easier updates

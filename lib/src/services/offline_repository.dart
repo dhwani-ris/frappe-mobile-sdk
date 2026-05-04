@@ -4,14 +4,17 @@ import 'package:uuid/uuid.dart';
 import '../api/client.dart';
 import '../database/app_database.dart';
 import '../database/entities/document_entity.dart';
+import '../database/field_type_mapping.dart';
 import '../database/schema/child_schema.dart';
 import '../database/schema/parent_schema.dart';
 import '../database/table_name.dart';
 import '../models/doc_type_meta.dart';
 import '../models/document.dart';
+import '../models/meta_diff.dart';
 import '../models/offline_mode.dart';
 import '../sync/pull_apply.dart';
 import 'local_writer.dart';
+import 'meta_migration.dart';
 
 /// Repository for offline document operations
 class OfflineRepository {
@@ -105,8 +108,8 @@ class OfflineRepository {
         "SELECT name FROM sqlite_master WHERE type='table' AND name = ?",
         [tableName],
       );
+      final isChild = childDoctypes.contains(doctype) || meta.isTable;
       if (existing.isEmpty) {
-        final isChild = childDoctypes.contains(doctype) || meta.isTable;
         final ddls = isChild
             ? buildChildSchemaDDL(meta, tableName: tableName)
             : buildParentSchemaDDL(meta, tableName: tableName);
@@ -120,6 +123,11 @@ class OfflineRepository {
         } catch (_) {
           // setTableName may not be available on older schemas; harmless.
         }
+      } else if (!isChild) {
+        // Heal an existing parent table whose meta has evolved (e.g. a new
+        // title_field whose `__norm` column never got ALTER-added). Child
+        // tables don't carry `__norm` columns, so skip them here.
+        await _reconcileParentTableSchema(doctype, tableName, meta);
       }
       _ensuredTables.add(tableName);
       _metaCache[doctype] = meta;
@@ -566,8 +574,111 @@ class OfflineRepository {
       } catch (_) {
         // setTableName may not be available on older schemas; harmless.
       }
+    } else {
+      await _reconcileParentTableSchema(doctype, tableName, meta);
     }
     _ensuredTables.add(tableName);
+  }
+
+  /// System columns the parent block emits — kept in sync with
+  /// `database/schema/parent_schema.dart`. A meta field that shares one of
+  /// these names is dropped from the per-field loop, so we mustn't propose
+  /// to ALTER ADD them either.
+  static const _reconcileParentSystemCols = <String>{
+    'mobile_uuid',
+    'server_name',
+    'sync_status',
+    'sync_error',
+    'sync_attempts',
+    'sync_op',
+    'docstatus',
+    'modified',
+    'local_modified',
+    'pulled_at',
+  };
+
+  /// Heals an already-created `docs__<doctype>` parent table whose schema
+  /// has drifted from the current meta — e.g. a `title_field` was added on
+  /// the server after the table was first created, so the corresponding
+  /// `<field>__norm` column is missing and PullApply's UPDATE fails. The
+  /// SDK's persisted `metaJson` gets overwritten on every login meta
+  /// refresh, so a json-vs-json `MetaDiffer.diff` will not flag this drift
+  /// — we have to reconcile against the actual table columns.
+  ///
+  /// Only adds missing columns. Removed/renamed fields are left in place
+  /// (SQLite's `DROP COLUMN` story is finicky and stale columns are
+  /// harmless extras). The diff is funneled through [MetaMigration.apply]
+  /// so existing-row backfill of new `__norm` columns happens for free.
+  Future<void> _reconcileParentTableSchema(
+    String doctype,
+    String tableName,
+    DocTypeMeta meta,
+  ) async {
+    final db = _database.rawDatabase;
+    final pragma = await db.rawQuery('PRAGMA table_info($tableName)');
+    final actual = <String>{};
+    for (final r in pragma) {
+      final n = r['name'] as String?;
+      if (n != null) actual.add(n);
+    }
+    if (actual.isEmpty) return;
+
+    final normFields = <String>{};
+    if (meta.titleField != null) normFields.add(meta.titleField!);
+    for (final sf in (meta.searchFields ?? const <String>[])) {
+      normFields.add(sf);
+    }
+
+    final addedFields = <AddedField>[];
+    final addedIsLocal = <String>[];
+    final addedNorm = <String>[];
+    final seen = <String>{..._reconcileParentSystemCols};
+
+    for (final f in meta.fields) {
+      final name = f.fieldname;
+      final type = f.fieldtype;
+      if (name == null) continue;
+      if (!seen.add(name)) continue;
+      final sqlType = sqliteColumnTypeFor(type);
+      if (sqlType == null) continue;
+
+      if (!actual.contains(name)) {
+        addedFields.add(AddedField(name: name, sqlType: sqlType));
+      }
+      if (isLinkFieldType(type) && !actual.contains('${name}__is_local')) {
+        addedIsLocal.add(name);
+      }
+      if (normFields.contains(name) &&
+          sqlType == 'TEXT' &&
+          !actual.contains('${name}__norm')) {
+        addedNorm.add(name);
+      }
+    }
+
+    if (addedFields.isEmpty && addedIsLocal.isEmpty && addedNorm.isEmpty) {
+      return;
+    }
+
+    final diff = MetaDiff(
+      doctype: doctype,
+      addedFields: addedFields,
+      removedFields: const [],
+      typeChanged: const [],
+      addedIsLocalFor: addedIsLocal,
+      addedNormFor: addedNorm,
+      indexesToDrop: const [],
+    );
+
+    try {
+      await MetaMigration.apply(db, diff, tableName: tableName);
+    } catch (e, st) {
+      developer.log(
+        'parent table schema reconcile failed for $doctype/$tableName: $e',
+        name: 'OfflineRepository',
+        error: e,
+        stackTrace: st,
+      );
+    }
   }
 
   /// Updates `server_name` in per-doctype tables after a successful push.

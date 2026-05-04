@@ -265,7 +265,9 @@ class _HomeScreenState extends State<HomeScreen> {
         metaDao: DoctypeMetaDao(rawDb),
         isOnline: () => true,
         backgroundFetch: (doctype, _) async {
-          try { await syncSvc.pullSync(doctype: doctype); } catch (_) {}
+          try {
+            await syncSvc.pullSync(doctype: doctype);
+          } catch (_) {}
         },
         metaResolver: metaFn,
       );
@@ -409,7 +411,9 @@ class _HomeScreenState extends State<HomeScreen> {
           metaDao: DoctypeMetaDao(rawDb),
           isOnline: () => true,
           backgroundFetch: (doctype, _) async {
-            try { await syncSvc.pullSync(doctype: doctype); } catch (_) {}
+            try {
+              await syncSvc.pullSync(doctype: doctype);
+            } catch (_) {}
           },
           metaResolver: metaFn,
         );
@@ -500,6 +504,7 @@ class _HomeScreenState extends State<HomeScreen> {
           return DoctypeListScreen(
             appConfig: _appConfig!,
             repository: _repository!,
+            resolver: _sdk!.resolver,
             homeScreenLayout: _homeScreenLayout,
             groupedDoctypes: homeData.groups.isNotEmpty
                 ? homeData.groups
@@ -548,6 +553,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         doctype: doctype,
                         meta: meta,
                         repository: _repository!,
+                        resolver: _sdk!.resolver,
                         syncService: _syncService!,
                         metaService: _metaService!,
                         linkOptionService: _linkOptionService,

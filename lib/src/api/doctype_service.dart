@@ -83,6 +83,28 @@ class DoctypeService {
     return [];
   }
 
+  /// Counts records via `frappe.client.get_count`. Whitelisted in
+  /// `apps/frappe/frappe/client.py:79`. Returns the total matching count,
+  /// or 0 when the response is malformed. Optional [filters] follow the
+  /// same `[field, operator, value]` shape as [list].
+  Future<int> count(String doctype, {List<List<dynamic>>? filters}) async {
+    final methodParams = <String, dynamic>{'doctype': doctype};
+    if (filters != null && filters.isNotEmpty) {
+      methodParams['filters'] = jsonEncode(filters);
+    }
+    final response = await _restHelper.get(
+      '/api/method/frappe.client.get_count',
+      queryParams: methodParams,
+    );
+    if (response is Map<String, dynamic>) {
+      final message = response['message'];
+      if (message is int) return message;
+      if (message is num) return message.toInt();
+      if (message is String) return int.tryParse(message) ?? 0;
+    }
+    return 0;
+  }
+
   /// Lists child doctype records with ALL fields.
   /// get_list and reportview only return standard fields for child doctypes.
   /// This fetches names first, then batch-loads full docs via /api/resource.

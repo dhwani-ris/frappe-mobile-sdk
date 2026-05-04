@@ -4,6 +4,7 @@ import 'package:frappe_mobile_sdk/src/database/schema/parent_schema.dart';
 import 'package:frappe_mobile_sdk/src/database/schema/system_tables.dart';
 import 'package:frappe_mobile_sdk/src/models/doc_field.dart';
 import 'package:frappe_mobile_sdk/src/models/doc_type_meta.dart';
+import 'package:frappe_mobile_sdk/src/models/offline_mode.dart';
 import 'package:frappe_mobile_sdk/src/query/query_result.dart';
 import 'package:frappe_mobile_sdk/src/query/unified_resolver.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -83,18 +84,17 @@ void main() {
   UnifiedResolver makeResolver({
     bool online = false,
     Future<void> Function(String, Map<String, Object?>)? bgFetcher,
-  }) =>
-      UnifiedResolver(
-        db: db,
-        metaDao: metaDao,
-        isOnline: () => online,
-        backgroundFetch: bgFetcher ?? (_, __) async {},
-        metaResolver: (dt) async => DocTypeMeta(
-          name: dt,
-          titleField: 'customer_name',
-          fields: [f('customer_name', 'Data'), f('age', 'Int')],
-        ),
-      );
+  }) => UnifiedResolver(
+    db: db,
+    metaDao: metaDao,
+    isOnline: () => online,
+    backgroundFetch: bgFetcher ?? (_, _) async {},
+    metaResolver: (dt) async => DocTypeMeta(
+      name: dt,
+      titleField: 'customer_name',
+      fields: [f('customer_name', 'Data'), f('age', 'Int')],
+    ),
+  );
 
   test('returns synced + dirty, excludes failed by default', () async {
     final r = makeResolver();
@@ -255,5 +255,77 @@ void main() {
     // Let the bg future resolve so the test runner doesn't see an
     // unhandled async error.
     await Future<void>.delayed(const Duration(milliseconds: 20));
+  });
+
+  group('count()', () {
+    test('offline mode: counts synced + dirty, excludes failed', () async {
+      final r = makeResolver();
+      // Setup inserts 3 rows: synced + dirty + failed.
+      expect(await r.count('Customer'), 2);
+    });
+
+    test(
+      'offline mode: dirtyOnly counts only dirty/sync_error/sync_blocked',
+      () async {
+        final r = makeResolver();
+        expect(await r.count('Customer', dirtyOnly: true), 1);
+
+        // Add a sync_error row → dirtyOnly count rises to 2.
+        await db.insert('docs__customer', {
+          'mobile_uuid': 'u4',
+          'sync_status': 'sync_error',
+          'local_modified': 4,
+          'customer_name': 'Errored',
+          'age': 1,
+        });
+        expect(await r.count('Customer', dirtyOnly: true), 2);
+      },
+    );
+
+    test(
+      'offline mode: returns 0 for unknown doctype (table missing)',
+      () async {
+        final r = makeResolver();
+        expect(await r.count('NotAThing'), 0);
+      },
+    );
+
+    test(
+      'online mode + dirtyOnly returns 0 without touching the network',
+      () async {
+        // Build a resolver with offlineMode disabled. No client wired — if
+        // the method tried to call get_count it would throw StateError.
+        // The dirtyOnly branch must short-circuit before that point.
+        final r = UnifiedResolver(
+          db: db,
+          metaDao: metaDao,
+          isOnline: () => true,
+          backgroundFetch: (_, _) async {},
+          metaResolver: (dt) async => DocTypeMeta(
+            name: dt,
+            titleField: 'customer_name',
+            fields: [f('customer_name', 'Data'), f('age', 'Int')],
+          ),
+          offlineMode: const OfflineMode(enabled: false, isPersisted: true),
+        );
+        expect(await r.count('Customer', dirtyOnly: true), 0);
+      },
+    );
+
+    test('online mode without a wired client throws StateError', () async {
+      final r = UnifiedResolver(
+        db: db,
+        metaDao: metaDao,
+        isOnline: () => true,
+        backgroundFetch: (_, _) async {},
+        metaResolver: (dt) async => DocTypeMeta(
+          name: dt,
+          titleField: 'customer_name',
+          fields: [f('customer_name', 'Data'), f('age', 'Int')],
+        ),
+        offlineMode: const OfflineMode(enabled: false, isPersisted: true),
+      );
+      expect(() => r.count('Customer'), throwsA(isA<StateError>()));
+    });
   });
 }

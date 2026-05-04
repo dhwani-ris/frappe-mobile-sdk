@@ -66,7 +66,10 @@ void main() {
     await tester.runAsync(() async {
       final groups = await sdkWithSurvey.meta.getMobileFormGroups();
       for (final doctype in groups.values.expand((l) => l)) {
-        await sdkWithSurvey.repository.getDocumentsByDoctype(doctype);
+        // _load() now drives counts via the resolver instead of the
+        // legacy `repository.getDocumentsByDoctype` path.
+        await sdkWithSurvey.resolver.count(doctype);
+        await sdkWithSurvey.resolver.count(doctype, dirtyOnly: true);
       }
     });
     await tester.pump();
@@ -93,7 +96,10 @@ void main() {
     await tester.runAsync(() async {
       final groups = await sdkWithSurvey.meta.getMobileFormGroups();
       for (final doctype in groups.values.expand((l) => l)) {
-        await sdkWithSurvey.repository.getDocumentsByDoctype(doctype);
+        // _load() now drives counts via the resolver instead of the
+        // legacy `repository.getDocumentsByDoctype` path.
+        await sdkWithSurvey.resolver.count(doctype);
+        await sdkWithSurvey.resolver.count(doctype, dirtyOnly: true);
       }
     });
     await tester.pump();

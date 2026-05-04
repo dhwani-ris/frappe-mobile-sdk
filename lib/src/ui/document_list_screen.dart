@@ -7,6 +7,7 @@ import '../api/client.dart';
 import '../models/doc_type_meta.dart';
 import '../models/document.dart';
 import '../models/link_filter_result.dart';
+import '../query/unified_resolver.dart';
 import '../services/link_option_service.dart';
 import '../services/meta_service.dart';
 import '../services/offline_repository.dart';
@@ -47,6 +48,7 @@ class DocumentListScreen extends StatefulWidget {
   final String doctype;
   final DocTypeMeta meta;
   final OfflineRepository repository;
+  final UnifiedResolver resolver;
   final SyncService syncService;
   final MetaService metaService;
   final LinkOptionService? linkOptionService;
@@ -73,7 +75,7 @@ class DocumentListScreen extends StatefulWidget {
 
   /// Optional builder for runtime link filters. Called during link option resolution.
   final LinkFilterBuilder? Function(String doctype, String fieldname)?
-      getLinkFilterBuilder;
+  getLinkFilterBuilder;
 
   /// Optional customization for list UI (layout, colors, typography, button style).
   final DocumentListStyle? style;
@@ -89,6 +91,7 @@ class DocumentListScreen extends StatefulWidget {
     required this.doctype,
     required this.meta,
     required this.repository,
+    required this.resolver,
     required this.syncService,
     required this.metaService,
     this.linkOptionService,
@@ -241,22 +244,34 @@ class _DocumentListScreenState extends State<DocumentListScreen> {
     try {
       final isOnline = await widget.syncService.isOnline();
       if (isOnline) {
-        await widget.syncService.pullSync(doctype: widget.doctype);
+        try {
+          await widget.syncService.pullSync(doctype: widget.doctype);
+        } catch (e, st) {
+          // ignore: avoid_print
+          print(
+            'DocumentListScreen: pullSync(${widget.doctype}) failed — $e\n$st',
+          );
+        }
       }
-      final docs = await widget.repository.getDocumentsByDoctype(
-        widget.doctype,
-      );
-      setState(() => _documents = docs);
-    } catch (e) {
-      try {
-        final docs = await widget.repository.getDocumentsByDoctype(
-          widget.doctype,
-        );
-        setState(() => _documents = docs);
-      } catch (_) {}
+      final docs = await _fetchViaResolver();
+      if (mounted) setState(() => _documents = docs);
+    } catch (e, st) {
+      // ignore: avoid_print
+      print('DocumentListScreen: _pullDocuments failed — $e\n$st');
     } finally {
-      setState(() => _isSyncing = false);
+      if (mounted) setState(() => _isSyncing = false);
     }
+  }
+
+  Future<List<Document>> _fetchViaResolver() async {
+    final result = await widget.resolver.resolve(
+      doctype: widget.doctype,
+      page: 0,
+      pageSize: 100,
+    );
+    return result.rows
+        .map((row) => Document.fromResolverRow(widget.doctype, row))
+        .toList();
   }
 
   @override

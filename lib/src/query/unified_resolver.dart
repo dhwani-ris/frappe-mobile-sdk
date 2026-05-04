@@ -163,6 +163,53 @@ class UnifiedResolver {
     );
   }
 
+  /// Counts rows for [doctype] in the active mode.
+  ///
+  /// - Online mode → `frappe.client.get_count` via [FrappeClient.doctype.count].
+  ///   `dirtyOnly: true` returns 0 (online mode has no outbox).
+  /// - Offline mode → `SELECT COUNT(*)` on the per-doctype `docs__<doctype>`
+  ///   table. With `dirtyOnly: true`, only rows whose `sync_status` is one
+  ///   of `dirty | sync_error | sync_blocked` are counted; otherwise rows
+  ///   with `sync_status = 'failed'` are excluded so the chip count
+  ///   matches what [resolve] returns by default.
+  ///
+  /// Returns 0 when the per-doctype table doesn't exist yet (e.g. closure
+  /// pull hasn't created it). Caller-friendly: never throws on empty state.
+  Future<int> count(String doctype, {bool dirtyOnly = false}) async {
+    if (!offlineMode.enabled) {
+      if (dirtyOnly) return 0;
+      if (client == null) {
+        throw StateError(
+          'UnifiedResolver.count: online mode requires a non-null FrappeClient.',
+        );
+      }
+      try {
+        return await client!.doctype.count(doctype);
+      } catch (_) {
+        return 0;
+      }
+    }
+
+    final tableName =
+        await metaDao.getTableName(doctype) ??
+        normalizeDoctypeTableName(doctype);
+    final whereClause = dirtyOnly
+        ? "sync_status IN ('dirty','sync_error','sync_blocked')"
+        : "sync_status != 'failed'";
+    try {
+      final rows = await db.rawQuery(
+        'SELECT COUNT(*) AS c FROM "$tableName" WHERE $whereClause',
+      );
+      final raw = rows.isEmpty ? null : rows.first['c'];
+      if (raw is int) return raw;
+      if (raw is num) return raw.toInt();
+      return 0;
+    } on DatabaseException {
+      // Table doesn't exist yet — pull engine creates it lazily.
+      return 0;
+    }
+  }
+
   Future<QueryResult<Map<String, Object?>>> _onlinePassthrough({
     required String doctype,
     required List<List> filters,
@@ -177,8 +224,14 @@ class UnifiedResolver {
         'Pass `client:` to the constructor when offlineMode.enabled = false.',
       );
     }
+    // Without `fields`, Frappe's `get_list` returns only `["name"]`, which
+    // leaves link-option labels and document-list tiles empty. Frappe
+    // accepts `["*"]` to mean "all top-level fields"
+    // (apps/frappe/frappe/desk/reportview.py:238-239) — match the offline
+    // shape (the `docs__<doctype>` mirror has every column).
     final raw = await client!.doctype.list(
       doctype,
+      fields: const ['*'],
       filters: filters.map((f) => f.cast<dynamic>()).toList(),
       orFilters: orFilters.isEmpty
           ? null

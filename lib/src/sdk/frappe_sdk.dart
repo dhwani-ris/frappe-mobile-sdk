@@ -52,6 +52,7 @@ class FrappeSDK {
   OfflineRepository? _repository;
   OfflineTransitionService? _offlineTransitionService;
   LinkOptionService? _linkOptionService;
+  UnifiedResolver? _resolver;
   SessionUserService? _sessionUserService;
 
   bool _initialized = false;
@@ -131,6 +132,7 @@ class FrappeSDK {
       offlineMode: offlineMode,
       client: _client,
     );
+    _resolver = testResolver;
     _linkOptionService = LinkOptionService(testResolver, testMetaFn);
     _offlineTransitionService = OfflineTransitionService(
       database: _database!,
@@ -203,12 +205,16 @@ class FrappeSDK {
       backgroundFetch: (doctype, _) async {
         try {
           await syncSvc.pullSync(doctype: doctype);
-        } catch (_) {}
+        } catch (e, st) {
+          // ignore: avoid_print
+          print('FrappeSDK: background pullSync($doctype) failed — $e\n$st');
+        }
       },
       metaResolver: metaFn,
       offlineMode: _offlineMode,
       client: _client!,
     );
+    _resolver = resolver;
     _linkOptionService = LinkOptionService(resolver, metaFn);
 
     // Build the offline-transition service. It owns its own broadcast
@@ -565,6 +571,17 @@ class FrappeSDK {
     return _repository!;
   }
 
+  /// Single canonical read path for list and count queries. Branches on
+  /// the session-bound [OfflineMode] under the hood:
+  /// - offline → per-doctype `docs__<doctype>` tables via FilterParser
+  /// - online → `frappe.client.get_list` / `frappe.client.get_count`
+  UnifiedResolver get resolver {
+    if (!_initialized) {
+      throw Exception('SDK not initialized. Call initialize() first.');
+    }
+    return _resolver!;
+  }
+
   /// Get the offline → online transition service.
   ///
   /// Subscribers listen on [OfflineTransitionService.stream] to react
@@ -738,26 +755,30 @@ class FrappeSDK {
 
     try {
       await _permissionService?.syncFromApi();
-    } catch (_) {
-      // ignore
+    } catch (e, st) {
+      // ignore: avoid_print
+      print('FrappeSDK: permissions.syncFromApi failed — $e\n$st');
     }
 
     try {
       await _translationService?.loadTranslations('en');
-    } catch (_) {
-      // ignore
+    } catch (e, st) {
+      // ignore: avoid_print
+      print('FrappeSDK: translations.loadTranslations failed — $e\n$st');
     }
 
     try {
       await _metaService!.checkAndSyncDoctypes();
-    } catch (_) {
-      // ignore
+    } catch (e, st) {
+      // ignore: avoid_print
+      print('FrappeSDK: meta.checkAndSyncDoctypes failed — $e\n$st');
     }
 
     try {
       await _metaService!.resyncMobileConfiguration();
-    } catch (_) {
-      // ignore
+    } catch (e, st) {
+      // ignore: avoid_print
+      print('FrappeSDK: meta.resyncMobileConfiguration failed — $e\n$st');
     }
 
     // Online mode stops here — closure pull is offline-only.
@@ -787,12 +808,15 @@ class FrappeSDK {
         }
         try {
           await _syncService!.pullSync(doctype: doctype);
-        } catch (_) {
+        } catch (e, st) {
+          // ignore: avoid_print
+          print('FrappeSDK: pullSync($doctype) failed — $e\n$st');
           continue;
         }
       }
-    } catch (_) {
-      // ignore data sync errors
+    } catch (e, st) {
+      // ignore: avoid_print
+      print('FrappeSDK: closure pull failed — $e\n$st');
     }
   }
 

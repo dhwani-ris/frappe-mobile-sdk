@@ -243,7 +243,11 @@ class AuthService {
     try {
       final result = await _client!.rest.get('/api/v2/method/mobile_auth.me');
       if (result is! Map<String, dynamic>) return null;
-      final message = result;
+      // /api/v2/method/* wraps the return in {"data": ...}; fall back to
+      // the bare result for /api/method/* or no-envelope responses.
+      final message = (result['data'] is Map<String, dynamic>)
+          ? result['data'] as Map<String, dynamic>
+          : result;
 
       final rolesJson = message['roles'] as List<dynamic>?;
       _roles =

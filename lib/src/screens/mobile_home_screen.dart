@@ -49,7 +49,7 @@ class MobileHomeScreen extends StatefulWidget {
 
   /// Optional builder for runtime link filters. Called during link option resolution.
   final LinkFilterBuilder? Function(String doctype, String fieldname)?
-      getLinkFilterBuilder;
+  getLinkFilterBuilder;
 
   const MobileHomeScreen({
     super.key,
@@ -115,12 +115,15 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
 
       for (final doctype in groups.values.expand((l) => l)) {
         try {
-          final docs = await widget.sdk.repository.getDocumentsByDoctype(
-            doctype,
-          );
-          counts[doctype] = docs.length;
-          dirtyCounts[doctype] = docs.where((d) => d.status == 'dirty').length;
-        } catch (_) {
+          final results = await Future.wait([
+            widget.sdk.resolver.count(doctype),
+            widget.sdk.resolver.count(doctype, dirtyOnly: true),
+          ]);
+          counts[doctype] = results[0];
+          dirtyCounts[doctype] = results[1];
+        } catch (e, st) {
+          // ignore: avoid_print
+          print('MobileHomeScreen: count load for $doctype failed — $e\n$st');
           counts[doctype] = 0;
           dirtyCounts[doctype] = 0;
         }
@@ -134,7 +137,9 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
           _loading = false;
         });
       }
-    } catch (_) {
+    } catch (e, st) {
+      // ignore: avoid_print
+      print('MobileHomeScreen: _load failed — $e\n$st');
       if (mounted) setState(() => _loading = false);
     }
   }
@@ -149,12 +154,18 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
       } else {
         try {
           await widget.sdk.sync.pushSync();
-        } catch (_) {}
+        } catch (e, st) {
+          // ignore: avoid_print
+          print('MobileHomeScreen: manual pushSync failed — $e\n$st');
+        }
         final doctypes = await widget.sdk.meta.getMobileFormDoctypeNames();
         for (final dt in doctypes) {
           try {
             await widget.sdk.sync.pullSync(doctype: dt);
-          } catch (_) {}
+          } catch (e, st) {
+            // ignore: avoid_print
+            print('MobileHomeScreen: manual pullSync($dt) failed — $e\n$st');
+          }
         }
       }
       await _load();
@@ -459,10 +470,12 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
     ).showSnackBar(const SnackBar(content: Text('Loading...')));
     try {
       final meta = await widget.sdk.meta.getMeta(doctype);
-      final docs = await widget.sdk.repository.getDocumentsByDoctype(doctype);
       try {
         await widget.sdk.sync.pullSync(doctype: doctype);
-      } catch (_) {}
+      } catch (e, st) {
+        // ignore: avoid_print
+        print('MobileHomeScreen: navigate pullSync($doctype) failed — $e\n$st');
+      }
 
       if (mounted) {
         ScaffoldMessenger.of(context).hideCurrentSnackBar();
@@ -473,12 +486,12 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
               doctype: doctype,
               meta: meta,
               repository: widget.sdk.repository,
+              resolver: widget.sdk.resolver,
               syncService: widget.sdk.sync,
               metaService: widget.sdk.meta,
               linkOptionService: widget.sdk.linkOptions,
               api: widget.sdk.api,
               getMobileUuid: () async => '',
-              initialDocuments: docs,
               userRoles: widget.sdk.roles,
               permissionService: widget.sdk.permissions,
               translate: (s) => widget.sdk.translations.translate(s),

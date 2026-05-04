@@ -13,6 +13,11 @@ class DependsOnEvaluator {
     if (expr.startsWith('eval:')) {
       expr = expr.substring(5).trim();
     }
+    // Strip outer parens left over from grouped expressions like
+    // `(A && B) || (C && D)` — after the && / || split each fragment
+    // arrives wrapped in its own parens and would otherwise leak `(`/`)`
+    // into _extractFieldName / _extractValue.
+    expr = _stripOuterParens(expr);
 
     // Simple evaluation for common patterns
     // eval:doc.field == value
@@ -185,18 +190,28 @@ class DependsOnEvaluator {
     return expr;
   }
 
-  /// Split expression by delimiter, but only when not inside [...] brackets.
+  /// Split [expr] by [delimiter], but only at top level — i.e. not inside
+  /// `[...]` array literals or `(...)` grouped subexpressions. Without paren
+  /// awareness, a Frappe expression like `(A && B) || (C && D)` would split
+  /// on the inner `&&`s first and produce fragments with unmatched parens.
   static List<String> _splitOutsideBrackets(String expr, String delimiter) {
     final parts = <String>[];
     int bracketDepth = 0;
+    int parenDepth = 0;
     int lastSplit = 0;
 
     for (int i = 0; i < expr.length; i++) {
-      if (expr[i] == '[') {
+      final ch = expr[i];
+      if (ch == '[') {
         bracketDepth++;
-      } else if (expr[i] == ']') {
+      } else if (ch == ']') {
         bracketDepth--;
+      } else if (ch == '(') {
+        parenDepth++;
+      } else if (ch == ')') {
+        parenDepth--;
       } else if (bracketDepth == 0 &&
+          parenDepth == 0 &&
           i + delimiter.length <= expr.length &&
           expr.substring(i, i + delimiter.length) == delimiter) {
         parts.add(expr.substring(lastSplit, i));
@@ -206,6 +221,32 @@ class DependsOnEvaluator {
     }
     parts.add(expr.substring(lastSplit));
     return parts;
+  }
+
+  /// Strip balanced outermost parens — but only when they wrap the whole
+  /// expression (the matching `)` is at the end). `(A) || (B)` keeps both
+  /// pairs because neither pair spans the whole string. Repeats so
+  /// `((A))` flattens fully.
+  static String _stripOuterParens(String expr) {
+    String s = expr.trim();
+    while (s.length >= 2 && s.startsWith('(') && s.endsWith(')')) {
+      int depth = 0;
+      bool wholeExpr = false;
+      for (int i = 0; i < s.length; i++) {
+        if (s[i] == '(') {
+          depth++;
+        } else if (s[i] == ')') {
+          depth--;
+          if (depth == 0) {
+            wholeExpr = (i == s.length - 1);
+            break;
+          }
+        }
+      }
+      if (!wholeExpr) break;
+      s = s.substring(1, s.length - 1).trim();
+    }
+    return s;
   }
 
   /// Parse comma-separated quoted values from inside array brackets.

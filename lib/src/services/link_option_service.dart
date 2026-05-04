@@ -18,14 +18,12 @@ class LinkOptionService {
 
   /// Primary constructor — inject a wired [UnifiedResolver].
   LinkOptionService(UnifiedResolver resolver, MetaResolverFn metaResolver)
-      : _resolver = resolver,
-        _metaResolver = metaResolver;
+    : _resolver = resolver,
+      _metaResolver = metaResolver;
 
   /// Test / subclass constructor. Use when all methods are overridden and no
   /// resolver is needed (e.g. recording mocks in widget tests).
-  LinkOptionService.withoutResolver()
-      : _resolver = null,
-        _metaResolver = null;
+  LinkOptionService.withoutResolver() : _resolver = null, _metaResolver = null;
 
   /// Fetches link options via the resolver (DB-first + background refresh when online).
   Future<List<LinkOptionEntity>> getLinkOptions(
@@ -71,8 +69,13 @@ class LinkOptionService {
     final now = DateTime.now().millisecondsSinceEpoch;
     final out = <LinkOptionEntity>[];
     for (final row in rows) {
+      // Offline rows from `docs__<doctype>` carry `server_name`; online rows
+      // from `frappe.client.get_list` carry `name`. Mobile-created rows
+      // pre-server-confirm carry only `mobile_uuid`. Try all three so the
+      // mapping works in both modes.
       final name =
           (row['server_name'] as String?) ??
+          (row['name'] as String?) ??
           (row['mobile_uuid'] as String?) ??
           '';
       if (name.isEmpty) continue;
