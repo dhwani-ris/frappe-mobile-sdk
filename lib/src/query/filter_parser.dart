@@ -19,11 +19,19 @@ import 'parsed_query.dart';
 ///   with [UnsupportedFilterError] so the caller knows to flatten.
 class FilterParser {
   static const _allowedOps = <String>{
-    '=', '!=', '<', '<=', '>', '>=',
-    'in', 'not in',
-    'like', 'not like',
+    '=',
+    '!=',
+    '<',
+    '<=',
+    '>',
+    '>=',
+    'in',
+    'not in',
+    'like',
+    'not like',
     'between',
-    'is', 'is not',
+    'is',
+    'is not',
     'timespan',
   };
 
@@ -61,7 +69,7 @@ class FilterParser {
     int pageSize = 50,
   }) {
     final colTypes = _columnTypes(meta);
-    final normFields = _normFieldNames(meta);
+    final normFields = meta.normFieldNames;
     final whereParts = <String>[];
     final params = <Object?>[];
 
@@ -146,15 +154,9 @@ class FilterParser {
       case '=':
       case '!=':
         if (isNumeric) {
-          return ParsedQuery(
-            sql: 'IFNULL($col, 0) $op ?',
-            params: [value],
-          );
+          return ParsedQuery(sql: 'IFNULL($col, 0) $op ?', params: [value]);
         }
-        return ParsedQuery(
-          sql: "IFNULL($col, '') $op ?",
-          params: [value],
-        );
+        return ParsedQuery(sql: "IFNULL($col, '') $op ?", params: [value]);
       case '<':
       case '<=':
       case '>':
@@ -166,10 +168,7 @@ class FilterParser {
           throw FilterParseError('"$op" requires a list value');
         }
         if (value.isEmpty) {
-          return ParsedQuery(
-            sql: op == 'in' ? '1=0' : '1=1',
-            params: const [],
-          );
+          return ParsedQuery(sql: op == 'in' ? '1=0' : '1=1', params: const []);
         }
         final placeholders = List.filled(value.length, '?').join(', ');
         final sqlOp = op == 'in' ? 'IN' : 'NOT IN';
@@ -186,18 +185,21 @@ class FilterParser {
             params: [normalizeForSearch(value?.toString())],
           );
         }
-        return ParsedQuery(
-          sql: "IFNULL($col, '') $sqlOp ?",
-          params: [value],
-        );
+        return ParsedQuery(sql: "IFNULL($col, '') $sqlOp ?", params: [value]);
       case 'between':
         if (value is! List || value.length != 2) {
           throw const FilterParseError('"between" needs a 2-element list');
         }
-        final start =
-            _normalizeBetweenBound(value[0], isStart: true, type: type);
-        final end =
-            _normalizeBetweenBound(value[1], isStart: false, type: type);
+        final start = _normalizeBetweenBound(
+          value[0],
+          isStart: true,
+          type: type,
+        );
+        final end = _normalizeBetweenBound(
+          value[1],
+          isStart: false,
+          type: type,
+        );
         return ParsedQuery(
           sql: '$col >= ? AND $col <= ?',
           params: [start, end],
@@ -213,16 +215,10 @@ class FilterParser {
         );
       case 'is':
         if (value == 'set') {
-          return ParsedQuery(
-            sql: "IFNULL($col, '') != ''",
-            params: const [],
-          );
+          return ParsedQuery(sql: "IFNULL($col, '') != ''", params: const []);
         }
         if (value == 'not set') {
-          return ParsedQuery(
-            sql: "IFNULL($col, '') = ''",
-            params: const [],
-          );
+          return ParsedQuery(sql: "IFNULL($col, '') = ''", params: const []);
         }
         if (value == null) {
           return ParsedQuery(sql: '$col IS NULL', params: const []);
@@ -258,15 +254,6 @@ class FilterParser {
       map[n] = sqlType;
     }
     return map;
-  }
-
-  static Set<String> _normFieldNames(DocTypeMeta meta) {
-    final s = <String>{};
-    if (meta.titleField != null) s.add(meta.titleField!);
-    for (final sf in (meta.searchFields ?? const <String>[])) {
-      s.add(sf);
-    }
-    return s;
   }
 
   static String _validateOrderBy(String orderBy, Map<String, String> colTypes) {

@@ -2,6 +2,7 @@ import 'package:sqflite/sqflite.dart';
 import '../models/doc_type_meta.dart';
 import 'schema/parent_schema.dart';
 import 'schema/child_schema.dart';
+import 'sqlite_utils.dart';
 import 'table_name.dart';
 
 class SchemaApplier {
@@ -18,11 +19,7 @@ class SchemaApplier {
     final tableName = normalizeDoctypeTableName(meta.name);
 
     await db.transaction((txn) async {
-      final existing = await txn.rawQuery(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name = ? LIMIT 1",
-        [tableName],
-      );
-      if (existing.isEmpty) {
+      if (!await sqliteTableExists(txn, tableName)) {
         final ddl = isChildTable
             ? buildChildSchemaDDL(meta, tableName: tableName)
             : buildParentSchemaDDL(

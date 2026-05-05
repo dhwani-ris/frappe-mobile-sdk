@@ -4,6 +4,7 @@ import 'package:uuid/uuid.dart';
 
 import '../database/field_type_mapping.dart';
 import '../database/normalize_for_search.dart';
+import '../database/schema/system_columns.dart';
 import '../database/table_name.dart';
 import '../models/doc_type_meta.dart';
 
@@ -41,32 +42,13 @@ String _asUtc(String raw) {
 /// idempotency, or Frappe's stock `modified` / `docstatus`) must not be
 /// allowed to overwrite the system-set value during the meta loop --
 /// `mobile_uuid` is the local PK and would PK-collide on the next empty
-/// string the server returns. Mirrors the same set in
-/// `database/schema/parent_schema.dart`.
-const _systemParentColumnNames = <String>{
-  'mobile_uuid',
-  'server_name',
-  'sync_status',
-  'sync_error',
-  'sync_attempts',
-  'sync_op',
-  'docstatus',
-  'modified',
-  'local_modified',
-  'pulled_at',
-};
+/// string the server returns. Sourced from
+/// `database/schema/system_columns.dart` so all three writers (DDL, form-save,
+/// pull-apply) cannot drift apart.
+const _systemParentColumnNames = systemParentColumnNames;
 
 /// System columns the child mirror manages itself. Same rationale.
-/// Mirrors `database/schema/child_schema.dart`.
-const _systemChildColumnNames = <String>{
-  'mobile_uuid',
-  'server_name',
-  'parent_uuid',
-  'parent_doctype',
-  'parentfield',
-  'idx',
-  'modified',
-};
+const _systemChildColumnNames = systemChildColumnNames;
 
 class PullApplyChildInfo {
   final String doctype;
@@ -124,7 +106,7 @@ class PullApply {
     required List<Map<String, dynamic>> rows,
   }) async {
     final uuidGen = const Uuid();
-    final parentNormFields = _normFieldNames(parentMeta);
+    final parentNormFields = parentMeta.normFieldNames;
 
     for (final r in rows) {
       final serverName = r['name'] as String?;
@@ -256,14 +238,5 @@ class PullApply {
         }
       }
     }
-  }
-
-  static Set<String> _normFieldNames(DocTypeMeta meta) {
-    final out = <String>{};
-    if (meta.titleField != null) out.add(meta.titleField!);
-    for (final sf in (meta.searchFields ?? const <String>[])) {
-      out.add(sf);
-    }
-    return out;
   }
 }

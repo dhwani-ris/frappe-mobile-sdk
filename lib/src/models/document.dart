@@ -85,14 +85,16 @@ class Document {
   ///
   /// The resolver returns rows shaped by the underlying source:
   /// - offline mode → row of `docs__<doctype>` (includes `mobile_uuid`,
-  ///   `name`, `sync_status`, plus all native columns)
+  ///   `server_name`, `sync_status`, plus all native columns; no `name` column)
   /// - online mode → row of `frappe.client.get_list` (includes `name`
   ///   and the requested fields; no `mobile_uuid` or `sync_status`)
   ///
   /// `localId` falls back to `name` when `mobile_uuid` is absent (online
   /// mode) so list-tile keys remain stable.
   factory Document.fromResolverRow(String doctype, Map<String, Object?> row) {
-    final name = row['name']?.toString();
+    // Online rows use 'name'; offline rows use 'server_name' (the offline
+    // table schema has no 'name' column — server_name holds the Frappe ID).
+    final name = (row['name'] ?? row['server_name'])?.toString();
     final mobileUuid = row['mobile_uuid']?.toString();
     final syncStatus = (row['sync_status']?.toString()) ?? 'synced';
     final status = switch (syncStatus) {

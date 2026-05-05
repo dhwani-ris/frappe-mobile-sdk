@@ -180,6 +180,15 @@ class DoctypeMetaDao {
     );
   }
 
+  Future<void> clearLastOkCursor(String doctype) async {
+    await _database.update(
+      'doctype_meta',
+      <String, Object?>{'last_ok_cursor': null},
+      where: 'doctype = ?',
+      whereArgs: [doctype],
+    );
+  }
+
   Future<String?> getLastOkCursor(String doctype) async {
     final rows = await _database.query(
       'doctype_meta',

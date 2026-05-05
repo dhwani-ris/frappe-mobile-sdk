@@ -9,6 +9,7 @@ import '../database/daos/doctype_meta_dao.dart';
 import '../database/table_name.dart';
 import '../models/meta_resolver.dart';
 import '../models/offline_mode.dart';
+import '../models/offline_mode_notifier.dart';
 import 'filter_parser.dart';
 import 'link_decorator.dart';
 import 'query_result.dart';
@@ -53,8 +54,12 @@ class UnifiedResolver {
   final IsOnlineFn isOnline;
   final BackgroundFetcher backgroundFetch;
   final MetaResolverFn metaResolver;
-  final OfflineMode offlineMode;
+  final OfflineModeNotifier _modeNotifier;
   final FrappeClient? client;
+
+  /// Live offline-mode value — see [SyncService.offlineMode] for the
+  /// rationale.
+  OfflineMode get offlineMode => _modeNotifier.value;
 
   /// Active background refreshes keyed by request hash. Holds the
   /// in-flight Future so concurrent callers can `await` the same one
@@ -67,9 +72,13 @@ class UnifiedResolver {
     required this.isOnline,
     required this.backgroundFetch,
     required this.metaResolver,
-    this.offlineMode = const OfflineMode(enabled: true, isPersisted: true),
+    OfflineMode offlineMode = const OfflineMode(
+      enabled: true,
+      isPersisted: true,
+    ),
+    OfflineModeNotifier? offlineModeNotifier,
     this.client,
-  });
+  }) : _modeNotifier = offlineModeNotifier ?? OfflineModeNotifier(offlineMode);
 
   Future<QueryResult<Map<String, Object?>>> resolve({
     required String doctype,

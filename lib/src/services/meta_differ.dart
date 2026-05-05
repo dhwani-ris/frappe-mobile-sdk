@@ -36,8 +36,9 @@ class MetaDiffer {
       }
     }
 
-    final newTableSuffix =
-        normalizeDoctypeTableName(newMeta.name).replaceFirst('docs__', '');
+    final newTableSuffix = normalizeDoctypeTableName(
+      newMeta.name,
+    ).replaceFirst('docs__', '');
     for (final name in oldByName.keys) {
       final oldFt = oldByName[name]!.fieldtype;
       if (sqliteColumnTypeFor(oldFt) == null) continue;
@@ -49,8 +50,8 @@ class MetaDiffer {
       }
     }
 
-    final oldNormSet = _normFieldSet(oldMeta);
-    final newNormSet = _normFieldSet(newMeta);
+    final oldNormSet = oldMeta.normFieldNames;
+    final newNormSet = newMeta.normFieldNames;
     final addedNorm = <String>[];
     for (final sf in newNormSet.difference(oldNormSet)) {
       final f = newByName[sf];
@@ -76,14 +77,5 @@ class MetaDiffer {
       if (f.fieldname != null) out[f.fieldname!] = f;
     }
     return out;
-  }
-
-  static Set<String> _normFieldSet(DocTypeMeta m) {
-    final s = <String>{};
-    if (m.titleField != null) s.add(m.titleField!);
-    for (final sf in (m.searchFields ?? const <String>[])) {
-      s.add(sf);
-    }
-    return s;
   }
 }

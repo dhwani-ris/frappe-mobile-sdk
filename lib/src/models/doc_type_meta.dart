@@ -209,4 +209,17 @@ class DocTypeMeta {
     final v = first['workflow_state_field'];
     return v is String && v.isNotEmpty ? v : null;
   }
+
+  /// Field names that participate in normalized search — title field plus
+  /// every entry in `search_fields`. Schema, form-save, and pull-apply all
+  /// use this set to decide which TEXT columns get a `__norm` mirror column.
+  /// Centralized here so the three writers can't drift apart.
+  Set<String> get normFieldNames {
+    final out = <String>{};
+    if (titleField != null) out.add(titleField!);
+    for (final sf in (searchFields ?? const <String>[])) {
+      out.add(sf);
+    }
+    return out;
+  }
 }

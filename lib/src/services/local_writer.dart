@@ -3,6 +3,8 @@ import 'package:uuid/uuid.dart';
 
 import '../database/field_type_mapping.dart';
 import '../database/normalize_for_search.dart';
+import '../database/schema/system_columns.dart';
+import '../database/sqlite_utils.dart';
 import '../database/table_name.dart';
 import '../models/doc_type_meta.dart';
 import '../models/meta_resolver.dart';
@@ -26,28 +28,8 @@ class LocalWriter {
   LocalWriter(this._db, this._metaResolver, {Uuid? uuid})
     : _uuid = uuid ?? const Uuid();
 
-  static const _systemParentColumns = <String>{
-    'mobile_uuid',
-    'server_name',
-    'sync_status',
-    'sync_error',
-    'sync_attempts',
-    'sync_op',
-    'docstatus',
-    'modified',
-    'local_modified',
-    'pulled_at',
-  };
-
-  static const _systemChildColumns = <String>{
-    'mobile_uuid',
-    'server_name',
-    'parent_uuid',
-    'parent_doctype',
-    'parentfield',
-    'idx',
-    'modified',
-  };
+  static const _systemParentColumns = systemParentColumnNames;
+  static const _systemChildColumns = systemChildColumnNames;
 
   /// Writes (or replaces) a parent document + its child rows into the
   /// per-doctype tables. Returns the parent's `mobile_uuid`.
@@ -98,14 +80,10 @@ class LocalWriter {
       }
     }
 
-    final normFields = <String>{};
-    if (parentMeta.titleField != null) normFields.add(parentMeta.titleField!);
-    for (final sf in (parentMeta.searchFields ?? const <String>[])) {
-      normFields.add(sf);
-    }
+    final normFields = parentMeta.normFieldNames;
 
     await _db.transaction((txn) async {
-      if (!await _tableExists(txn, parentTable)) return;
+      if (!await sqliteTableExists(txn, parentTable)) return;
 
       final parentRow = <String, Object?>{
         'mobile_uuid': mobileUuid,
@@ -151,7 +129,7 @@ class LocalWriter {
         final fieldname = entry.key;
         final childInfo = entry.value;
         final childTable = normalizeDoctypeTableName(childInfo.doctype);
-        if (!await _tableExists(txn, childTable)) continue;
+        if (!await sqliteTableExists(txn, childTable)) continue;
 
         await txn.delete(
           childTable,
@@ -222,7 +200,7 @@ class LocalWriter {
   }) async {
     final parentTable = normalizeDoctypeTableName(parentDoctype);
     await _db.transaction((txn) async {
-      if (!await _tableExists(txn, parentTable)) return;
+      if (!await sqliteTableExists(txn, parentTable)) return;
       await txn.update(
         parentTable,
         <String, Object?>{'server_name': serverName, 'sync_status': 'synced'},
@@ -230,14 +208,6 @@ class LocalWriter {
         whereArgs: [mobileUuid],
       );
     });
-  }
-
-  Future<bool> _tableExists(DatabaseExecutor txn, String name) async {
-    final rows = await txn.rawQuery(
-      "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
-      [name],
-    );
-    return rows.isNotEmpty;
   }
 
   Object? _coerce(Object? v, String sqlType) {

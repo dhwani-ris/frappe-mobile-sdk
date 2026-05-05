@@ -6,10 +6,10 @@ void main() {
     test(
       'offline-shape row uses mobile_uuid as localId, server_name as serverId',
       () {
+        // Real SQLite SELECT * on docs__<doctype> has server_name, not name.
         final doc = Document.fromResolverRow('Customer', {
           'mobile_uuid': 'uuid-1',
           'server_name': 'CUST-1',
-          'name': 'CUST-1',
           'sync_status': 'synced',
           'customer_name': 'ACME',
           'modified': '2026-04-01 10:00:00',

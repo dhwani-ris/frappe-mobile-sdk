@@ -5,6 +5,7 @@ import 'package:frappe_mobile_sdk/src/database/schema/system_tables.dart';
 import 'package:frappe_mobile_sdk/src/models/doc_field.dart';
 import 'package:frappe_mobile_sdk/src/models/doc_type_meta.dart';
 import 'package:frappe_mobile_sdk/src/models/offline_mode.dart';
+import 'package:frappe_mobile_sdk/src/models/offline_mode_notifier.dart';
 import 'package:frappe_mobile_sdk/src/query/query_result.dart';
 import 'package:frappe_mobile_sdk/src/query/unified_resolver.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -326,6 +327,41 @@ void main() {
         offlineMode: const OfflineMode(enabled: false, isPersisted: true),
       );
       expect(() => r.count('Customer'), throwsA(isA<StateError>()));
+    });
+  });
+
+  group('OfflineModeNotifier integration', () {
+    test('flips read path mid-session', () async {
+      final notifier = OfflineModeNotifier(
+        const OfflineMode(enabled: true, isPersisted: true),
+      );
+      final r = UnifiedResolver(
+        db: db,
+        metaDao: metaDao,
+        isOnline: () => true,
+        backgroundFetch: (_, _) async {},
+        metaResolver: (dt) async => DocTypeMeta(
+          name: dt,
+          titleField: 'customer_name',
+          fields: [f('customer_name', 'Data'), f('age', 'Int')],
+        ),
+        offlineModeNotifier: notifier,
+      );
+
+      // enabled=true → offline branch hits docs__customer (returns
+      // u1 + u2 from the seed rows, excludes failed u3).
+      expect(r.offlineMode.enabled, isTrue);
+      final offRes = await r.resolve(
+        doctype: 'Customer',
+        filters: const [],
+        page: 0,
+        pageSize: 50,
+      );
+      expect(offRes.rows.length, 2);
+
+      // Flip to false → resolver getter reflects the flip.
+      notifier.value = const OfflineMode(enabled: false, isPersisted: true);
+      expect(r.offlineMode.enabled, isFalse);
     });
   });
 }

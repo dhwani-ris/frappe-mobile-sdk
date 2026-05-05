@@ -1,4 +1,6 @@
 // ignore_for_file: use_build_context_synchronously
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import '../models/link_filter_result.dart';
 import '../sdk/frappe_sdk.dart';
@@ -74,8 +76,10 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
   Map<String, int> _dirtyCounts = {};
   bool _loading = true;
   bool _isSyncing = false;
+  bool _isForceSyncing = false;
   bool _isOnline = false;
 
+  StreamSubscription<void>? _syncSub;
   late final AnimationController _syncIconController;
 
   @override
@@ -85,11 +89,15 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
       vsync: this,
       duration: const Duration(seconds: 1),
     );
+    _syncSub = widget.sdk.syncComplete$?.listen((_) {
+      if (mounted) _load();
+    });
     _load();
   }
 
   @override
   void dispose() {
+    _syncSub?.cancel();
     _syncIconController.dispose();
     super.dispose();
   }
@@ -389,6 +397,17 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
               const SizedBox(height: 12),
               const Divider(height: 1),
               ListTile(
+                leading: const Icon(Icons.cloud_download_outlined),
+                title: const Text('Force Re-Sync All'),
+                subtitle: const Text('Re-download reference & master data'),
+                enabled: !_isForceSyncing,
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  _handleForcePullAll();
+                },
+              ),
+              const Divider(height: 1),
+              ListTile(
                 leading: const Icon(Icons.logout, color: Color(0xFFD32F2F)),
                 title: const Text(
                   'Logout',
@@ -461,6 +480,60 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
         await widget.onLogout!();
       }
     }
+  }
+
+  Future<void> _handleForcePullAll() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Force Re-Sync All?'),
+        content: const Text(
+          'This re-downloads all reference and master data from scratch. '
+          'Your unsynced form entries are not affected.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Re-Sync'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _isForceSyncing = true);
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const Center(child: CircularProgressIndicator()),
+    );
+
+    try {
+      await widget.sdk.forcePullAll();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Re-sync failed: ${e.toString().split(':').last.trim()}',
+            ),
+            backgroundColor: const Color(0xFFE65100),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        Navigator.of(context).pop(); // dismiss loading
+        setState(() => _isForceSyncing = false);
+      }
+    }
+
+    await _load();
   }
 
   Future<void> _navigateToDoctype(String doctype) async {

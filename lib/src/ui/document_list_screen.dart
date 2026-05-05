@@ -544,9 +544,27 @@ class _DocumentListScreenState extends State<DocumentListScreen> {
     if (isNew && !_canCreate) return;
     if (!isNew && !_canWrite) return;
 
-    // For existing records: fetch full response from API before opening form.
+    // For existing records in online mode: fetch the full document from the
+    // server before opening the form, because list queries only fetch display
+    // fields. In offline mode the document already has all parent fields from
+    // pullSync but child rows live in separate per-doctype tables — attach
+    // them now so the form builder receives the embedded child arrays.
     Document? resolvedDoc = doc;
-    if (!isNew && doc.serverId != null && widget.api != null) {
+    final isOffline = widget.repository.offlineMode.enabled;
+    if (!isNew && isOffline) {
+      try {
+        resolvedDoc = await widget.repository.attachChildRows(
+          widget.doctype,
+          doc,
+          widget.meta,
+        );
+      } catch (_) {
+        resolvedDoc = doc;
+      }
+    } else if (!isNew &&
+        !isOffline &&
+        doc.serverId != null &&
+        widget.api != null) {
       setState(() => _isSyncing = true);
       try {
         final freshData = await widget.api!.doctype.getByName(
@@ -561,7 +579,7 @@ class _DocumentListScreenState extends State<DocumentListScreen> {
         );
         resolvedDoc = updated;
       } catch (_) {
-        // Offline or error — fall back to local cached data.
+        // Network error — fall back to local cached data.
         resolvedDoc = doc;
       } finally {
         if (mounted) setState(() => _isSyncing = false);

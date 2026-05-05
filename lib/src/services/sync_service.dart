@@ -3,9 +3,12 @@ import 'package:connectivity_plus/connectivity_plus.dart';
 import '../api/client.dart';
 import '../concurrency/sync_mutex.dart';
 import '../database/app_database.dart';
+import '../database/sqlite_utils.dart';
 import '../database/table_name.dart';
 import '../models/doc_type_meta.dart';
 import '../models/offline_mode.dart';
+import '../models/offline_mode_notifier.dart';
+import '../sync/cursor.dart';
 import 'offline_repository.dart';
 
 /// Per-doctype sync phase observable from outside the SDK. Drives UX:
@@ -36,15 +39,25 @@ class SyncService {
   final Future<String?> Function()? _getMobileUuid;
   final SyncMutex _syncMutex = SyncMutex();
 
-  final OfflineMode offlineMode;
+  final OfflineModeNotifier _modeNotifier;
+
+  /// Live offline-mode value. Reads through [_modeNotifier] so
+  /// mid-session flips by `FrappeSDK._applyOfflineFlag` take effect
+  /// immediately at every gate site below.
+  OfflineMode get offlineMode => _modeNotifier.value;
 
   SyncService(
     this._client,
     this._repository,
     this._database, {
     Future<String?> Function()? getMobileUuid,
-    this.offlineMode = const OfflineMode(enabled: true, isPersisted: true),
-  }) : _getMobileUuid = getMobileUuid;
+    OfflineMode offlineMode = const OfflineMode(
+      enabled: true,
+      isPersisted: true,
+    ),
+    OfflineModeNotifier? offlineModeNotifier,
+  }) : _getMobileUuid = getMobileUuid,
+       _modeNotifier = offlineModeNotifier ?? OfflineModeNotifier(offlineMode);
 
   /// Check if device is online
   Future<bool> isOnline() async {
@@ -180,8 +193,8 @@ class SyncService {
     final raw = await _database.doctypeMetaDao.getLastOkCursor(doctype);
     if (raw == null || raw.isEmpty) return DoctypePullPhase.initial;
     try {
-      final m = jsonDecode(raw) as Map<String, dynamic>;
-      return m['complete'] == true
+      final cursor = Cursor.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+      return cursor.complete
           ? DoctypePullPhase.incremental
           : DoctypePullPhase.resume;
     } catch (_) {
@@ -621,11 +634,7 @@ class SyncService {
     try {
       final targetTable = normalizeDoctypeTableName(targetDoctype);
       final db = _database.rawDatabase;
-      final tableCheck = await db.rawQuery(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
-        [targetTable],
-      );
-      if (tableCheck.isEmpty) return null;
+      if (!await sqliteTableExists(db, targetTable)) return null;
       final rows = await db.query(
         targetTable,
         columns: ['server_name'],

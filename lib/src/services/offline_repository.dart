@@ -7,11 +7,14 @@ import '../database/entities/document_entity.dart';
 import '../database/field_type_mapping.dart';
 import '../database/schema/child_schema.dart';
 import '../database/schema/parent_schema.dart';
+import '../database/schema/system_columns.dart';
+import '../database/sqlite_utils.dart';
 import '../database/table_name.dart';
 import '../models/doc_type_meta.dart';
 import '../models/document.dart';
 import '../models/meta_diff.dart';
 import '../models/offline_mode.dart';
+import '../models/offline_mode_notifier.dart';
 import '../sync/pull_apply.dart';
 import 'local_writer.dart';
 import 'meta_migration.dart';
@@ -20,8 +23,22 @@ import 'meta_migration.dart';
 class OfflineRepository {
   final AppDatabase _database;
   final LocalWriter? _localWriter;
-  final OfflineMode offlineMode;
+  final OfflineModeNotifier _modeNotifier;
   final FrappeClient? client;
+
+  /// Resolves a doctype's meta when missing from the local DB. Wired to
+  /// `MetaService.getMeta` in production: fetches from server and persists
+  /// to `doctype_meta`. Used as a fallback in [_resolveChildMetas] so that
+  /// a `pullSync` page racing ahead of the closure-expansion's child-meta
+  /// fetch doesn't silently drop child rows. Optional — left null in tests
+  /// or environments without a `MetaService`, in which case the old
+  /// "skip the slot" behaviour is preserved.
+  final Future<DocTypeMeta> Function(String doctype)? _metaFetcher;
+
+  /// Live offline-mode value — see [SyncService.offlineMode] for the
+  /// rationale. Reads through [_modeNotifier] so mid-session flips
+  /// take effect at every gate site immediately.
+  OfflineMode get offlineMode => _modeNotifier.value;
   final Uuid _uuid = const Uuid();
 
   /// Cache: doctype → parsed meta. Avoids re-decoding `metaJson` on every
@@ -46,9 +63,16 @@ class OfflineRepository {
   OfflineRepository(
     this._database, {
     LocalWriter? localWriter,
-    this.offlineMode = const OfflineMode(enabled: true, isPersisted: true),
+    OfflineMode offlineMode = const OfflineMode(
+      enabled: true,
+      isPersisted: true,
+    ),
+    OfflineModeNotifier? offlineModeNotifier,
     this.client,
-  }) : _localWriter = localWriter;
+    Future<DocTypeMeta> Function(String doctype)? metaFetcher,
+  }) : _localWriter = localWriter,
+       _metaFetcher = metaFetcher,
+       _modeNotifier = offlineModeNotifier ?? OfflineModeNotifier(offlineMode);
 
   /// Drops the in-memory meta cache. Call this after a meta refresh so
   /// schema-bumping fields (new column, dropped Link) take effect on the
@@ -104,12 +128,9 @@ class OfflineRepository {
       final tableName = normalizeDoctypeTableName(doctype);
       if (_ensuredTables.contains(tableName)) continue;
 
-      final existing = await db.rawQuery(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name = ?",
-        [tableName],
-      );
+      final exists = await sqliteTableExists(db, tableName);
       final isChild = childDoctypes.contains(doctype) || meta.isTable;
-      if (existing.isEmpty) {
+      if (!exists) {
         final ddls = isChild
             ? buildChildSchemaDDL(meta, tableName: tableName)
             : buildParentSchemaDDL(meta, tableName: tableName);
@@ -250,11 +271,7 @@ class OfflineRepository {
   ) async {
     final tableName = normalizeDoctypeTableName(doctype);
     final db = _database.rawDatabase;
-    final tableCheck = await db.rawQuery(
-      "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
-      [tableName],
-    );
-    if (tableCheck.isEmpty) return null;
+    if (!await sqliteTableExists(db, tableName)) return null;
     final rows = await db.query(
       tableName,
       where: 'server_name = ? OR mobile_uuid = ?',
@@ -519,7 +536,25 @@ class OfflineRepository {
       if (ftype != 'Table' && ftype != 'Table MultiSelect') continue;
       final childDoctype = f.options;
       if (childDoctype == null || childDoctype.isEmpty) continue;
-      final childMeta = await _loadMeta(childDoctype);
+      DocTypeMeta? childMeta = await _loadMeta(childDoctype);
+      // Closure expansion fetches and persists every reachable child meta,
+      // but `pullSync` can win the race against it: the user navigates to a
+      // list whose `_pullDocuments` triggers a save before the parallel
+      // `closure()` has gotten to the level that contains this child. When
+      // that happens the DB read above misses and -- before this fallback --
+      // every child row in the page was silently discarded. Routing through
+      // the supplied [_metaFetcher] (`MetaService.getMeta` in production)
+      // fetches the meta from the server and persists it, so subsequent
+      // rows in the same page hit the in-memory cache.
+      if (childMeta == null && _metaFetcher != null) {
+        try {
+          childMeta = await _metaFetcher(childDoctype);
+          _metaCache[childDoctype] = childMeta;
+        } catch (_) {
+          // Network failure on the fallback fetch — fall through and skip
+          // the slot. Better than crashing the entire pull.
+        }
+      }
       if (childMeta == null) continue;
       // Make sure the child mirror table exists -- on returning users
       // it may not yet, since `ensureSchemaForClosure` only ran on the
@@ -527,11 +562,7 @@ class OfflineRepository {
       final childTable = normalizeDoctypeTableName(childDoctype);
       if (!_ensuredTables.contains(childTable)) {
         final db = _database.rawDatabase;
-        final existing = await db.rawQuery(
-          "SELECT name FROM sqlite_master WHERE type='table' AND name = ?",
-          [childTable],
-        );
-        if (existing.isEmpty) {
+        if (!await sqliteTableExists(db, childTable)) {
           final ddls = buildChildSchemaDDL(childMeta, tableName: childTable);
           await db.transaction((txn) async {
             for (final stmt in ddls) {
@@ -556,11 +587,7 @@ class OfflineRepository {
   ) async {
     if (_ensuredTables.contains(tableName)) return;
     final db = _database.rawDatabase;
-    final existing = await db.rawQuery(
-      "SELECT name FROM sqlite_master WHERE type='table' AND name = ?",
-      [tableName],
-    );
-    if (existing.isEmpty) {
+    if (!await sqliteTableExists(db, tableName)) {
       final ddls = buildParentSchemaDDL(meta, tableName: tableName);
       await db.transaction((txn) async {
         for (final stmt in ddls) {
@@ -580,22 +607,12 @@ class OfflineRepository {
     _ensuredTables.add(tableName);
   }
 
-  /// System columns the parent block emits — kept in sync with
-  /// `database/schema/parent_schema.dart`. A meta field that shares one of
+  /// System columns the parent block emits — sourced from
+  /// `database/schema/system_columns.dart` so DDL, form-save, pull-apply,
+  /// and the meta-reconcile path all agree. A meta field that shares one of
   /// these names is dropped from the per-field loop, so we mustn't propose
   /// to ALTER ADD them either.
-  static const _reconcileParentSystemCols = <String>{
-    'mobile_uuid',
-    'server_name',
-    'sync_status',
-    'sync_error',
-    'sync_attempts',
-    'sync_op',
-    'docstatus',
-    'modified',
-    'local_modified',
-    'pulled_at',
-  };
+  static const _reconcileParentSystemCols = systemParentColumnNames;
 
   /// Heals an already-created `docs__<doctype>` parent table whose schema
   /// has drifted from the current meta — e.g. a `title_field` was added on
@@ -623,11 +640,7 @@ class OfflineRepository {
     }
     if (actual.isEmpty) return;
 
-    final normFields = <String>{};
-    if (meta.titleField != null) normFields.add(meta.titleField!);
-    for (final sf in (meta.searchFields ?? const <String>[])) {
-      normFields.add(sf);
-    }
+    final normFields = meta.normFieldNames;
 
     final addedFields = <AddedField>[];
     final addedIsLocal = <String>[];
@@ -721,11 +734,7 @@ class OfflineRepository {
       if (serverList is! List || serverList.isEmpty) continue;
 
       final childTable = normalizeDoctypeTableName(childDoctype);
-      final tableCheck = await db.rawQuery(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
-        [childTable],
-      );
-      if (tableCheck.isEmpty) continue;
+      if (!await sqliteTableExists(db, childTable)) continue;
 
       for (var idx = 0; idx < serverList.length; idx++) {
         final serverRow = serverList[idx];
@@ -760,6 +769,48 @@ class OfflineRepository {
         }
       }
     }
+  }
+
+  /// Returns [doc] with child-table rows attached to [doc.data] under each
+  /// Table field's fieldname. Reads from the per-child-doctype SQLite tables
+  /// (`docs__<child_doctype>`) by `parent_uuid = doc.localId`, ordered by
+  /// `idx`. Each row is exposed with `name` mapped from `server_name`
+  /// (matching the shape the form builder receives from the API).
+  ///
+  /// Used when opening a document in offline mode, where the resolver's flat
+  /// row does not embed child arrays.
+  Future<Document> attachChildRows(
+    String doctype,
+    Document doc,
+    DocTypeMeta meta,
+  ) async {
+    final db = _database.rawDatabase;
+    final enriched = Map<String, dynamic>.from(doc.data);
+    for (final field in meta.fields) {
+      final fname = field.fieldname;
+      final ftype = field.fieldtype;
+      if (fname == null) continue;
+      if (ftype != 'Table' && ftype != 'Table MultiSelect') continue;
+      final childDoctype = field.options;
+      if (childDoctype == null || childDoctype.isEmpty) continue;
+      final childTable = normalizeDoctypeTableName(childDoctype);
+      if (!await sqliteTableExists(db, childTable)) continue;
+      final rows = await db.query(
+        childTable,
+        where: 'parent_uuid = ?',
+        whereArgs: [doc.localId],
+        orderBy: 'idx ASC',
+      );
+      enriched[fname] = rows.map((r) {
+        final m = Map<String, dynamic>.from(r);
+        // Map server_name → name so field values align with Frappe convention.
+        if (!m.containsKey('name') && m.containsKey('server_name')) {
+          m['name'] = m['server_name'];
+        }
+        return m;
+      }).toList();
+    }
+    return doc.copyWith(data: enriched);
   }
 
   /// Convert Document to Entity

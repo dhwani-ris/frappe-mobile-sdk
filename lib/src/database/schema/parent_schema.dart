@@ -1,24 +1,14 @@
 import '../../models/doc_type_meta.dart';
 import '../field_type_mapping.dart';
 import 'index_policy.dart';
+import 'system_columns.dart';
 
 /// Column names emitted by the system block. A meta field that uses one
 /// of these names (e.g. a consumer-defined `mobile_uuid` field for L2
 /// idempotency, or Frappe's standard `modified` / `docstatus`) is
 /// dropped from the meta loop — the system column already covers it,
 /// and SQLite refuses duplicate column names in `CREATE TABLE`.
-const _systemColumnNames = <String>{
-  'mobile_uuid',
-  'server_name',
-  'sync_status',
-  'sync_error',
-  'sync_attempts',
-  'sync_op',
-  'docstatus',
-  'modified',
-  'local_modified',
-  'pulled_at',
-};
+const _systemColumnNames = systemParentColumnNames;
 
 /// Returns the ordered list of DDL statements to create a parent
 /// `docs__<doctype>` table + its indexes. Apply in a single transaction.
@@ -41,7 +31,7 @@ List<String> buildParentSchemaDDL(
     'pulled_at INTEGER',
   ];
 
-  final normFields = _normFieldNames(meta);
+  final normFields = meta.normFieldNames;
   final seen = <String>{..._systemColumnNames};
 
   for (final f in meta.fields) {
@@ -63,9 +53,7 @@ List<String> buildParentSchemaDDL(
     }
   }
 
-  final ddl = <String>[
-    'CREATE TABLE $tableName (\n  ${cols.join(',\n  ')}\n)',
-  ];
+  final ddl = <String>['CREATE TABLE $tableName (\n  ${cols.join(',\n  ')}\n)'];
 
   final suffix = _indexSuffix(tableName);
   ddl.add(
@@ -79,9 +67,7 @@ List<String> buildParentSchemaDDL(
     meta,
     maxIndexes: maxIndexes,
     linkEdgeCount: linkEdgeCount,
-  ).where(
-    (c) => c != 'server_name' && c != 'sync_status' && c != 'modified',
-  );
+  ).where((c) => c != 'server_name' && c != 'sync_status' && c != 'modified');
   for (final col in additional) {
     ddl.add(
       'CREATE INDEX ix_${suffix}_${_sanitizeColName(col)} '
@@ -92,16 +78,6 @@ List<String> buildParentSchemaDDL(
   return ddl;
 }
 
-Set<String> _normFieldNames(DocTypeMeta meta) {
-  final out = <String>{};
-  if (meta.titleField != null) out.add(meta.titleField!);
-  for (final sf in (meta.searchFields ?? const <String>[])) {
-    out.add(sf);
-  }
-  return out;
-}
-
-String _indexSuffix(String tableName) =>
-    tableName.replaceFirst('docs__', '');
+String _indexSuffix(String tableName) => tableName.replaceFirst('docs__', '');
 
 String _sanitizeColName(String col) => col.replaceAll('__', '_');

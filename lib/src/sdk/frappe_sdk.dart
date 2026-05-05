@@ -13,6 +13,7 @@ import '../database/daos/sdk_meta_dao.dart';
 import '../database/migrations/v1_to_v2.dart';
 import '../models/doc_type_meta.dart';
 import '../models/offline_mode.dart';
+import '../models/offline_mode_notifier.dart';
 import '../models/session_user.dart';
 import '../query/unified_resolver.dart';
 import '../services/auth_service.dart';
@@ -63,17 +64,36 @@ class FrappeSDK {
   /// check resolves.
   bool _cachedOnline = false;
 
-  /// Session-bound offline mode. Set in [initialize] from the persisted
-  /// `sdk_meta.offline_enabled` (via [_resolveBootMode]) and immutable
-  /// for the rest of the session. Forced offline in `forTesting` to keep
-  /// test behaviour identical to pre-P2 builds.
-  OfflineMode _offlineMode = const OfflineMode(
-    enabled: true,
-    isPersisted: true,
-  );
+  /// Shared mutable holder for [OfflineMode]. Constructed once per session
+  /// in [initialize] / [forTesting] and threaded into [OfflineRepository],
+  /// [SyncService], and [UnifiedResolver]. A mid-session flip via
+  /// [_applyOfflineFlag] is visible to every service through the notifier.
+  OfflineModeNotifier? _modeNotifier;
+
+  /// Fires (with `null`) after each batch pull operation completes —
+  /// [_runUpgradeClosurePull] and [forcePullAll]. Home screen subscribes to
+  /// this to refresh its document counts without polling.
+  StreamController<void>? _syncCompleteController;
+
+  /// Subscribe to receive a `void` event each time a batch pull finishes.
+  /// The stream is broadcast so multiple listeners are safe.
+  Stream<void>? get syncComplete$ => _syncCompleteController?.stream;
+
+  /// Session-bound offline mode. Reads through [_modeNotifier] so mid-session
+  /// flips by [_applyOfflineFlag] take effect immediately.
+  OfflineMode get _offlineMode =>
+      _modeNotifier?.value ??
+      const OfflineMode(enabled: true, isPersisted: true);
 
   @visibleForTesting
   OfflineMode get offlineModeForTesting => _offlineMode;
+
+  /// Test seam: directly mutate the shared notifier without going through
+  /// [_applyOfflineFlag] (no persist, no transition dispatch).
+  @visibleForTesting
+  void flipOfflineModeForTesting(OfflineMode next) {
+    _modeNotifier?.value = next;
+  }
 
   FrappeSDK({required this.baseUrl, this.databaseAppName});
 
@@ -95,7 +115,8 @@ class FrappeSDK {
     ),
   }) : databaseAppName = null {
     _database = database;
-    _offlineMode = offlineMode;
+    _modeNotifier = OfflineModeNotifier(offlineMode);
+    _syncCompleteController = StreamController<void>.broadcast();
     // Create FrappeClient directly — avoids AuthService.initialize() which
     // writes to FlutterSecureStorage and is unavailable in widget tests.
     _client = FrappeClient(baseUrl);
@@ -111,8 +132,9 @@ class FrappeSDK {
     _repository = OfflineRepository(
       _database!,
       localWriter: testLocalWriter,
-      offlineMode: offlineMode,
+      offlineModeNotifier: _modeNotifier!,
       client: _client,
+      metaFetcher: testMetaFn,
     );
     _permissionService = PermissionService(_client!, _database!);
     _translationService = TranslationService(_client!);
@@ -121,7 +143,7 @@ class FrappeSDK {
       _repository!,
       _database!,
       getMobileUuid: () async => 'test-uuid',
-      offlineMode: offlineMode,
+      offlineModeNotifier: _modeNotifier!,
     );
     final testResolver = UnifiedResolver(
       db: database.rawDatabase,
@@ -129,7 +151,7 @@ class FrappeSDK {
       isOnline: () => false,
       backgroundFetch: (_, _) async {},
       metaResolver: testMetaFn,
-      offlineMode: offlineMode,
+      offlineModeNotifier: _modeNotifier!,
       client: _client,
     );
     _resolver = testResolver;
@@ -170,7 +192,9 @@ class FrappeSDK {
     final persistedMode = await SdkMetaDao(
       _database!.rawDatabase,
     ).readOfflineMode();
-    _offlineMode = await _resolveBootMode(persistedMode);
+    final resolvedMode = await _resolveBootMode(persistedMode);
+    _modeNotifier = OfflineModeNotifier(resolvedMode);
+    _syncCompleteController = StreamController<void>.broadcast();
 
     _metaService = MetaService(_client!, _database!);
     final rawDb = _database!.rawDatabase;
@@ -180,8 +204,9 @@ class FrappeSDK {
     _repository = OfflineRepository(
       _database!,
       localWriter: localWriter,
-      offlineMode: _offlineMode,
+      offlineModeNotifier: _modeNotifier!,
       client: _client!,
+      metaFetcher: metaFn,
     );
     _permissionService = PermissionService(_client!, _database!);
     _translationService = TranslationService(_client!);
@@ -190,7 +215,7 @@ class FrappeSDK {
       _repository!,
       _database!,
       getMobileUuid: () => _authService!.getOrCreateMobileUuid(),
-      offlineMode: _offlineMode,
+      offlineModeNotifier: _modeNotifier!,
     );
     // Build UnifiedResolver — single read path for all offline queries.
     // Probe connectivity once here; downstream callers (resolver,
@@ -211,7 +236,7 @@ class FrappeSDK {
         }
       },
       metaResolver: metaFn,
-      offlineMode: _offlineMode,
+      offlineModeNotifier: _modeNotifier!,
       client: _client!,
     );
     _resolver = resolver;
@@ -410,6 +435,11 @@ class FrappeSDK {
     }
     _setSessionUserFromLoginResponse(response);
     await _persistOfflineFlagFromLogin(response);
+    // Always run meta + config sync after login, regardless of
+    // offline_enabled. Online mode still needs accurate doctype meta for
+    // form rendering, list view fields, and Link pickers. The closure pull
+    // inside _initialMetaAndDataSync short-circuits when offline is false.
+    unawaited(_initialMetaAndDataSync());
     return response;
   }
 
@@ -430,6 +460,9 @@ class FrappeSDK {
     }
     _setSessionUserFromLoginResponse(response);
     await _persistOfflineFlagFromLogin(response);
+    // See login() — full meta sync runs unconditionally so online mode
+    // also gets fresh field definitions / configuration.
+    unawaited(_initialMetaAndDataSync());
     return response;
   }
 
@@ -476,14 +509,50 @@ class FrappeSDK {
     return ok;
   }
 
-  /// Logout and clear all local DB data (default). Set clearDatabase: false to keep DB.
+  /// Logout and fully wipe local DB state. Set [clearDatabase] = false to
+  /// keep every table untouched (e.g. when the caller drives its own teardown).
+  ///
+  /// **Full nuke:** drops every application-owned table — including
+  /// `doctype_meta` and `sdk_meta` — and rebuilds the base schema from
+  /// scratch via [AppDatabase.clearAllData]. The next login re-fetches all
+  /// metas from the server, so a different user logging in starts from a
+  /// truly clean slate (no leftover field JSON, no leftover cursors, no
+  /// leftover offline-mode flag).
+  ///
+  /// Trade-off: post-logout login takes longer because every doctype meta
+  /// must round-trip to the server again. The previous targeted wipe
+  /// preserved `doctype_meta.metaJson` to avoid this — but that left
+  /// stale rows around when users switched accounts on a shared device,
+  /// which made debugging permission/closure issues painful.
+  ///
+  /// Per-doctype `docs__*` tables are recreated lazily on the next pull
+  /// via [OfflineRepository.ensureSchemaForClosure].
+  ///
+  /// In-memory caches that mirror DB state are also cleared so a returning
+  /// user (or different user) doesn't hit stale-cache bugs — e.g.
+  /// `_ensurePerDoctypeTable` short-circuiting against a cache that still
+  /// remembers a table that was just dropped.
   Future<void> logout({bool clearDatabase = true}) async {
     if (!_initialized) {
       throw StateError(
         'Cannot logout: SDK not initialized. Call initialize() first.',
       );
     }
+    // AuthService.logout(clearDatabase: true) calls AppDatabase.clearAllData,
+    // which drops every non-SQLite-internal table and re-runs `_onCreate` to
+    // rebuild the base schema. Auth tokens are deleted regardless of the flag.
     await _authService!.logout(clearDatabase: clearDatabase);
+    if (clearDatabase) {
+      // In-memory mirrors of the now-dropped DB state. Without these, the
+      // next session would short-circuit table-existence checks against a
+      // cache that still remembers tables that no longer exist.
+      _repository?.invalidateMetaCache();
+      _metaService?.clearCache();
+      _modeNotifier?.value = const OfflineMode(
+        enabled: false,
+        isPersisted: false,
+      );
+    }
   }
 
   /// Get Frappe API client (for direct API calls)
@@ -670,6 +739,9 @@ class FrappeSDK {
       await _translationService?.setLocale(lang);
     }
     await _persistOfflineFlagFromLogin(userInfo);
+    // See login() — full meta sync runs unconditionally so online mode
+    // also gets fresh field definitions / configuration.
+    unawaited(_initialMetaAndDataSync());
     // mobile_auth.me returns a Frappe user document — 'name' is the user email.
     final name = userInfo['name'] as String?;
     if (name != null && name.isNotEmpty) {
@@ -692,17 +764,48 @@ class FrappeSDK {
     }
   }
 
-  /// Persists the `offline_enabled` flag from a login response to
-  /// `sdk_meta`. Treats a missing or non-`true` value as `false`.
-  ///
-  /// Non-fatal: write failures are logged and swallowed so a transient
-  /// SQLite error doesn't fail the login itself. The persisted value
-  /// takes effect on the next [initialize] call.
   Future<void> _persistOfflineFlagFromLogin(
     Map<String, dynamic> response,
   ) async {
-    if (_database == null) return;
     final incoming = response['offline_enabled'] == true;
+    // login() always fires `unawaited(_initialMetaAndDataSync())` immediately
+    // after this. That path is the right place to run `_runUpgradeClosurePull`
+    // because it first does `checkAndSyncDoctypes` + `resyncMobileConfiguration`,
+    // which (re)hydrate the mobile-form list and entry-point `metaJson` rows.
+    //
+    // If we let `_applyOfflineFlag` fire its own unawaited closure pull here,
+    // it races: the parallel pull starts BEFORE meta hydration completes, so
+    // `closure()` reads stale/empty `doctype_meta` rows, can't expand to Link
+    // targets, grabs the `SyncMutex`, and pulls only entry points. The
+    // hydrated second closure pull (and SNF's own `pullSyncMany`) then both
+    // see "Sync already in progress" and short-circuit — leaving every helper
+    // doctype (State, District, Block, Village, …) unpulled offline.
+    //
+    // Suppress here; the post-login `_initialMetaAndDataSync` covers it.
+    await _applyOfflineFlag(incoming, triggerUpgradePull: false);
+  }
+
+  /// Persists the new offline-mode flag and dispatches a mid-session
+  /// transition when direction changes:
+  ///
+  /// - false → true: notifier flips, then [_runUpgradeClosurePull]
+  ///   fires unawaited so this launch's `docs__*` tables get populated
+  ///   without an app restart.
+  /// - true → false: notifier flips, then
+  ///   [OfflineTransitionService.runDrainAndWipe] fires unawaited; the
+  ///   consumer's [OfflineTransitionGuard] (subscribed to the service
+  ///   stream) shows progress / drain-failed UI as needed.
+  /// - no change: persists `isPersisted=true` and returns.
+  ///
+  /// Persist failures (DB closed, etc.) are logged and swallowed; the
+  /// notifier is not flipped and no transition fires when persistence
+  /// failed, keeping session state and `sdk_meta` aligned.
+  Future<void> _applyOfflineFlag(
+    bool incoming, {
+    bool triggerUpgradePull = true,
+  }) async {
+    if (_database == null || _modeNotifier == null) return;
+
     try {
       await SdkMetaDao(_database!.rawDatabase).writeOfflineMode(
         enabled: incoming,
@@ -711,6 +814,42 @@ class FrappeSDK {
     } catch (e, st) {
       // ignore: avoid_print
       print('FrappeSDK: failed to persist offline_enabled — $e\n$st');
+      return;
+    }
+
+    final previous = _modeNotifier!.value;
+    final next = OfflineMode(enabled: incoming, isPersisted: true);
+
+    // No direction change: sync isPersisted=true and exit.
+    if (previous.enabled == next.enabled) {
+      _modeNotifier!.value = next;
+      return;
+    }
+
+    // Direction changed — flip notifier first so any concurrent service
+    // call after this point sees the new mode.
+    _modeNotifier!.value = next;
+
+    if (next.enabled) {
+      // false → true mid-session: kick the closure pull so this launch's
+      // `docs__*` tables get populated without an app restart. Suppressed
+      // when called from the login path (`_persistOfflineFlagFromLogin`
+      // passes `triggerUpgradePull: false`), because login() already
+      // fires `_initialMetaAndDataSync` which runs the same upgrade pull
+      // *after* hydrating mobile-form metas — firing both races, with
+      // the parallel one seeing stale `doctype_meta` rows and pulling
+      // only entry points before the SyncMutex blocks the hydrated one.
+      if (triggerUpgradePull) {
+        unawaited(_runUpgradeClosurePull());
+      }
+    } else {
+      // true → false: drain outbox + wipe docs__* tables. The existing
+      // OfflineTransitionGuard subscribes to the stream and presents
+      // progress / drain-failed UI.
+      final transition = _offlineTransitionService;
+      if (transition != null) {
+        unawaited(transition.runDrainAndWipe());
+      }
     }
   }
 
@@ -784,24 +923,26 @@ class FrappeSDK {
     // Online mode stops here — closure pull is offline-only.
     if (!_offlineMode.enabled) return;
 
+    await _runUpgradeClosurePull();
+  }
+
+  /// Pulls every doctype in the closure of the user's mobile-form entry
+  /// points, skipping child doctypes (they ride along inside parents) and
+  /// doctypes the user can't read.
+  ///
+  /// Idempotent — pull cursors mean re-running is cheap. Per-doctype
+  /// failures are logged and skipped. Used by both [_initialMetaAndDataSync]
+  /// (initial returning-user sync) and [_applyOfflineFlag] (mid-session
+  /// upgrade after the offline_enabled flag flips false → true).
+  Future<void> _runUpgradeClosurePull() async {
+    if (_metaService == null || _syncService == null) return;
     try {
-      // Pull data for entry-point (mobile form) doctypes AND every doctype
-      // they reach via Link / Table / Table MultiSelect — i.e. the
-      // dependency closure. Spec §3.2 + §5.1.
-      //
-      // Without this, Link pickers on offline forms have nothing to show
-      // (e.g. an Order form needs Customer + Item populated locally before
-      // the user can fill its Link fields). Child-table doctypes are
-      // excluded — they ride along inside their parent's records and
-      // don't need their own pull.
       final entryPoints = await _metaService!.getMobileFormDoctypeNames();
       final closure = await _metaService!.closure(entryPoints);
       final toPull = closure.doctypes
           .where((d) => !closure.childDoctypes.contains(d))
           .toList();
       for (final doctype in toPull) {
-        // Skip doctypes the user cannot read — avoids wasteful 403 requests.
-        // canRead() defaults to true when no permission record exists.
         if (_permissionService != null &&
             !await _permissionService!.canRead(doctype)) {
           continue;
@@ -818,6 +959,56 @@ class FrappeSDK {
       // ignore: avoid_print
       print('FrappeSDK: closure pull failed — $e\n$st');
     }
+    _syncCompleteController?.add(null);
+  }
+
+  @visibleForTesting
+  Future<void> runUpgradeClosurePullForTesting() => _runUpgradeClosurePull();
+
+  /// Re-pulls every helper, master, and reference doctype in the closure from
+  /// scratch by clearing their pull cursors first. Entry-point mobile-form
+  /// doctypes and child-table doctypes are excluded — entry-points are managed
+  /// by the normal sync cycle; child tables ride along inside their parents.
+  ///
+  /// No-ops silently if the SDK isn't initialized (`_metaService`,
+  /// `_syncService`, or `_database` is null). Per-doctype failures are logged
+  /// and skipped. Emits to [syncComplete$] when finished so the home screen
+  /// refreshes its counts.
+  Future<void> forcePullAll() async {
+    if (_metaService == null || _syncService == null || _database == null) {
+      return;
+    }
+    try {
+      final entryPoints = await _metaService!.getMobileFormDoctypeNames();
+      final entryPointSet = entryPoints.toSet();
+      final closure = await _metaService!.closure(entryPoints);
+      final toPull = closure.doctypes
+          .where(
+            (d) =>
+                !entryPointSet.contains(d) &&
+                !closure.childDoctypes.contains(d),
+          )
+          .toList();
+      final dao = _database!.doctypeMetaDao;
+      for (final doctype in toPull) {
+        if (_permissionService != null &&
+            !await _permissionService!.canRead(doctype)) {
+          continue;
+        }
+        try {
+          await dao.clearLastOkCursor(doctype);
+          await _syncService!.pullSync(doctype: doctype);
+        } catch (e, st) {
+          // ignore: avoid_print
+          print('FrappeSDK: forcePullAll($doctype) failed — $e\n$st');
+          continue;
+        }
+      }
+    } catch (e, st) {
+      // ignore: avoid_print
+      print('FrappeSDK: forcePullAll failed — $e\n$st');
+    }
+    _syncCompleteController?.add(null);
   }
 
   /// Releases the per-instance services this SDK owns and resets
@@ -838,6 +1029,9 @@ class FrappeSDK {
     _sessionUserService = null;
     await _offlineTransitionService?.dispose();
     _offlineTransitionService = null;
+    _modeNotifier = null;
+    await _syncCompleteController?.close();
+    _syncCompleteController = null;
     _initialized = false;
   }
 }

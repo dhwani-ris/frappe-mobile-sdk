@@ -1,19 +1,12 @@
 import '../../models/doc_type_meta.dart';
 import '../field_type_mapping.dart';
+import 'system_columns.dart';
 
 /// Column names emitted by the child system block. A meta field that uses
 /// one of these names (e.g. a doctype that exposes `idx` or `modified` as
 /// a regular field) is skipped so SQLite doesn't reject the CREATE TABLE
 /// with `duplicate column name`.
-const _childSystemColumnNames = <String>{
-  'mobile_uuid',
-  'server_name',
-  'parent_uuid',
-  'parent_doctype',
-  'parentfield',
-  'idx',
-  'modified',
-};
+const _childSystemColumnNames = systemChildColumnNames;
 
 /// DDL for a child (`istable=1`) doctype's table. Children share parent's
 /// sync_status so no sync_* columns here.
