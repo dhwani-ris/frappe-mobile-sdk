@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_form_builder/flutter_form_builder.dart';
 import 'base_field.dart';
@@ -16,7 +18,7 @@ class LinkField extends BaseField {
   final Map<String, dynamic>? formData;
   final Map<String, dynamic> parentFormData;
   final LinkFilterBuilder? Function(String doctype, String fieldname)?
-      getLinkFilterBuilder;
+  getLinkFilterBuilder;
 
   const LinkField({
     super.key,
@@ -149,7 +151,7 @@ class _LinkFieldDropdown extends StatefulWidget {
   final Map<String, dynamic> formData;
   final Map<String, dynamic> parentFormData;
   final LinkFilterBuilder? Function(String doctype, String fieldname)?
-      getLinkFilterBuilder;
+  getLinkFilterBuilder;
   final FieldStyle? style;
 
   const _LinkFieldDropdown({
@@ -178,6 +180,7 @@ class _LinkFieldDropdownState extends State<_LinkFieldDropdown> {
   bool _isLoading = true;
   bool _waitingForDependent = false;
   String _dependentFieldName = '';
+  StreamSubscription<void>? _syncSub;
 
   @override
   void initState() {
@@ -188,6 +191,33 @@ class _LinkFieldDropdownState extends State<_LinkFieldDropdown> {
     } else {
       _loadOptions();
     }
+
+    // Pickers opened mid-sync see an empty `docs__<doctype>` table and
+    // return an empty option list. Without this subscription the dropdown
+    // stayed empty forever even after the closure pull populated the
+    // table. On every sync-complete tick, retry the load if we currently
+    // have nothing — the coordinator's empty results aren't cached, so
+    // the retry hits the resolver and picks up freshly-synced rows.
+    final stream = widget.linkOptionService.syncComplete$;
+    if (stream != null) {
+      _syncSub = stream.listen((_) {
+        if (!mounted) return;
+        if (_isLoading || _waitingForDependent) return;
+        if (_options.isNotEmpty) return;
+        if (widget.linkFieldCoordinator != null &&
+            widget.linkFieldCoordinator!.useCoordinator) {
+          _loadOptionsViaCoordinator();
+        } else {
+          _loadOptions();
+        }
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _syncSub?.cancel();
+    super.dispose();
   }
 
   void _applyOptionsAndAutoSelect(List<LinkOptionEntity> options) {

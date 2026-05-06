@@ -228,6 +228,25 @@ class SyncService {
         SyncResult(0, 0, 0, 'Sync already in progress', errors: []);
   }
 
+  /// Pull-with-wait variant — used by background refreshers (Link
+  /// pickers, list-screen reloads) where dropping the request leaves
+  /// stale UI but blocking on the current holder is acceptable. By the
+  /// time this resumes, the in-flight closure batch has likely already
+  /// pulled this doctype, so the underlying call is usually a cheap
+  /// incremental delta.
+  Future<SyncResult> pullSyncWaiting({
+    required String doctype,
+    int? since,
+  }) async {
+    if (!offlineMode.enabled) return SyncResult.empty();
+    if (!await isOnline()) {
+      return SyncResult(0, 0, 0, 'No internet connection', errors: []);
+    }
+    return _syncMutex.protect(
+      () => _pullOneInternal(doctype: doctype, since: since),
+    );
+  }
+
   /// Pull updates for many doctypes with bounded parallelism.
   ///
   /// Used by initial-sync to drain ~45 doctypes through a small worker
@@ -238,6 +257,7 @@ class SyncService {
     required List<String> doctypes,
     int concurrency = 4,
   }) async {
+    if (doctypes.isEmpty) return const {};
     if (!offlineMode.enabled) {
       return {for (final dt in doctypes) dt: SyncResult.empty()};
     }

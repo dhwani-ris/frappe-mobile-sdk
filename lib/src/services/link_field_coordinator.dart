@@ -23,7 +23,7 @@ class LinkFieldCoordinator {
   final LinkOptionService linkOptionService;
   final Map<String, dynamic> parentFormData;
   final LinkFilterBuilder? Function(String doctype, String fieldname)?
-      getLinkFilterBuilder;
+  getLinkFilterBuilder;
   final Map<String, dynamic> _formData = {};
   final StreamController<LinkLoadProgress> _progressController =
       StreamController<LinkLoadProgress>.broadcast();
@@ -233,8 +233,14 @@ class LinkFieldCoordinator {
           req.doctype,
           filters: req.filters,
         );
-        final ck = _cacheKey(req.doctype, req.filters);
-        _resultsCache[ck] = options;
+        // Skip caching empty results — sync may not have populated the
+        // target table yet, and a stale cached `[]` would defeat the
+        // post-sync refresh path. Re-running the fetch later is cheap
+        // (single SQLite SELECT) compared to leaving the dropdown empty.
+        if (options.isNotEmpty) {
+          final ck = _cacheKey(req.doctype, req.filters);
+          _resultsCache[ck] = options;
+        }
         if (!req.completer.isCompleted) {
           req.completer.complete(options);
         }

@@ -15,15 +15,29 @@ import '../utils/depends_on_evaluator.dart';
 class LinkOptionService {
   final UnifiedResolver? _resolver;
   final MetaResolverFn? _metaResolver;
+  final Stream<void>? _syncCompleteStream;
+
+  /// Broadcasts after each closure-pull batch finishes. Wired from
+  /// [FrappeSDK.syncComplete$]. Pickers and the [LinkFieldCoordinator]
+  /// listen to this to invalidate stale empty caches and re-fetch
+  /// options for fields whose target doctype just got fresh data.
+  Stream<void>? get syncComplete$ => _syncCompleteStream;
 
   /// Primary constructor — inject a wired [UnifiedResolver].
-  LinkOptionService(UnifiedResolver resolver, MetaResolverFn metaResolver)
-    : _resolver = resolver,
-      _metaResolver = metaResolver;
+  LinkOptionService(
+    UnifiedResolver resolver,
+    MetaResolverFn metaResolver, {
+    Stream<void>? syncComplete$,
+  }) : _resolver = resolver,
+       _metaResolver = metaResolver,
+       _syncCompleteStream = syncComplete$;
 
   /// Test / subclass constructor. Use when all methods are overridden and no
   /// resolver is needed (e.g. recording mocks in widget tests).
-  LinkOptionService.withoutResolver() : _resolver = null, _metaResolver = null;
+  LinkOptionService.withoutResolver()
+    : _resolver = null,
+      _metaResolver = null,
+      _syncCompleteStream = null;
 
   /// Fetches link options via the resolver (DB-first + background refresh when online).
   Future<List<LinkOptionEntity>> getLinkOptions(

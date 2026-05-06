@@ -58,6 +58,62 @@ void main() {
     await db.close();
   });
 
+  test(
+    'pullSyncMany returns empty SyncResults per doctype in online mode',
+    () async {
+      final db = await AppDatabase.inMemoryDatabase();
+      final client = FrappeClient('http://localhost');
+      final repo = OfflineRepository(
+        db,
+        offlineMode: const OfflineMode(enabled: false, isPersisted: true),
+        client: client,
+      );
+      final sync = SyncService(
+        client,
+        repo,
+        db,
+        getMobileUuid: () async => 'test-uuid',
+        offlineMode: const OfflineMode(enabled: false, isPersisted: true),
+      );
+
+      final results = await sync.pullSyncMany(
+        doctypes: ['Customer', 'Supplier', 'State'],
+      );
+      expect(results.keys, ['Customer', 'Supplier', 'State']);
+      for (final r in results.values) {
+        expect(r.success, 0);
+        expect(r.failed, 0);
+        expect(r.total, 0);
+      }
+      await db.close();
+    },
+  );
+
+  test('pullSyncMany with empty doctype list returns empty map', () async {
+    final db = await AppDatabase.inMemoryDatabase();
+    final client = FrappeClient('http://localhost');
+    final repo = OfflineRepository(
+      db,
+      offlineMode: const OfflineMode(enabled: true, isPersisted: true),
+      client: client,
+    );
+    final sync = SyncService(
+      client,
+      repo,
+      db,
+      getMobileUuid: () async => 'test-uuid',
+      offlineMode: const OfflineMode(enabled: true, isPersisted: true),
+    );
+
+    // No isOnline gate is reached when offlineMode disabled; with mode
+    // enabled and an empty list the result must still be empty without
+    // exercising the network — verifies `pullSyncMany` short-circuits
+    // cleanly on empty input.
+    final results = await sync.pullSyncMany(doctypes: []);
+    expect(results, isEmpty);
+    await db.close();
+  });
+
   test('getSyncStats returns zeros in online mode', () async {
     final db = await AppDatabase.inMemoryDatabase();
     final client = FrappeClient('http://localhost');

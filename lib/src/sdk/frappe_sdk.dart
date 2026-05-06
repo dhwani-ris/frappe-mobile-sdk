@@ -155,7 +155,11 @@ class FrappeSDK {
       client: _client,
     );
     _resolver = testResolver;
-    _linkOptionService = LinkOptionService(testResolver, testMetaFn);
+    _linkOptionService = LinkOptionService(
+      testResolver,
+      testMetaFn,
+      syncComplete$: _syncCompleteController?.stream,
+    );
     _offlineTransitionService = OfflineTransitionService(
       database: _database!,
       drainSyncFactory: () async => SyncService(
@@ -228,8 +232,13 @@ class FrappeSDK {
       metaDao: DoctypeMetaDao(rawDb),
       isOnline: () => _cachedOnline,
       backgroundFetch: (doctype, _) async {
+        // Use the waiting variant — when the closure-pull batch holds
+        // the SyncMutex, we want this call to queue behind it instead
+        // of returning "Sync already in progress" silently. The picker
+        // that triggered us is showing empty until data lands, so
+        // dropping the request is the worse outcome.
         try {
-          await syncSvc.pullSync(doctype: doctype);
+          await syncSvc.pullSyncWaiting(doctype: doctype);
         } catch (e, st) {
           // ignore: avoid_print
           print('FrappeSDK: background pullSync($doctype) failed — $e\n$st');
@@ -240,7 +249,11 @@ class FrappeSDK {
       client: _client!,
     );
     _resolver = resolver;
-    _linkOptionService = LinkOptionService(resolver, metaFn);
+    _linkOptionService = LinkOptionService(
+      resolver,
+      metaFn,
+      syncComplete$: _syncCompleteController?.stream,
+    );
 
     // Build the offline-transition service. It owns its own broadcast
     // stream; consumers subscribe via `sdk.offlineTransition.stream`.
@@ -939,20 +952,33 @@ class FrappeSDK {
     try {
       final entryPoints = await _metaService!.getMobileFormDoctypeNames();
       final closure = await _metaService!.closure(entryPoints);
-      final toPull = closure.doctypes
-          .where((d) => !closure.childDoctypes.contains(d))
-          .toList();
-      for (final doctype in toPull) {
+      final pullable = <String>[];
+      for (final doctype in closure.doctypes) {
+        if (closure.childDoctypes.contains(doctype)) continue;
         if (_permissionService != null &&
             !await _permissionService!.canRead(doctype)) {
           continue;
         }
-        try {
-          await _syncService!.pullSync(doctype: doctype);
-        } catch (e, st) {
+        pullable.add(doctype);
+      }
+      if (pullable.isEmpty) {
+        _syncCompleteController?.add(null);
+        return;
+      }
+      // Bounded-parallel batch via SyncService.pullSyncMany — one mutex hold
+      // for the whole closure instead of one-per-doctype, so helper masters
+      // (State, District, Block, Village, …) drain alongside entry points
+      // and Link pickers see populated tables sooner. Per-doctype failures
+      // surface in the result map; the batch keeps going.
+      final results = await _syncService!.pullSyncMany(
+        doctypes: pullable,
+        concurrency: 4,
+      );
+      for (final entry in results.entries) {
+        final err = entry.value.error;
+        if (err != null && err.isNotEmpty) {
           // ignore: avoid_print
-          print('FrappeSDK: pullSync($doctype) failed — $e\n$st');
-          continue;
+          print('FrappeSDK: pullSync(${entry.key}) failed — $err');
         }
       }
     } catch (e, st) {
@@ -982,26 +1008,43 @@ class FrappeSDK {
       final entryPoints = await _metaService!.getMobileFormDoctypeNames();
       final entryPointSet = entryPoints.toSet();
       final closure = await _metaService!.closure(entryPoints);
-      final toPull = closure.doctypes
-          .where(
-            (d) =>
-                !entryPointSet.contains(d) &&
-                !closure.childDoctypes.contains(d),
-          )
-          .toList();
-      final dao = _database!.doctypeMetaDao;
-      for (final doctype in toPull) {
+      final pullable = <String>[];
+      for (final doctype in closure.doctypes) {
+        if (entryPointSet.contains(doctype)) continue;
+        if (closure.childDoctypes.contains(doctype)) continue;
         if (_permissionService != null &&
             !await _permissionService!.canRead(doctype)) {
           continue;
         }
+        pullable.add(doctype);
+      }
+      if (pullable.isEmpty) {
+        _syncCompleteController?.add(null);
+        return;
+      }
+      // Cursor reset must happen before the parallel batch so each worker
+      // reads a freshly-cleared cursor and re-fetches the entire dataset.
+      // Cheap (one UPDATE per doctype) so a sequential pre-pass is fine.
+      final dao = _database!.doctypeMetaDao;
+      for (final doctype in pullable) {
         try {
           await dao.clearLastOkCursor(doctype);
-          await _syncService!.pullSync(doctype: doctype);
         } catch (e, st) {
           // ignore: avoid_print
-          print('FrappeSDK: forcePullAll($doctype) failed — $e\n$st');
-          continue;
+          print(
+            'FrappeSDK: forcePullAll cursor-clear($doctype) failed — $e\n$st',
+          );
+        }
+      }
+      final results = await _syncService!.pullSyncMany(
+        doctypes: pullable,
+        concurrency: 4,
+      );
+      for (final entry in results.entries) {
+        final err = entry.value.error;
+        if (err != null && err.isNotEmpty) {
+          // ignore: avoid_print
+          print('FrappeSDK: forcePullAll(${entry.key}) failed — $err');
         }
       }
     } catch (e, st) {
