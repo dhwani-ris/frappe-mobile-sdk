@@ -12,7 +12,7 @@ import 'package:flutter_form_builder/flutter_form_builder.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:frappe_mobile_sdk/frappe_mobile_sdk.dart';
 import 'package:frappe_mobile_sdk/src/ui/widgets/fields/searchable_select.dart';
-import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+
 
 // ---------------------------------------------------------------------------
 // Test doubles
@@ -76,10 +76,7 @@ LinkOptionEntity _opt(String name) => LinkOptionEntity(
 // ---------------------------------------------------------------------------
 
 void main() {
-  setUpAll(() {
-    sqfliteFfiInit();
-    databaseFactory = databaseFactoryFfi;
-  });
+
 
   // ---- Loading state -------------------------------------------------------
 
@@ -308,6 +305,53 @@ void main() {
         expect(find.text('Select state first'), findsNothing);
       },
     );
+
+    testWidgets(
+      'options load when dependent field value is filled in',
+      (tester) async {
+        final formKey = GlobalKey<FormBuilderState>();
+        final service = _FakeLinkOptionService();
+
+        // Initial render: no dependent value → waiting state.
+        await tester.pumpWidget(_wrap(
+          LinkField(
+            field: _linkField(linkFilters: kLinkFilters),
+            linkOptionService: service,
+            formData: {},
+          ),
+          formKey: formKey,
+        ));
+        await tester.pump();
+        expect(find.text('Select state first'), findsAtLeastNWidgets(1));
+
+        // Rebuild with dependent value → triggers didUpdateWidget → _loadOptions.
+        await tester.pumpWidget(_wrap(
+          LinkField(
+            field: _linkField(linkFilters: kLinkFilters),
+            linkOptionService: service,
+            formData: {'state': 'Meghalaya'},
+          ),
+          formKey: formKey,
+        ));
+        await tester.pump(); // enter loading state
+
+        expect(
+          find.text('Select state first'),
+          findsNothing,
+          reason: 'Once dependent field is filled, widget must exit waiting state',
+        );
+
+        await tester.runAsync(() async => service.resolve([_opt('DistrictA')]));
+        await tester.pump();
+
+        expect(find.byType(SearchableSelect), findsOneWidget);
+        expect(
+          formKey.currentState!.value['test_link'],
+          isNull,
+          reason: 'Form value must remain null until user explicitly selects',
+        );
+      },
+    );
   });
 
   // ---- Options loaded state ------------------------------------------------
@@ -392,10 +436,14 @@ void main() {
         // SearchableSelect exposes a clear action (empty selection → null).
         final searchableSelect = find.byType(SearchableSelect);
         expect(searchableSelect, findsOneWidget);
-        // Trigger clear by passing empty list from SearchableSelect's onChanged
-        // callback; the widget maps [] → null.
-        final widget = tester.widget<SearchableSelect>(searchableSelect);
-        widget.onChanged([]);
+        
+        // Find and tap the clear button (IconButton with Icons.close).
+        final clearButton = find.descendant(
+          of: searchableSelect,
+          matching: find.byIcon(Icons.close),
+        );
+        expect(clearButton, findsOneWidget);
+        await tester.tap(clearButton);
         await tester.pump();
 
         expect(captured, isNull);
