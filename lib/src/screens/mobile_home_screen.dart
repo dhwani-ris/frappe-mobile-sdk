@@ -30,11 +30,17 @@ class MobileHomeScreen extends StatefulWidget {
 
   /// Optional builder to replace the default doctype tile.
   /// Renders as a child in a Column with dividers (no need to add dividers).
+  ///
+  /// `errorCount` is the number of stuck outbox rows for this doctype
+  /// (failed/blocked/conflict). Apps customizing the tile should
+  /// surface it visibly — the default tile renders a red `⚠ N error`
+  /// segment when `errorCount > 0`.
   final Widget Function(
     BuildContext context,
     String doctype,
     int count,
     int dirtyCount,
+    int errorCount,
   )?
   tileBuilder;
 
@@ -74,6 +80,7 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
   Map<String, List<String>> _groups = {};
   Map<String, int> _counts = {};
   Map<String, int> _dirtyCounts = {};
+  Map<String, int> _errorCounts = {};
   bool _loading = true;
   bool _isSyncing = false;
   bool _isForceSyncing = false;
@@ -103,6 +110,7 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
   }
 
   int get _totalDirty => _dirtyCounts.values.fold(0, (a, b) => a + b);
+  int get _totalErrors => _errorCounts.values.fold(0, (a, b) => a + b);
 
   Future<void> _load() async {
     setState(() => _loading = true);
@@ -137,11 +145,28 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
         }
       }
 
+      // One pendingErrors() call covers every doctype — bucket by
+      // doctype so each tile can surface its own error count.
+      final errorCounts = <String, int>{};
+      final controller = widget.sdk.syncController;
+      if (controller != null) {
+        try {
+          final rows = await controller.pendingErrors();
+          for (final r in rows) {
+            errorCounts[r.doctype] = (errorCounts[r.doctype] ?? 0) + 1;
+          }
+        } catch (e, st) {
+          // ignore: avoid_print
+          print('MobileHomeScreen: pendingErrors load failed — $e\n$st');
+        }
+      }
+
       if (mounted) {
         setState(() {
           _groups = groups;
           _counts = counts;
           _dirtyCounts = dirtyCounts;
+          _errorCounts = errorCounts;
           _loading = false;
         });
       }
@@ -204,6 +229,41 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
           ],
         ),
         actions: [
+          if (_totalErrors > 0)
+            Padding(
+              padding: const EdgeInsets.only(right: 4),
+              child: Center(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 3,
+                  ),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFFEBEE),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(
+                        Icons.error_outline,
+                        size: 12,
+                        color: Color(0xFFC62828),
+                      ),
+                      const SizedBox(width: 2),
+                      Text(
+                        '$_totalErrors',
+                        style: const TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          color: Color(0xFFC62828),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
           if (_totalDirty > 0)
             Padding(
               padding: const EdgeInsets.only(right: 4),
@@ -315,6 +375,7 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
             doctypes: entry.value,
             counts: _counts,
             dirtyCounts: _dirtyCounts,
+            errorCounts: _errorCounts,
             onDoctypeTap: _navigateToDoctype,
             groupHeaderBuilder: widget.groupHeaderBuilder,
             tileBuilder: widget.tileBuilder,
@@ -461,7 +522,9 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
 
     try {
       await widget.sdk.logout();
-    } catch (e) {
+    } catch (e, st) {
+      // ignore: avoid_print
+      print('MobileHomeScreen: logout failed — $e\n$st');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -515,7 +578,9 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
 
     try {
       await widget.sdk.forcePullAll();
-    } catch (e) {
+    } catch (e, st) {
+      // ignore: avoid_print
+      print('MobileHomeScreen: forcePullAll failed — $e\n$st');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -570,12 +635,15 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
               translate: (s) => widget.sdk.translations.translate(s),
               onFieldChange: widget.getFieldChangeHandler?.call(doctype),
               getLinkFilterBuilder: widget.getLinkFilterBuilder,
+              syncController: widget.sdk.syncController,
             ),
           ),
         );
         _load();
       }
-    } catch (e) {
+    } catch (e, st) {
+      // ignore: avoid_print
+      print('MobileHomeScreen: _navigateToDoctype failed — $e\n$st');
       if (mounted) {
         ScaffoldMessenger.of(context).hideCurrentSnackBar();
         ScaffoldMessenger.of(context).showSnackBar(
@@ -594,15 +662,17 @@ class _GroupCard extends StatefulWidget {
   final List<String> doctypes;
   final Map<String, int> counts;
   final Map<String, int> dirtyCounts;
+  final Map<String, int> errorCounts;
   final void Function(String doctype) onDoctypeTap;
   final Widget Function(BuildContext, String, int)? groupHeaderBuilder;
-  final Widget Function(BuildContext, String, int, int)? tileBuilder;
+  final Widget Function(BuildContext, String, int, int, int)? tileBuilder;
 
   const _GroupCard({
     required this.groupName,
     required this.doctypes,
     required this.counts,
     required this.dirtyCounts,
+    required this.errorCounts,
     required this.onDoctypeTap,
     this.groupHeaderBuilder,
     this.tileBuilder,
@@ -720,12 +790,16 @@ class _GroupCardState extends State<_GroupCard> {
                                   widget.doctypes[i],
                                   widget.counts[widget.doctypes[i]] ?? 0,
                                   widget.dirtyCounts[widget.doctypes[i]] ?? 0,
+                                  widget.errorCounts[widget.doctypes[i]] ?? 0,
                                 )
                               : _DoctypeTile(
                                   doctype: widget.doctypes[i],
                                   count: widget.counts[widget.doctypes[i]] ?? 0,
                                   dirtyCount:
                                       widget.dirtyCounts[widget.doctypes[i]] ??
+                                      0,
+                                  errorCount:
+                                      widget.errorCounts[widget.doctypes[i]] ??
                                       0,
                                   onTap: () =>
                                       widget.onDoctypeTap(widget.doctypes[i]),
@@ -758,12 +832,14 @@ class _DoctypeTile extends StatelessWidget {
   final String doctype;
   final int count;
   final int dirtyCount;
+  final int errorCount;
   final VoidCallback onTap;
 
   const _DoctypeTile({
     required this.doctype,
     required this.count,
     required this.dirtyCount,
+    required this.errorCount,
     required this.onTap,
   });
 
@@ -771,24 +847,17 @@ class _DoctypeTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
 
-    final String subtitle;
-    final Color subtitleColor;
-    if (dirtyCount > 0) {
-      subtitle = '\u2191 $dirtyCount unsynced';
-      subtitleColor = const Color(0xFFE65100);
-    } else if (count > 0) {
-      subtitle = '\u2713 all synced';
-      subtitleColor = const Color(0xFF388E3C);
-    } else {
-      subtitle = 'No records yet';
-      subtitleColor = const Color(0xFF9E9E9E);
-    }
-
+    final bool hasError = errorCount > 0;
     final bool hasUnsynced = dirtyCount > 0;
-    final chipColor = hasUnsynced
+
+    final chipColor = hasError
+        ? const Color(0xFFFFEBEE)
+        : hasUnsynced
         ? const Color(0xFFFFF3E0)
         : cs.surfaceContainerHighest;
-    final chipTextColor = hasUnsynced
+    final chipTextColor = hasError
+        ? const Color(0xFFC62828)
+        : hasUnsynced
         ? const Color(0xFFE65100)
         : count > 0
         ? cs.onSurface
@@ -813,13 +882,10 @@ class _DoctypeTile extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 2),
-                  Text(
-                    subtitle,
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: subtitleColor,
-                      fontWeight: FontWeight.w500,
-                    ),
+                  _Subtitle(
+                    count: count,
+                    dirtyCount: dirtyCount,
+                    errorCount: errorCount,
                   ),
                 ],
               ),
@@ -850,6 +916,91 @@ class _DoctypeTile extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Tile subtitle that composes up to three coloured segments \u2014 error
+/// count, unsynced count, "all synced" / "no records yet" \u2014 separated
+/// by middots. Error always wins as the dominant signal.
+class _Subtitle extends StatelessWidget {
+  final int count;
+  final int dirtyCount;
+  final int errorCount;
+
+  const _Subtitle({
+    required this.count,
+    required this.dirtyCount,
+    required this.errorCount,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final segments = <_TextSegment>[];
+    if (errorCount > 0) {
+      segments.add(
+        _TextSegment(
+          '\u26a0 $errorCount error${errorCount == 1 ? '' : 's'}',
+          const Color(0xFFC62828),
+          FontWeight.w600,
+        ),
+      );
+    }
+    if (dirtyCount > 0) {
+      segments.add(
+        _TextSegment(
+          '\u2191 $dirtyCount unsynced',
+          const Color(0xFFE65100),
+          FontWeight.w500,
+        ),
+      );
+    }
+    if (segments.isEmpty) {
+      if (count > 0) {
+        segments.add(
+          const _TextSegment(
+            '\u2713 all synced',
+            Color(0xFF388E3C),
+            FontWeight.w500,
+          ),
+        );
+      } else {
+        segments.add(
+          const _TextSegment(
+            'No records yet',
+            Color(0xFF9E9E9E),
+            FontWeight.w500,
+          ),
+        );
+      }
+    }
+    return RichText(
+      text: TextSpan(
+        children: [
+          for (var i = 0; i < segments.length; i++) ...[
+            if (i > 0)
+              const TextSpan(
+                text: ' \u00b7 ',
+                style: TextStyle(fontSize: 11, color: Color(0xFFBDBDBD)),
+              ),
+            TextSpan(
+              text: segments[i].text,
+              style: TextStyle(
+                fontSize: 11,
+                color: segments[i].color,
+                fontWeight: segments[i].weight,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _TextSegment {
+  final String text;
+  final Color color;
+  final FontWeight weight;
+  const _TextSegment(this.text, this.color, this.weight);
 }
 
 class _ConnectivityBadge extends StatelessWidget {

@@ -120,6 +120,47 @@ void main() {
     await t.db.close();
   });
 
+  test('progress probe updates drainedRecords as residue falls', () async {
+    // Drain takes long enough for the progress timer to fire at least
+    // once mid-flight. We tick the residue down in chunks during the
+    // drain step and verify the emitted TransitionDraining states
+    // reflect the falling count rather than staying pinned at 0.
+    var residue = 10;
+    final t = await _make([
+      () async {
+        residue = 7;
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        residue = 4;
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        residue = 0;
+      },
+    ], () async => residue);
+
+    final draining = <int>[];
+    final sub = t.service.stream.listen((s) {
+      if (s is TransitionDraining) draining.add(s.drainedRecords);
+    });
+
+    await t.service.runDrainAndWipe(
+      progressInterval: const Duration(milliseconds: 5),
+    );
+
+    // First emit is always 0 (start-of-drain). Subsequent emits must
+    // include at least one strictly-positive drained count, proving
+    // the probe ran and reported progress.
+    expect(draining.isNotEmpty, isTrue);
+    expect(draining.first, 0);
+    expect(
+      draining.any((d) => d > 0),
+      isTrue,
+      reason: 'progress probe should emit at least one non-zero drained count',
+    );
+
+    await sub.cancel();
+    await t.service.dispose();
+    await t.db.close();
+  });
+
   test('drain fails → forceExit → Completed', () async {
     var residue = 3;
     final t = await _make([

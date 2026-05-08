@@ -62,6 +62,14 @@ class SyncController {
   final FetchSingleDocFn fetchSingleDoc;
   final ApplySingleDocFn applySingleDoc;
 
+  /// Optional. Resolves a `server_name` for a given `(doctype, mobile_uuid)`
+  /// by reading `docs__<doctype>`. Used by [resolveConflict] because the
+  /// slim outbox no longer carries `server_name` directly. When null,
+  /// `resolveConflict` cannot drive a server fetch — `pullAndOverwriteLocal`
+  /// falls back to the "INSERT never reached the server" branch.
+  final Future<String?> Function(String doctype, String mobileUuid)?
+  resolveServerName;
+
   SyncController({
     required this.outboxDao,
     required this.notifier,
@@ -70,6 +78,7 @@ class SyncController {
     required this.runPullForDoctypes,
     required this.fetchSingleDoc,
     required this.applySingleDoc,
+    this.resolveServerName,
   });
 
   SyncState get state => notifier.value;
@@ -81,10 +90,37 @@ class SyncController {
   /// paused.
   Future<void> syncNow() async {
     if (notifier.value.isPaused) return;
-    final deferred = await runPull();
-    await runPush();
+    Set<String> deferred = const <String>{};
+    try {
+      deferred = await runPull();
+    } catch (e, st) {
+      // Pull failed — runPush still runs so dirty rows can drain even
+      // when the server-read side has issues. PullEngine.run's own
+      // finally already resets `isPulling`. syncNow is best-effort:
+      // surface via SyncState.lastError, not by throwing.
+      // ignore: avoid_print
+      print('SyncController.syncNow: runPull failed — $e\n$st');
+    }
+    try {
+      await runPush();
+    } catch (e, st) {
+      // PushEngine.runOnce wraps its body in try/finally, so isPushing
+      // is already reset. Same best-effort contract as the pull above.
+      // ignore: avoid_print
+      print('SyncController.syncNow: runPush failed — $e\n$st');
+    }
     if (deferred.isNotEmpty) {
-      await runPullForDoctypes(deferred);
+      try {
+        await runPullForDoctypes(deferred);
+      } catch (e, st) {
+        // SIG-2 deferred re-pull is best-effort; the doctypes will be
+        // picked up on the next syncNow when push activity has settled.
+        // ignore: avoid_print
+        print(
+          'SyncController.syncNow: runPullForDoctypes($deferred) failed — '
+          '$e\n$st',
+        );
+      }
     }
   }
 
@@ -164,7 +200,12 @@ class SyncController {
     final row = await outboxDao.findById(outboxId);
     if (row == null) return;
     if (action == ConflictAction.pullAndOverwriteLocal) {
-      final serverName = row.serverName;
+      // Slim outbox: `server_name` lives on docs__<doctype>; resolve via
+      // the injected callback. Fall back to null when the SDK didn't
+      // wire one (early test harnesses).
+      final serverName = resolveServerName == null
+          ? null
+          : await resolveServerName!(row.doctype, row.mobileUuid);
       if (serverName == null || serverName.isEmpty) {
         // INSERT that never reached the server — there is nothing to
         // fetch. Close the outbox row; per-doctype row stays as the
@@ -216,7 +257,11 @@ class SyncController {
             ),
           );
         }
-      } catch (_) {
+      } catch (e, st) {
+        // ignore: avoid_print
+        print(
+          'SyncController.previewDeleteCascade: blockedBy parse failed — $e\n$st',
+        );
         blocked = const {};
       }
     }

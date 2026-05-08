@@ -1,4 +1,7 @@
 import 'dart:async';
+
+import 'package:flutter/foundation.dart';
+
 import '../models/doc_field.dart';
 import '../models/doc_type_meta.dart';
 import '../models/link_filter_result.dart';
@@ -244,7 +247,10 @@ class LinkFieldCoordinator {
         if (!req.completer.isCompleted) {
           req.completer.complete(options);
         }
-      } catch (e) {
+      } catch (e, st) {
+        debugPrint(
+          'LinkFieldCoordinator: queue worker failed for ${req.doctype} — $e\n$st',
+        );
         if (!req.completer.isCompleted) {
           req.completer.complete([]);
         }

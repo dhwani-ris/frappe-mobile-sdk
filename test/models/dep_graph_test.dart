@@ -5,7 +5,7 @@ import 'package:frappe_mobile_sdk/src/models/dep_graph.dart';
 void main() {
   group('DepGraph', () {
     test('round-trip to/from JSON', () {
-      final g = DepGraph(
+      final g = const DepGraph(
         doctype: 'Sales Order',
         tier: 1,
         outgoing: [
@@ -39,11 +39,11 @@ void main() {
     });
 
     test('empty graph', () {
-      final g = DepGraph(
+      final g = const DepGraph(
         doctype: 'Leaf',
         tier: 0,
-        outgoing: const [],
-        incoming: const [],
+        outgoing: [],
+        incoming: [],
       );
       final json = jsonEncode(g.toJson());
       final back = DepGraph.fromJson(jsonDecode(json) as Map<String, dynamic>);
@@ -52,32 +52,16 @@ void main() {
     });
 
     test('linkTargetCountByField for index policy', () {
-      final g = DepGraph(
+      final g = const DepGraph(
         doctype: 'SO',
         tier: 0,
         outgoing: [
-          DepEdge(
-            field: 'a',
-            targetDoctype: 'X',
-            kind: DepEdgeKind.link,
-          ),
-          DepEdge(
-            field: 'b',
-            targetDoctype: 'Y',
-            kind: DepEdgeKind.link,
-          ),
-          DepEdge(
-            field: 'items',
-            targetDoctype: 'Z',
-            kind: DepEdgeKind.child,
-          ),
+          DepEdge(field: 'a', targetDoctype: 'X', kind: DepEdgeKind.link),
+          DepEdge(field: 'b', targetDoctype: 'Y', kind: DepEdgeKind.link),
+          DepEdge(field: 'items', targetDoctype: 'Z', kind: DepEdgeKind.child),
         ],
         incoming: [
-          DepEdge(
-            field: 'other',
-            targetDoctype: 'Q',
-            kind: DepEdgeKind.link,
-          ),
+          DepEdge(field: 'other', targetDoctype: 'Q', kind: DepEdgeKind.link),
         ],
       );
       final counts = g.linkEdgeCountByField();

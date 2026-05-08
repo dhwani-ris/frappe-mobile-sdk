@@ -2,10 +2,8 @@ import '../models/doc_field.dart';
 import '../models/doc_type_meta.dart';
 import 'push_error.dart';
 
-typedef ResolveServerNameFn = Future<String?> Function(
-  String doctype,
-  String mobileUuid,
-);
+typedef ResolveServerNameFn =
+    Future<String?> Function(String doctype, String mobileUuid);
 
 /// Substitutes local `mobile_uuid` Link values with server names. Spec §5.2.
 ///
@@ -54,11 +52,13 @@ class UuidRewriter {
         final rewrittenList = <Map<String, Object?>>[];
         for (final row in value) {
           final rowMap = Map<String, Object?>.from(row as Map);
-          rewrittenList.add(await rewrite(
-            meta: childMeta,
-            payload: rowMap,
-            resolveServerName: resolveServerName,
-          ));
+          rewrittenList.add(
+            await rewrite(
+              meta: childMeta,
+              payload: rowMap,
+              resolveServerName: resolveServerName,
+            ),
+          );
         }
         out[key] = rewrittenList;
         continue;
@@ -89,8 +89,10 @@ class UuidRewriter {
             targetUuid: value.toString(),
           );
         }
-        final serverName =
-            await resolveServerName(targetDoctype, value.toString());
+        final serverName = await resolveServerName(
+          targetDoctype,
+          value.toString(),
+        );
         if (serverName == null) {
           throw BlockedByUpstream(
             field: key,

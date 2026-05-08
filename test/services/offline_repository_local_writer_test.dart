@@ -6,7 +6,6 @@ import 'package:frappe_mobile_sdk/src/database/schema/child_schema.dart';
 import 'package:frappe_mobile_sdk/src/database/schema/parent_schema.dart';
 import 'package:frappe_mobile_sdk/src/models/doc_field.dart';
 import 'package:frappe_mobile_sdk/src/models/doc_type_meta.dart';
-import 'package:frappe_mobile_sdk/src/models/meta_resolver.dart';
 import 'package:frappe_mobile_sdk/src/query/unified_resolver.dart';
 import 'package:frappe_mobile_sdk/src/services/local_writer.dart';
 import 'package:frappe_mobile_sdk/src/services/offline_repository.dart';
@@ -38,11 +37,7 @@ void main() {
   final childMeta = DocTypeMeta(
     name: 'Order Item',
     isTable: true,
-    fields: [
-      f('item_name', 'Data'),
-      f('size', 'Data'),
-      f('color', 'Select'),
-    ],
+    fields: [f('item_name', 'Data'), f('size', 'Data'), f('color', 'Select')],
   );
 
   setUp(() async {
@@ -51,38 +46,43 @@ void main() {
     // Persist meta JSON so OfflineRepository._loadMeta + LocalWriter's
     // metaResolver can find them.
     await appDb.doctypeMetaDao.upsertMetaJson(
-        'Order', jsonEncode(parentMeta.toJson()));
+      'Order',
+      jsonEncode(parentMeta.toJson()),
+    );
     await appDb.doctypeMetaDao.upsertMetaJson(
-        'Order Item', jsonEncode(childMeta.toJson()));
+      'Order Item',
+      jsonEncode(childMeta.toJson()),
+    );
 
     // Pre-create the per-doctype tables (the closure-pull would do this
     // in production after login).
-    for (final s
-        in buildParentSchemaDDL(parentMeta, tableName: 'docs__order')) {
+    for (final s in buildParentSchemaDDL(
+      parentMeta,
+      tableName: 'docs__order',
+    )) {
       await appDb.rawDatabase.execute(s);
     }
-    for (final s
-        in buildChildSchemaDDL(childMeta, tableName: 'docs__order_item')) {
+    for (final s in buildChildSchemaDDL(
+      childMeta,
+      tableName: 'docs__order_item',
+    )) {
       await appDb.rawDatabase.execute(s);
     }
 
-    final writer = LocalWriter(
-      appDb.rawDatabase,
-      (dt) async {
-        final entity = await appDb.doctypeMetaDao.findByDoctype(dt);
-        if (entity == null) throw StateError('no meta for $dt');
-        return DocTypeMeta.fromJson(jsonDecode(entity.metaJson));
-      },
-    );
+    final writer = LocalWriter(appDb.rawDatabase, (dt) async {
+      final entity = await appDb.doctypeMetaDao.findByDoctype(dt);
+      if (entity == null) throw StateError('no meta for $dt');
+      return DocTypeMeta.fromJson(jsonDecode(entity.metaJson));
+    });
     repo = OfflineRepository(appDb, localWriter: writer);
   });
 
   tearDown(() async => appDb.rawDatabase.close());
 
   test(
-    'createDocument writes parent + splits children into per-doctype tables',
+    'saveDocument writes parent + splits children into per-doctype tables',
     () async {
-      await repo.createDocument(
+      await repo.saveDocument(
         doctype: 'Order',
         data: {
           'mobile_uuid': 'p-uuid-1',
@@ -94,11 +94,6 @@ void main() {
           ],
         },
       );
-
-      // Legacy store has the parent doc (entire JSON in one row).
-      final legacy = await appDb.documentDao.findByDoctype('Order');
-      expect(legacy.length, 1);
-      expect(legacy.first.status, 'dirty');
 
       // Per-doctype parent table.
       final parents = await appDb.rawDatabase.query('docs__order');
@@ -125,9 +120,9 @@ void main() {
   );
 
   test(
-    'updateDocumentData replaces children atomically (delete + insert)',
+    'saveDocument (update path) replaces children atomically (delete + insert)',
     () async {
-      final initial = await repo.createDocument(
+      final uuid = await repo.saveDocument(
         doctype: 'Order',
         data: {
           'mobile_uuid': 'p-uuid-2',
@@ -140,10 +135,18 @@ void main() {
         },
       );
 
-      await repo.updateDocumentData(
-        initial.localId,
-        {
-          'mobile_uuid': 'p-uuid-2',
+      // Promote to synced so the second save takes the UPDATE branch.
+      await appDb.rawDatabase.update(
+        'docs__order',
+        {'sync_status': 'synced', 'server_name': 'ORD-001'},
+        where: 'mobile_uuid=?',
+        whereArgs: [uuid],
+      );
+
+      await repo.saveDocument(
+        doctype: 'Order',
+        data: {
+          'mobile_uuid': uuid,
           'title': 'updated',
           'items': [
             {'item_name': 'X'},
@@ -161,10 +164,10 @@ void main() {
   );
 
   test(
-    'saveServerDocument promotes the offline-saved row instead of duplicating',
+    'applyServerDocument promotes the offline-saved row instead of duplicating',
     () async {
       // Step 1: offline save.
-      await repo.createDocument(
+      await repo.saveDocument(
         doctype: 'Order',
         data: {
           'mobile_uuid': 'p-uuid-3',
@@ -176,10 +179,21 @@ void main() {
         },
       );
 
-      // Step 2: push completes; server returns name.
-      await repo.saveServerDocument(
+      // Simulate post-push state: server returned ORD-00042. We mirror
+      // it via applyServerDocument. PullApply.applyPage skips dirty rows
+      // by default (the local edit is presumed authoritative), so we
+      // first promote the offline row to synced — the equivalent of what
+      // PushEngine._writeBack would do on a successful push.
+      await appDb.rawDatabase.update(
+        'docs__order',
+        {'sync_status': 'synced', 'server_name': 'ORD-00042'},
+        where: 'mobile_uuid=?',
+        whereArgs: ['p-uuid-3'],
+      );
+
+      await repo.applyServerDocument(
         doctype: 'Order',
-        serverId: 'ORD-00042',
+        serverName: 'ORD-00042',
         data: {
           'mobile_uuid': 'p-uuid-3',
           'name': 'ORD-00042',
@@ -205,7 +219,7 @@ void main() {
     'UnifiedResolver returns offline child rows without sync_status error',
     () async {
       // Offline-save a parent with 2 child rows.
-      await repo.createDocument(
+      await repo.saveDocument(
         doctype: 'Order',
         data: {
           'mobile_uuid': 'p-uuid-4',
@@ -227,16 +241,17 @@ void main() {
       expect(childRows.length, 2);
 
       // Build a resolver that reads from the same in-memory DB.
-      MetaResolverFn metaFn = (dt) async {
+      Future<DocTypeMeta> metaFn(String dt) async {
         final entity = await appDb.doctypeMetaDao.findByDoctype(dt);
         if (entity == null) throw StateError('no meta for $dt');
         return DocTypeMeta.fromJson(jsonDecode(entity.metaJson));
-      };
+      }
+
       final resolver = UnifiedResolver(
         db: appDb.rawDatabase,
         metaDao: appDb.doctypeMetaDao,
         isOnline: () => false,
-        backgroundFetch: (_, __) async {},
+        backgroundFetch: (_, _) async {},
         metaResolver: metaFn,
       );
 

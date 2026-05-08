@@ -32,7 +32,10 @@ String extractErrorMessage(dynamic body) {
       if (serverMsg != null && serverMsg.isNotEmpty) {
         raw = serverMsg;
       }
-    } catch (_) {}
+    } catch (e, st) {
+      // ignore: avoid_print
+      print('extractErrorMessage: _server_messages parse failed — $e\n$st');
+    }
   }
 
   if (raw == null && body.containsKey('exception')) {
@@ -78,7 +81,10 @@ String? _extractServerMessage(dynamic body) {
           return msg['message']?.toString();
         }
       }
-    } catch (_) {}
+    } catch (e, st) {
+      // ignore: avoid_print
+      print('_extractServerMessage: jsonDecode failed — $e\n$st');
+    }
   }
   return null;
 }

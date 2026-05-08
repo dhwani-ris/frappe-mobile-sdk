@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:sqflite/sqflite.dart';
 
 typedef OnCreateFn = Future<void> Function(Database db);
@@ -23,9 +24,10 @@ class AtomicWipe {
         if (await file.exists()) {
           await file.delete();
         }
-      } catch (_) {
+      } catch (e, st) {
         // best-effort: -wal / -shm may already be gone, or the OS may
         // hold a transient lock. Continue rather than abort the wipe.
+        debugPrint('AtomicWipe.wipe: delete($dbPath$suffix) failed — $e\n$st');
       }
     }
     final db = await databaseFactory.openDatabase(dbPath);

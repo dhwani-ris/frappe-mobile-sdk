@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart';
+
 import '../api/client.dart';
 import '../database/app_database.dart';
 import '../database/entities/doctype_permission_entity.dart';
@@ -46,7 +48,8 @@ class PermissionService {
       final data = result['data'] as Map<String, dynamic>? ?? result;
       await saveFromLoginResponse(data['permissions']);
       return data;
-    } catch (_) {
+    } catch (e, st) {
+      debugPrint('PermissionService.syncFromApi failed — $e\n$st');
       return null;
     }
   }

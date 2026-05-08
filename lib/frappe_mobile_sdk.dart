@@ -20,9 +20,7 @@ export 'src/models/link_filter_result.dart';
 // Database
 export 'src/database/app_database.dart';
 export 'src/database/entities/doctype_meta_entity.dart';
-export 'src/database/entities/document_entity.dart';
 export 'src/database/daos/doctype_meta_dao.dart';
-export 'src/database/daos/document_dao.dart';
 
 // API Client (Direct Frappe API Access)
 export 'src/api/client.dart' show FrappeClient;
@@ -126,8 +124,6 @@ export 'src/ui/widgets/document_list_filter_chip.dart'
     show DocumentListFilterChip, DocumentListFilter, DocumentListFilterCounts;
 export 'src/ui/widgets/delete_cascade_prompt.dart'
     show showDeleteCascadePrompt, DeleteCascadeAction;
-export 'src/ui/screens/migration_blocked_screen.dart'
-    show MigrationBlockedScreen;
 export 'src/ui/screens/sync_errors_screen.dart' show SyncErrorsScreen;
 export 'src/ui/screens/sync_progress_screen.dart' show SyncProgressScreen;
 export 'src/ui/dialogs/logout_guard_dialog.dart'

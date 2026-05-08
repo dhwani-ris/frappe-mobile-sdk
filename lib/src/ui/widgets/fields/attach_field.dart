@@ -63,7 +63,11 @@ class AttachField extends BaseField {
                               onChanged?.call(url);
                             }
                             // On failure do not store local path (server expects file_url)
-                          } catch (_) {}
+                          } catch (e, st) {
+                            debugPrint(
+                              'AttachField: uploadFile failed — $e\n$st',
+                            );
+                          }
                         } else {
                           fieldState.didChange(path);
                           onChanged?.call(path);

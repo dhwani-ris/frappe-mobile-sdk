@@ -12,14 +12,13 @@ import '../models/meta_resolver.dart';
 /// Writes a form-save payload to the per-doctype `docs__<doctype>` parent
 /// table and `docs__<child_doctype>` child tables in a single transaction.
 ///
-/// Called alongside the legacy `OfflineRepository.createDocument` so the
-/// new offline-first read path ([UnifiedResolver]) sees newly-saved data
-/// — fixes the case where Link pickers on other forms cannot find
-/// offline-created child rows that live only in the legacy `documents`
-/// JSON blob.
+/// `docs__<doctype>` is the source of truth for offline reads
+/// ([UnifiedResolver]) and writes (push) post-retirement. Used by
+/// [OfflineRepository.saveDocument] for offline saves and by
+/// [OfflineRepository.applyServerDocument] for pulled rows.
 ///
-/// The same `mobile_uuid` is used in both stores so [markSynced] can
-/// reconcile `server_name` after push sync completes.
+/// `mobile_uuid` is the parent PK; [markSynced] reconciles `server_name`
+/// onto the same row after a successful push.
 class LocalWriter {
   final Database _db;
   final MetaResolverFn _metaResolver;
@@ -31,34 +30,103 @@ class LocalWriter {
   static const _systemParentColumns = systemParentColumnNames;
   static const _systemChildColumns = systemChildColumnNames;
 
+  /// Convenience: opens a single-shot transaction and delegates to
+  /// [writeParentInTxn]. Pre-resolves the parent + child metas BEFORE
+  /// opening the txn so the resolver — which typically queries the
+  /// `doctype_meta` table through the outer Database — does not deadlock
+  /// against the in-flight write txn (sqflite serializes outer reads
+  /// behind the txn). Returns the parent's `mobile_uuid`.
+  Future<String> writeParent({
+    required String parentDoctype,
+    required Map<String, dynamic> data,
+    String? serverName,
+    String? syncOp,
+    String? pushBasePayload,
+  }) async {
+    final rawUuid = data['mobile_uuid'] as String?;
+    final mobileUuid = (rawUuid != null && rawUuid.isNotEmpty)
+        ? rawUuid
+        : _uuid.v4();
+
+    // Pre-resolve metas outside the txn (deadlock guard).
+    final parentMeta = await _metaResolver(parentDoctype);
+    final childMetasByDoctype = <String, DocTypeMeta>{};
+    for (final f in parentMeta.fields) {
+      final opt = f.options;
+      if ((f.fieldtype == 'Table' || f.fieldtype == 'Table MultiSelect') &&
+          opt != null &&
+          opt.isNotEmpty) {
+        try {
+          childMetasByDoctype[opt] = await _metaResolver(opt);
+        } catch (e, st) {
+          // ignore: avoid_print
+          print(
+            'LocalWriter.writeParent: child meta pre-resolve failed for '
+            '$opt — $e\n$st',
+          );
+        }
+      }
+    }
+
+    await _db.transaction((txn) async {
+      await writeParentInTxn(
+        txn: txn,
+        parentDoctype: parentDoctype,
+        mobileUuid: mobileUuid,
+        data: data,
+        serverName: serverName,
+        syncOp: syncOp,
+        pushBasePayload: pushBasePayload,
+        parentMeta: parentMeta,
+        childMetasByDoctype: childMetasByDoctype,
+      );
+    });
+    return mobileUuid;
+  }
+
   /// Writes (or replaces) a parent document + its child rows into the
-  /// per-doctype tables. Returns the parent's `mobile_uuid`.
+  /// per-doctype tables, inside a caller-supplied [Transaction], so the
+  /// parent + child writes can be part of a wider spanning txn (e.g. the
+  /// `OfflineRepository.saveDocument` save which also enqueues an outbox
+  /// row in the same atomic unit).
   ///
   /// [data] is the form payload. `Table` / `Table MultiSelect` fields are
   /// split out into the child doctype's own table.
   ///
-  /// If `data['mobile_uuid']` is set, it's used as the parent PK so the
-  /// row aligns with the legacy `documents` row's mobile_uuid for later
-  /// server-name reconciliation. Otherwise a new UUID is generated.
+  /// `data['mobile_uuid']` becomes the parent PK so a later push can
+  /// reconcile `server_name` onto the same row.
   ///
   /// [serverName] — when non-null (server-first save returned a name),
   /// `server_name` is populated and `sync_status='synced'`. Otherwise
   /// `sync_status='dirty'`.
   ///
   /// Silently no-ops if the parent table doesn't exist yet (initial sync
-  /// hasn't run). The legacy write path still records the doc, so no data
-  /// is lost.
-  Future<String> writeParent({
+  /// hasn't run).
+  ///
+  /// [parentMeta] / [childMetasByDoctype] — when supplied, the metaResolver
+  /// is bypassed entirely. This is the production-recommended path for
+  /// in-txn callers, since [_metaResolver] typically queries `doctype_meta`
+  /// through the outer Database which would deadlock against the txn (the
+  /// sqflite write queue serializes outer reads behind in-flight txns).
+  Future<void> writeParentInTxn({
+    required Transaction txn,
     required String parentDoctype,
+    required String mobileUuid,
     required Map<String, dynamic> data,
     String? serverName,
+    String? syncOp,
+    String? pushBasePayload,
+    DocTypeMeta? parentMeta,
+    Map<String, DocTypeMeta>? childMetasByDoctype,
   }) async {
-    final parentMeta = await _metaResolver(parentDoctype);
+    // Resolve metas BEFORE doing any work inside the txn. The metaResolver
+    // typically queries `doctype_meta` through the outer Database, which
+    // would deadlock against our in-flight write txn (sqflite serializes
+    // reads/writes through one queue). Caller may pre-resolve and pass them
+    // in to skip the resolver entirely.
+    parentMeta ??= await _metaResolver(parentDoctype);
     final parentTable = normalizeDoctypeTableName(parentDoctype);
-    final rawUuid = data['mobile_uuid'] as String?;
-    final mobileUuid = (rawUuid != null && rawUuid.isNotEmpty)
-        ? rawUuid
-        : _uuid.v4();
+    if (!await sqliteTableExists(txn, parentTable)) return;
     final nowMs = DateTime.now().toUtc().millisecondsSinceEpoch;
 
     final childInfos = <String, _ChildInfo>{};
@@ -70,129 +138,132 @@ class LocalWriter {
           fn != null &&
           opt != null &&
           opt.isNotEmpty) {
-        try {
-          final cm = await _metaResolver(opt);
-          childInfos[fn] = _ChildInfo(opt, cm);
-        } catch (_) {
-          // Child meta unavailable — skip splitting; legacy table still
-          // holds the nested array, so the data isn't lost.
+        DocTypeMeta? cm = childMetasByDoctype?[opt];
+        if (cm == null) {
+          try {
+            cm = await _metaResolver(opt);
+          } catch (e, st) {
+            // ignore: avoid_print
+            print(
+              'LocalWriter.writeParentInTxn: child meta resolve failed for '
+              '$opt — $e\n$st',
+            );
+            continue;
+          }
         }
+        childInfos[fn] = _ChildInfo(opt, cm);
       }
     }
 
     final normFields = parentMeta.normFieldNames;
 
-    await _db.transaction((txn) async {
-      if (!await sqliteTableExists(txn, parentTable)) return;
+    final parentRow = <String, Object?>{
+      'mobile_uuid': mobileUuid,
+      'server_name': serverName,
+      'sync_status': serverName != null ? 'synced' : 'dirty',
+      'sync_op': ?syncOp,
+      'docstatus': _coerceInt(data['docstatus']) ?? 0,
+      'modified': data['modified']?.toString(),
+      'local_modified': nowMs,
+      'push_base_payload': ?pushBasePayload,
+    };
 
-      final parentRow = <String, Object?>{
-        'mobile_uuid': mobileUuid,
-        'server_name': serverName,
-        'sync_status': serverName != null ? 'synced' : 'dirty',
-        'docstatus': _coerceInt(data['docstatus']) ?? 0,
-        'modified': data['modified']?.toString(),
-        'local_modified': nowMs,
-      };
+    for (final f in parentMeta.fields) {
+      final name = f.fieldname;
+      final type = f.fieldtype;
+      if (name == null) continue;
+      if (type == 'Table' || type == 'Table MultiSelect') continue;
+      final sqlType = sqliteColumnTypeFor(type);
+      if (sqlType == null) continue;
+      if (_systemParentColumns.contains(name)) continue;
+      if (!data.containsKey(name)) continue;
 
-      for (final f in parentMeta.fields) {
-        final name = f.fieldname;
-        final type = f.fieldtype;
-        if (name == null) continue;
-        if (type == 'Table' || type == 'Table MultiSelect') continue;
-        final sqlType = sqliteColumnTypeFor(type);
-        if (sqlType == null) continue;
-        if (_systemParentColumns.contains(name)) continue;
-        if (!data.containsKey(name)) continue;
+      final v = _coerce(data[name], sqlType);
+      parentRow[name] = v;
 
-        final v = _coerce(data[name], sqlType);
-        parentRow[name] = v;
-
-        if (isLinkFieldType(type)) {
-          // Default to server-known. When the form picker selects a
-          // local-only target row, the caller is expected to pass
-          // `<field>__is_local: 1` in `data` directly (handled below).
-          parentRow['${name}__is_local'] =
-              _coerceInt(data['${name}__is_local']) ?? 0;
-        }
-        if (normFields.contains(name) && sqlType == 'TEXT') {
-          parentRow['${name}__norm'] = normalizeForSearch(v?.toString());
-        }
+      if (isLinkFieldType(type)) {
+        // Default to server-known. When the form picker selects a
+        // local-only target row, the caller is expected to pass
+        // `<field>__is_local: 1` in `data` directly (handled below).
+        parentRow['${name}__is_local'] =
+            _coerceInt(data['${name}__is_local']) ?? 0;
       }
+      if (normFields.contains(name) && sqlType == 'TEXT') {
+        parentRow['${name}__norm'] = normalizeForSearch(v?.toString());
+      }
+    }
 
-      await txn.insert(
-        parentTable,
-        parentRow,
-        conflictAlgorithm: ConflictAlgorithm.replace,
+    await txn.insert(
+      parentTable,
+      parentRow,
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+
+    for (final entry in childInfos.entries) {
+      final fieldname = entry.key;
+      final childInfo = entry.value;
+      final childTable = normalizeDoctypeTableName(childInfo.doctype);
+      if (!await sqliteTableExists(txn, childTable)) continue;
+
+      await txn.delete(
+        childTable,
+        where: 'parent_uuid = ? AND parentfield = ?',
+        whereArgs: [mobileUuid, fieldname],
       );
 
-      for (final entry in childInfos.entries) {
-        final fieldname = entry.key;
-        final childInfo = entry.value;
-        final childTable = normalizeDoctypeTableName(childInfo.doctype);
-        if (!await sqliteTableExists(txn, childTable)) continue;
+      final list = data[fieldname];
+      if (list is! List) continue;
 
-        await txn.delete(
-          childTable,
-          where: 'parent_uuid = ? AND parentfield = ?',
-          whereArgs: [mobileUuid, fieldname],
-        );
+      for (var idx = 0; idx < list.length; idx++) {
+        final raw = list[idx];
+        if (raw is! Map) continue;
+        final cr = Map<String, dynamic>.from(raw);
+        final rawChildUuid = cr['mobile_uuid'] as String?;
+        final childUuid = (rawChildUuid != null && rawChildUuid.isNotEmpty)
+            ? rawChildUuid
+            : _uuid.v4();
+        final childServerName = cr['name']?.toString();
 
-        final list = data[fieldname];
-        if (list is! List) continue;
+        final childRow = <String, Object?>{
+          'mobile_uuid': childUuid,
+          'server_name': childServerName,
+          'parent_uuid': mobileUuid,
+          'parent_doctype': parentDoctype,
+          'parentfield': fieldname,
+          'idx': idx,
+          'modified': cr['modified']?.toString(),
+        };
 
-        for (var idx = 0; idx < list.length; idx++) {
-          final raw = list[idx];
-          if (raw is! Map) continue;
-          final cr = Map<String, dynamic>.from(raw);
-          final rawChildUuid = cr['mobile_uuid'] as String?;
-          final childUuid = (rawChildUuid != null && rawChildUuid.isNotEmpty)
-              ? rawChildUuid
-              : _uuid.v4();
-          final childServerName = cr['name']?.toString();
+        for (final cf in childInfo.meta.fields) {
+          final cn = cf.fieldname;
+          final ct = cf.fieldtype;
+          if (cn == null) continue;
+          if (ct == 'Table' || ct == 'Table MultiSelect') continue;
+          final cSqlType = sqliteColumnTypeFor(ct);
+          if (cSqlType == null) continue;
+          if (_systemChildColumns.contains(cn)) continue;
+          if (!cr.containsKey(cn)) continue;
 
-          final childRow = <String, Object?>{
-            'mobile_uuid': childUuid,
-            'server_name': childServerName,
-            'parent_uuid': mobileUuid,
-            'parent_doctype': parentDoctype,
-            'parentfield': fieldname,
-            'idx': idx,
-            'modified': cr['modified']?.toString(),
-          };
-
-          for (final cf in childInfo.meta.fields) {
-            final cn = cf.fieldname;
-            final ct = cf.fieldtype;
-            if (cn == null) continue;
-            if (ct == 'Table' || ct == 'Table MultiSelect') continue;
-            final cSqlType = sqliteColumnTypeFor(ct);
-            if (cSqlType == null) continue;
-            if (_systemChildColumns.contains(cn)) continue;
-            if (!cr.containsKey(cn)) continue;
-
-            final v = _coerce(cr[cn], cSqlType);
-            childRow[cn] = v;
-            if (isLinkFieldType(ct)) {
-              childRow['${cn}__is_local'] =
-                  _coerceInt(cr['${cn}__is_local']) ?? 0;
-            }
+          final v = _coerce(cr[cn], cSqlType);
+          childRow[cn] = v;
+          if (isLinkFieldType(ct)) {
+            childRow['${cn}__is_local'] =
+                _coerceInt(cr['${cn}__is_local']) ?? 0;
           }
-
-          await txn.insert(
-            childTable,
-            childRow,
-            conflictAlgorithm: ConflictAlgorithm.replace,
-          );
         }
-      }
-    });
 
-    return mobileUuid;
+        await txn.insert(
+          childTable,
+          childRow,
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
+      }
+    }
   }
 
   /// Updates `server_name` + `sync_status='synced'` on the parent row
-  /// after push sync confirms the doc landed on the server. Call this
-  /// from the same site that calls `OfflineRepository.saveServerDocument`.
+  /// after push sync confirms the doc landed on the server. Called by
+  /// [ResponseWriteback] on a successful push response.
   Future<void> markSynced({
     required String parentDoctype,
     required String mobileUuid,

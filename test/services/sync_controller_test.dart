@@ -34,7 +34,6 @@ void main() {
       doctype: 'X',
       mobileUuid: 'u',
       operation: OutboxOperation.insert,
-      payload: '{}',
     );
     await outbox.markFailed(
       id,
@@ -60,14 +59,17 @@ void main() {
     expect(pushCalls, 1);
   });
 
-  test('retry on done row is a no-op', () async {
+  test('retry on a done (deleted) row is a no-op', () async {
     final id = await outbox.insertPending(
       doctype: 'X',
       mobileUuid: 'u',
       operation: OutboxOperation.insert,
-      payload: '{}',
     );
+    // markDone deletes the row outright (slim outbox: holds only
+    // owed-to-server work).
     await outbox.markDone(id, serverName: 'X-1');
+    expect(await outbox.findById(id), isNull);
+
     var pushCalls = 0;
     final ctrl = SyncController(
       outboxDao: outbox,
@@ -79,9 +81,7 @@ void main() {
       applySingleDoc: noopApply,
     );
     await ctrl.retry(id);
-    final r = await outbox.findById(id);
-    expect(r!.state, OutboxState.done);
-    expect(pushCalls, 0);
+    expect(pushCalls, 0, reason: 'retry on a missing id is a no-op');
   });
 
   test('retryAll requeues failed/conflict/blocked into pending', () async {
@@ -89,7 +89,6 @@ void main() {
       doctype: 'X',
       mobileUuid: 'u1',
       operation: OutboxOperation.insert,
-      payload: '{}',
     );
     await outbox.markFailed(
       idPerm,
@@ -100,7 +99,6 @@ void main() {
       doctype: 'X',
       mobileUuid: 'u2',
       operation: OutboxOperation.insert,
-      payload: '{}',
     );
     await outbox.markFailed(
       idNet,
@@ -131,13 +129,11 @@ void main() {
       doctype: 'A',
       mobileUuid: 'a',
       operation: OutboxOperation.insert,
-      payload: '{}',
     );
     final idB = await outbox.insertPending(
       doctype: 'B',
       mobileUuid: 'b',
       operation: OutboxOperation.insert,
-      payload: '{}',
     );
     await outbox.markFailed(
       idA,
@@ -188,14 +184,12 @@ void main() {
   });
 
   test(
-    'resolveConflict pullAndOverwriteLocal: fetches, applies, marks done',
+    'resolveConflict pullAndOverwriteLocal: fetches, applies, deletes outbox row',
     () async {
       final id = await outbox.insertPending(
         doctype: 'Customer',
         mobileUuid: 'u-conflict',
-        serverName: 'CUST-1',
         operation: OutboxOperation.update,
-        payload: '{}',
       );
       await outbox.markConflict(id, errorMessage: 'mismatch');
 
@@ -223,6 +217,8 @@ void main() {
         runPush: () async {},
         fetchSingleDoc: fakeFetch,
         applySingleDoc: fakeApply,
+        // Slim outbox: server_name lives on docs__; resolve via callback.
+        resolveServerName: (dt, uuid) async => 'CUST-1',
       );
 
       await ctrl.resolveConflict(
@@ -236,8 +232,8 @@ void main() {
       expect(applied.length, 1);
       expect(applied.first[0], 'Customer');
       expect((applied.first[1] as Map)['customer_name'], 'Server Name');
-      final r = await outbox.findById(id);
-      expect(r!.state, OutboxState.done);
+      // markDone now deletes the outbox row (slim outbox).
+      expect(await outbox.findById(id), isNull);
     },
   );
 
@@ -247,9 +243,7 @@ void main() {
       final id = await outbox.insertPending(
         doctype: 'Customer',
         mobileUuid: 'u-conflict',
-        serverName: 'CUST-1',
         operation: OutboxOperation.update,
-        payload: '{}',
       );
       await outbox.markConflict(id, errorMessage: 'mismatch');
 
@@ -270,6 +264,8 @@ void main() {
         runPush: () async {},
         fetchSingleDoc: failingFetch,
         applySingleDoc: trackingApply,
+        // Slim outbox: server_name lives on docs__; resolve via callback.
+        resolveServerName: (dt, uuid) async => 'CUST-1',
       );
 
       await expectLater(
@@ -293,7 +289,6 @@ void main() {
         mobileUuid: 'u-conflict',
         // No serverName — INSERT that never reached the server.
         operation: OutboxOperation.insert,
-        payload: '{}',
       );
       await outbox.markConflict(id, errorMessage: 'mismatch');
 
@@ -319,8 +314,8 @@ void main() {
       );
 
       expect(fetchCalled, isFalse);
-      final r = await outbox.findById(id);
-      expect(r!.state, OutboxState.done);
+      // markDone now deletes the outbox row (slim outbox).
+      expect(await outbox.findById(id), isNull);
     },
   );
 
@@ -329,7 +324,6 @@ void main() {
       doctype: 'X',
       mobileUuid: 'u',
       operation: OutboxOperation.update,
-      payload: '{}',
     );
     await outbox.markConflict(id, errorMessage: 'x');
     var pushCalls = 0;
@@ -376,7 +370,6 @@ void main() {
       doctype: 'X',
       mobileUuid: 'f',
       operation: OutboxOperation.insert,
-      payload: '{}',
     );
     await outbox.markFailed(
       idF,
@@ -387,14 +380,12 @@ void main() {
       doctype: 'X',
       mobileUuid: 'c',
       operation: OutboxOperation.update,
-      payload: '{}',
     );
     await outbox.markConflict(idC, errorMessage: 'x');
     final idB = await outbox.insertPending(
       doctype: 'X',
       mobileUuid: 'b',
       operation: OutboxOperation.insert,
-      payload: '{}',
     );
     await outbox.markBlocked(idB, reason: 'parent unsynced');
 

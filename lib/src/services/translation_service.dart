@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart';
+
 import '../api/client.dart';
 
 /// Fetches and caches Frappe translations (mobile_auth.get_translations).
@@ -50,7 +52,8 @@ class TranslationService {
       );
       _cache[lang] = map;
       return map;
-    } catch (_) {
+    } catch (e, st) {
+      debugPrint('TranslationService.loadTranslations($lang) failed — $e\n$st');
       return {};
     }
   }

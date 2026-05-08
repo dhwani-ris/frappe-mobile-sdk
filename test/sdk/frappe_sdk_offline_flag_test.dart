@@ -150,5 +150,65 @@ void main() {
       expect(sdk.offlineModeForTesting.enabled, isFalse);
       await sub.cancel();
     });
+
+    // Tolerance cases — pin the contract that the login response can be
+    // shaped by an older mobile_control server (missing field, null,
+    // non-boolean) without crashing the SDK or accidentally enabling
+    // offline mode. The production predicate is
+    // `response['offline_enabled'] == true`, which yields false for any
+    // non-`true` value. Section 7.1 of the migration spec.
+
+    test(
+      'field absent (stale mobile_control) → stays disabled, no throw',
+      () async {
+        sdk = FrappeSDK.forTesting(
+          'http://localhost',
+          db,
+          offlineMode: const OfflineMode(enabled: false, isPersisted: false),
+        );
+        await sdk.persistOfflineFlagFromLoginForTesting(<String, dynamic>{});
+        final persisted = await SdkMetaDao(db.rawDatabase).readOfflineMode();
+        expect(persisted.enabled, isFalse);
+        expect(persisted.isPersisted, isTrue);
+        expect(sdk.offlineModeForTesting.enabled, isFalse);
+      },
+    );
+
+    test('field present but null → stays disabled, no throw', () async {
+      sdk = FrappeSDK.forTesting(
+        'http://localhost',
+        db,
+        offlineMode: const OfflineMode(enabled: false, isPersisted: false),
+      );
+      await sdk.persistOfflineFlagFromLoginForTesting({
+        'offline_enabled': null,
+      });
+      expect(sdk.offlineModeForTesting.enabled, isFalse);
+    });
+
+    test(
+      'field is string "true" → stays disabled (no truthiness coercion)',
+      () async {
+        sdk = FrappeSDK.forTesting(
+          'http://localhost',
+          db,
+          offlineMode: const OfflineMode(enabled: false, isPersisted: false),
+        );
+        await sdk.persistOfflineFlagFromLoginForTesting({
+          'offline_enabled': 'true',
+        });
+        expect(sdk.offlineModeForTesting.enabled, isFalse);
+      },
+    );
+
+    test('field is integer 1 → stays disabled (no integer coercion)', () async {
+      sdk = FrappeSDK.forTesting(
+        'http://localhost',
+        db,
+        offlineMode: const OfflineMode(enabled: false, isPersisted: false),
+      );
+      await sdk.persistOfflineFlagFromLoginForTesting({'offline_enabled': 1});
+      expect(sdk.offlineModeForTesting.enabled, isFalse);
+    });
   });
 }

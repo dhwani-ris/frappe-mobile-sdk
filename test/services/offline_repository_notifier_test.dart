@@ -23,17 +23,17 @@ void main() {
       client: FrappeClient('http://localhost'),
     );
 
-    // enabled=true → getDirtyDocumentsByDoctype returns local rows (empty list).
-    final dirty1 = await repo.getDirtyDocumentsByDoctype('Customer');
-    expect(dirty1, isEmpty);
+    // Initial state from notifier flows through.
     expect(repo.offlineMode.enabled, isTrue);
 
-    // Flip to online mode → getter reflects immediately.
+    // Flip the notifier → getter reflects immediately (live read,
+    // not a captured snapshot).
     notifier.value = const OfflineMode(enabled: false, isPersisted: true);
     expect(repo.offlineMode.enabled, isFalse);
 
-    // enabled=false → short-circuits to empty immediately.
-    final dirty2 = await repo.getDirtyDocumentsByDoctype('Customer');
-    expect(dirty2, isEmpty);
+    // And back.
+    notifier.value = const OfflineMode(enabled: true, isPersisted: false);
+    expect(repo.offlineMode.enabled, isTrue);
+    expect(repo.offlineMode.isPersisted, isFalse);
   });
 }

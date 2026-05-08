@@ -17,6 +17,12 @@ class LinkOptionEntity {
   /// Last updated timestamp (milliseconds since epoch)
   final int lastUpdated;
 
+  /// True when the underlying row had no `server_name` — `name` is then a
+  /// `mobile_uuid` for an offline-only target. The form must record this on
+  /// pick so [UuidRewriter] rewrites the UUID to the target's server name
+  /// after the dependency push lands.
+  final bool isLocal;
+
   LinkOptionEntity({
     this.id,
     required this.doctype,
@@ -24,6 +30,7 @@ class LinkOptionEntity {
     this.label,
     this.dataJson,
     required this.lastUpdated,
+    this.isLocal = false,
   });
 
   /// Convert from database map

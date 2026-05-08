@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:sqflite/sqflite.dart';
 
 import '../concurrency/concurrency_pool.dart';
@@ -7,6 +8,7 @@ import '../concurrency/write_queue.dart';
 import '../database/daos/doctype_meta_dao.dart';
 import '../database/daos/outbox_dao.dart';
 import '../database/daos/pending_attachment_dao.dart';
+import '../database/sqlite_utils.dart';
 import '../database/table_name.dart';
 import '../models/doc_type_meta.dart';
 import '../models/meta_resolver.dart';
@@ -138,12 +140,44 @@ class PushEngine {
       // Resume any in_flight rows left over from a crash mid-dispatch.
       await outboxDao.resetInFlightToPending();
 
+      // Supersede pass — for any (doctype, mobile_uuid, operation) tuple
+      // with both a `failed` row AND a newer `pending` row, delete the
+      // older failed row directly. Keeps the outbox a true pending-work-
+      // only table (Invariant 2) and avoids a redundant retry that the
+      // newer pending row already covers.
+      await db.execute('''
+        DELETE FROM outbox
+         WHERE id IN (
+           SELECT older.id
+             FROM outbox older
+             JOIN outbox newer
+               ON older.doctype     = newer.doctype
+              AND older.mobile_uuid = newer.mobile_uuid
+              AND older.operation   = newer.operation
+              AND older.state       = '${OutboxState.failed.wireName}'
+              AND newer.state       = '${OutboxState.pending.wireName}'
+              AND older.created_at  < newer.created_at
+         )
+      ''');
+
       final pending = await outboxDao.findByState(OutboxState.pending);
       if (pending.isEmpty) return;
 
+      // Precompute real dependencies by scanning each pending row's
+      // `docs__<doctype>` mirror (+ children) for `<field>__is_local=1`
+      // Link values. Without this the default scanner returns `[]`
+      // (no `payload` column on outbox), and TierComputer collapses
+      // every row into tier 0 — racing parent INSERTs against dependent
+      // child INSERTs whose UuidRewriter then sees the parent's
+      // `server_name` as still-null and throws BlockedByUpstream.
+      final depsByRowId = <int, List<String>>{};
+      for (final row in pending) {
+        depsByRowId[row.id] = await _scanLocalDepsFor(row);
+      }
+
       final tiers = TierComputer.compute(
         rows: pending,
-        dependenciesForRow: dependencyScanner,
+        dependenciesForRow: (r) => depsByRowId[r.id] ?? dependencyScanner(r),
       );
 
       for (final tier in tiers) {
@@ -193,7 +227,10 @@ class PushEngine {
         errorCode: e.toErrorCode(),
         errorMessage: e.message,
       );
-    } catch (e) {
+    } catch (e, st) {
+      debugPrint(
+        'PushEngine: row(${row.id}, ${row.doctype}/${row.mobileUuid}) failed with unknown error — $e\n$st',
+      );
       await outboxDao.markFailed(
         row.id,
         errorCode: ErrorCode.UNKNOWN,
@@ -239,6 +276,31 @@ class PushEngine {
         await metaDao.getTableName(row.doctype) ??
         normalizeDoctypeTableName(row.doctype);
 
+    // Read the per-doc snapshot — it's the canonical source of truth for
+    // server_name and retry counters. The slim outbox no longer carries
+    // these; they live on `docs__<doctype>` (retirement Phase 1).
+    final docRows = await db.query(
+      parentTable,
+      columns: ['server_name', 'sync_attempts'],
+      where: 'mobile_uuid = ?',
+      whereArgs: [row.mobileUuid],
+      limit: 1,
+    );
+    final docRow = docRows.isEmpty ? const <String, Object?>{} : docRows.first;
+    final docServerName = docRow['server_name'] as String?;
+    final docRetryCount = (docRow['sync_attempts'] as int?) ?? 0;
+
+    // Bump retry counter + last_attempt_at on each attempt.
+    await db.update(
+      parentTable,
+      <String, Object?>{
+        'sync_attempts': docRetryCount + 1,
+        'last_attempt_at': DateTime.now().toUtc().millisecondsSinceEpoch,
+      },
+      where: 'mobile_uuid = ?',
+      whereArgs: [row.mobileUuid],
+    );
+
     var payload = await PayloadAssembler.assemble(
       db: db,
       row: row,
@@ -268,7 +330,7 @@ class PushEngine {
       }
 
       try {
-        return await send(method, payload, row.serverName);
+        return await send(method, payload, docServerName);
       } on DuplicateEntryError catch (e) {
         if (!isInsert) rethrow;
         return await _resolveDuplicate(row, decision, e);
@@ -354,26 +416,38 @@ class PushEngine {
     OutboxRow row,
     TimestampMismatchError err,
   ) async {
-    if (row.serverName == null) {
+    final parentTable =
+        await metaDao.getTableName(row.doctype) ??
+        normalizeDoctypeTableName(row.doctype);
+    final currentRows = await db.query(
+      parentTable,
+      where: 'mobile_uuid = ?',
+      whereArgs: [row.mobileUuid],
+      limit: 1,
+    );
+    if (currentRows.isEmpty) {
+      await outboxDao.markConflict(
+        row.id,
+        errorMessage: 'TimestampMismatch with no docs__ row to merge into',
+      );
+      return;
+    }
+    final currentRow = currentRows.first;
+    final docServerName = currentRow['server_name'] as String?;
+    if (docServerName == null) {
       await outboxDao.markConflict(
         row.id,
         errorMessage: 'TimestampMismatch on a row with no server_name',
       );
       return;
     }
-    final fresh = await serverFetcher(row.doctype, row.serverName!);
-    final parentTable =
-        await metaDao.getTableName(row.doctype) ??
-        normalizeDoctypeTableName(row.doctype);
-    final currentRow = (await db.query(
-      parentTable,
-      where: 'mobile_uuid = ?',
-      whereArgs: [row.mobileUuid],
-      limit: 1,
-    )).first;
-    final base = row.payload == null
+    final fresh = await serverFetcher(row.doctype, docServerName);
+    // Base for ThreeWayMerge: the pre-edit snapshot captured by
+    // OfflineRepository.saveDocument and stored on docs__.push_base_payload.
+    final basePayload = currentRow['push_base_payload'] as String?;
+    final base = (basePayload == null || basePayload.isEmpty)
         ? <String, Object?>{}
-        : Map<String, Object?>.from(jsonDecode(row.payload!) as Map);
+        : Map<String, Object?>.from(jsonDecode(basePayload) as Map);
     final merged = ThreeWayMerge.mergeFields(
       base: base,
       ours: Map<String, Object?>.from(currentRow),
@@ -396,10 +470,13 @@ class PushEngine {
     mergedForUpdate['modified'] = fresh['modified'];
     mergedForUpdate['mobile_uuid'] = row.mobileUuid;
 
+    // Slim outbox no longer carries `retry_count` or `payload`; the
+    // retry counter lives on docs__.sync_attempts (already incremented
+    // in `_dispatchOnce`) and the merge base lives on
+    // docs__.push_base_payload. Just flip the row back to pending so
+    // PushEngine.runOnce picks it up on the next drain.
     final outboxUpdate = <String, Object?>{
       'state': OutboxState.pending.wireName,
-      'retry_count': row.retryCount + 1,
-      'payload': jsonEncode(merged),
     };
 
     // Route both writes through the per-doctype WriteQueue when wired so
@@ -488,6 +565,97 @@ class PushEngine {
         .map((m) => m.group(0)!)
         .where((u) => u != row.mobileUuid)
         .toList();
+  }
+
+  /// Reads the row's `docs__<doctype>` mirror (and child rows) and returns
+  /// every `<field>__is_local=1` value — these are mobile_uuids of
+  /// upstream targets that must land before this row can be pushed. Used
+  /// by [runOnce] to drive [TierComputer] so a parent INSERT lands in an
+  /// earlier tier than its dependents instead of racing in tier 0.
+  ///
+  /// Failures (missing table, meta resolve error) return an empty list —
+  /// the row falls through to whatever the default [dependencyScanner]
+  /// returns. Worst case the row gets an extra retry as `blocked` rather
+  /// than crashing the drain.
+  Future<List<String>> _scanLocalDepsFor(OutboxRow row) async {
+    final tableName = normalizeDoctypeTableName(row.doctype);
+    if (!await sqliteTableExists(db, tableName)) return const [];
+    final List<Map<String, Object?>> parentRows;
+    try {
+      parentRows = await db.query(
+        tableName,
+        where: 'mobile_uuid = ?',
+        whereArgs: [row.mobileUuid],
+        limit: 1,
+      );
+    } on DatabaseException {
+      return const [];
+    }
+    if (parentRows.isEmpty) return const [];
+    final parentData = parentRows.first;
+
+    final DocTypeMeta meta;
+    try {
+      meta = await metaResolver(row.doctype);
+    } catch (e, st) {
+      debugPrint('PushEngine: metaResolver(${row.doctype}) failed — $e\n$st');
+      return const [];
+    }
+
+    final deps = <String>{};
+    _collectLocalLinkValues(parentData, meta, deps);
+
+    for (final f in meta.fields) {
+      if (f.fieldtype != 'Table' && f.fieldtype != 'Table MultiSelect') {
+        continue;
+      }
+      final childDoctype = f.options;
+      if (childDoctype == null || childDoctype.isEmpty) continue;
+      final childTable = normalizeDoctypeTableName(childDoctype);
+      if (!await sqliteTableExists(db, childTable)) continue;
+      final List<Map<String, Object?>> childRows;
+      try {
+        childRows = await db.query(
+          childTable,
+          where: 'parent_uuid = ?',
+          whereArgs: [row.mobileUuid],
+        );
+      } on DatabaseException {
+        continue;
+      }
+      if (childRows.isEmpty) continue;
+      final DocTypeMeta childMeta;
+      try {
+        childMeta = await childMetaResolver(childDoctype);
+      } catch (e, st) {
+        debugPrint(
+          'PushEngine: childMetaResolver($childDoctype) failed — $e\n$st',
+        );
+        continue;
+      }
+      for (final cr in childRows) {
+        _collectLocalLinkValues(cr, childMeta, deps);
+      }
+    }
+
+    deps.remove(row.mobileUuid);
+    return deps.toList();
+  }
+
+  static void _collectLocalLinkValues(
+    Map<String, Object?> row,
+    DocTypeMeta meta,
+    Set<String> out,
+  ) {
+    for (final f in meta.fields) {
+      final name = f.fieldname;
+      if (name == null) continue;
+      if (f.fieldtype != 'Link' && f.fieldtype != 'Dynamic Link') continue;
+      if ((row['${name}__is_local'] as int?) != 1) continue;
+      final v = row[name]?.toString();
+      if (v == null || v.isEmpty) continue;
+      out.add(v);
+    }
   }
 }
 

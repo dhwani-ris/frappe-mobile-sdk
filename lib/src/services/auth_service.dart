@@ -258,7 +258,8 @@ class AuthService {
           <String>[];
       _language = message['language'] as String?;
       return message;
-    } catch (_) {
+    } catch (e, st) {
+      dev.log('fetchUserInfo failed — $e\n$st', name: 'Auth');
       return null;
     }
   }
@@ -382,8 +383,11 @@ class AuthService {
           );
           return true;
         }
-      } catch (_) {
-        // Continue to other auth methods
+      } catch (e, st) {
+        dev.log(
+          'restoreSession: mobile auth token read failed — $e\n$st',
+          name: 'Auth',
+        );
       }
     }
 
@@ -422,7 +426,11 @@ class AuthService {
           _client!.rest.setBearerToken(refreshed.accessToken);
           _isAuthenticated = true;
           return true;
-        } catch (_) {
+        } catch (e, st) {
+          dev.log(
+            'restoreSession: OAuth refresh failed, clearing tokens — $e\n$st',
+            name: 'Auth',
+          );
           await _clearOAuthTokens();
         }
       }
@@ -435,7 +443,11 @@ class AuthService {
         _client!.auth.setApiKey(apiKey, apiSecret);
         _isAuthenticated = true;
         return true;
-      } catch (_) {
+      } catch (e, st) {
+        dev.log(
+          'restoreSession: API key restore failed — $e\n$st',
+          name: 'Auth',
+        );
         return false;
       }
     }
@@ -593,7 +605,12 @@ class AuthService {
   Future<void> logout({bool clearDatabase = true}) async {
     try {
       await _client?.auth.logout();
-    } catch (_) {}
+    } catch (e, st) {
+      dev.log(
+        'logout: server logout failed (continuing local cleanup) — $e\n$st',
+        name: 'Auth',
+      );
+    }
     _client?.rest.setBearerToken(null);
     _isAuthenticated = false;
     _cachedUserInfo = null;
@@ -674,14 +691,20 @@ class AuthService {
                   _isAuthenticated = true;
                   return true;
                 }
-              } catch (_) {
-                // Refresh failed, clear tokens
+              } catch (e, st) {
+                dev.log(
+                  '_tryRefreshMobileAuthToken: refresh call failed, clearing tokens — $e\n$st',
+                  name: 'Auth',
+                );
                 await _database!.authTokenDao.deleteAll();
               }
             }
           }
-        } catch (_) {
-          // Continue to OAuth refresh
+        } catch (e, st) {
+          dev.log(
+            '_tryRefreshMobileAuthToken: token DAO read failed, falling back to OAuth — $e\n$st',
+            name: 'Auth',
+          );
         }
       }
 
@@ -722,7 +745,11 @@ class AuthService {
       );
       _client?.rest.setBearerToken(refreshed.accessToken);
       return true;
-    } catch (_) {
+    } catch (e, st) {
+      dev.log(
+        '_tryRefreshOAuthToken failed, clearing tokens — $e\n$st',
+        name: 'Auth',
+      );
       await _clearOAuthTokens();
       return false;
     }

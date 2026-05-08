@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart';
+
 import '../models/closure_result.dart';
 import '../models/dep_graph.dart';
 import '../models/doc_type_meta.dart';
@@ -62,16 +64,17 @@ class ClosureBuilder {
           final item = levelItems[myIdx];
           try {
             levelMetas[item.doctype] = await metaFetcher(item.doctype);
-          } catch (e) {
+          } catch (e, st) {
+            debugPrint(
+              'ClosureBuilder.metaFetcher(${item.doctype}) failed — $e\n$st',
+            );
             warnings.add('Missing meta for "${item.doctype}": $e');
           }
         }
       }
 
       final workerCount = metaConcurrency.clamp(1, levelItems.length);
-      await Future.wait(
-        [for (var i = 0; i < workerCount; i++) worker()],
-      );
+      await Future.wait([for (var i = 0; i < workerCount; i++) worker()]);
 
       // Apply the level's results sequentially — DepGraph maps and
       // child enqueueing don't tolerate concurrent mutation.
@@ -95,7 +98,9 @@ class ClosureBuilder {
             );
             continue;
           }
-          incoming.putIfAbsent(e.targetDoctype, () => []).add(
+          incoming
+              .putIfAbsent(e.targetDoctype, () => [])
+              .add(
                 DepEdge(
                   field: e.field,
                   targetDoctype: item.doctype,
@@ -103,10 +108,9 @@ class ClosureBuilder {
                 ),
               );
           if (!outgoingByDt.containsKey(e.targetDoctype)) {
-            nextFrontier.add(_QueueItem(
-              doctype: e.targetDoctype,
-              tier: item.tier + 1,
-            ));
+            nextFrontier.add(
+              _QueueItem(doctype: e.targetDoctype, tier: item.tier + 1),
+            );
           }
         }
       }
@@ -119,9 +123,10 @@ class ClosureBuilder {
         doctype: entry.key,
         tier: tierMap[entry.key] ?? 0,
         outgoing: entry.value.outgoing
-            .where((e) =>
-                e.targetDoctype !=
-                DependencyGraphBuilder.dynamicLinkSentinel)
+            .where(
+              (e) =>
+                  e.targetDoctype != DependencyGraphBuilder.dynamicLinkSentinel,
+            )
             .toList(),
         incoming: incoming[entry.key] ?? const [],
       );

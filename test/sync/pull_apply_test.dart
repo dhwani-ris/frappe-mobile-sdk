@@ -364,4 +364,153 @@ void main() {
     expect(rows.first['vendor_name'], 'Acme');
     expect(rows.first.containsKey('api_secret'), isFalse);
   });
+
+  test(
+    'child mobile_uuid is preserved across re-pull (regression: orphan Link)',
+    () async {
+      // Server returns the parent and one child with explicit mobile_uuid
+      // (mobile_control's Custom Field round-trips local identity).
+      const childUuid = 'fm-uuid-stable-1234';
+      Map<String, dynamic> page() => {
+        'name': 'SO-1',
+        'modified': '2026-01-01 00:00:00',
+        'customer': 'CUST-1',
+        'items': [
+          {
+            'mobile_uuid': childUuid,
+            'name': 'SO-1-IT-1',
+            'item_code': 'A',
+            'qty': 1,
+          },
+        ],
+      };
+
+      await PullApply.applyPage(
+        db: db,
+        parentMeta: parentMeta,
+        parentTable: 'docs__sales_order',
+        childMetasByFieldname: {
+          'items': PullApplyChildInfo('Sales Order Item', childMeta),
+        },
+        rows: [page()],
+      );
+      final firstChildren = await db.query('docs__sales_order_item');
+      expect(firstChildren.length, 1);
+      expect(
+        firstChildren.first['mobile_uuid'],
+        childUuid,
+        reason: 'first apply must adopt the server-supplied mobile_uuid',
+      );
+
+      // Re-pull (e.g. SyncController.syncNow's deferred re-pull path).
+      // The child's mobile_uuid must NOT change — outbound Link fields on
+      // other docs (e.g. Plus MIS Learner.learner_name) reference it.
+      await PullApply.applyPage(
+        db: db,
+        parentMeta: parentMeta,
+        parentTable: 'docs__sales_order',
+        childMetasByFieldname: {
+          'items': PullApplyChildInfo('Sales Order Item', childMeta),
+        },
+        rows: [page()],
+      );
+      final secondChildren = await db.query('docs__sales_order_item');
+      expect(secondChildren.length, 1);
+      expect(
+        secondChildren.first['mobile_uuid'],
+        childUuid,
+        reason:
+            're-pull must keep the same mobile_uuid; otherwise any Link field '
+            'pointing at the child becomes a permanent orphan',
+      );
+    },
+  );
+
+  test('child mobile_uuid falls back to v4 when server omits it', () async {
+    // Doctypes outside mobile_control workspace do not have the Custom
+    // Field, so `as_dict()` won't include `mobile_uuid`. Guarantee a
+    // valid uuid is still generated (length matches v4 36-char form).
+    await PullApply.applyPage(
+      db: db,
+      parentMeta: parentMeta,
+      parentTable: 'docs__sales_order',
+      childMetasByFieldname: {
+        'items': PullApplyChildInfo('Sales Order Item', childMeta),
+      },
+      rows: [
+        {
+          'name': 'SO-2',
+          'modified': '2026-01-01 00:00:00',
+          'customer': 'CUST-2',
+          'items': [
+            {'item_code': 'B', 'qty': 2},
+          ],
+        },
+      ],
+    );
+    final children = await db.query('docs__sales_order_item');
+    expect(children.length, 1);
+    final uuid = children.first['mobile_uuid'] as String;
+    expect(uuid.length, 36);
+    expect(uuid.contains('-'), isTrue);
+  });
+
+  test(
+    'preserves local child mobile_uuid by matching server_name on re-pull',
+    () async {
+      // Pull-after-push scenario: ResponseWriteback has stamped the
+      // local child with `server_name`, then a re-pull arrives with
+      // the same server_name but no echoed mobile_uuid (e.g. before
+      // mobile_control adds the Custom Field to a child doctype).
+      // Without server_name matching the row would be wiped and
+      // re-inserted with a fresh v4, orphaning every cross-doc Link.
+      const localChildUuid = 'local-fm-uuid-1';
+      await db.insert('docs__sales_order', {
+        'mobile_uuid': 'so-uuid-1',
+        'server_name': 'SO-100',
+        'sync_status': 'synced',
+        'local_modified': 1,
+        'customer': 'CUST',
+      });
+      await db.insert('docs__sales_order_item', {
+        'mobile_uuid': localChildUuid,
+        'server_name': 'SO-100-IT-1',
+        'parent_uuid': 'so-uuid-1',
+        'parent_doctype': 'Sales Order',
+        'parentfield': 'items',
+        'idx': 0,
+        'item_code': 'A',
+        'qty': 1,
+      });
+
+      await PullApply.applyPage(
+        db: db,
+        parentMeta: parentMeta,
+        parentTable: 'docs__sales_order',
+        childMetasByFieldname: {
+          'items': PullApplyChildInfo('Sales Order Item', childMeta),
+        },
+        rows: [
+          {
+            'name': 'SO-100',
+            'modified': '2026-01-02 00:00:00',
+            'customer': 'CUST',
+            'items': [
+              // No 'mobile_uuid' key — server didn't echo it.
+              {'name': 'SO-100-IT-1', 'item_code': 'A', 'qty': 1},
+            ],
+          },
+        ],
+      );
+      final children = await db.query('docs__sales_order_item');
+      expect(children.length, 1);
+      expect(
+        children.first['mobile_uuid'],
+        localChildUuid,
+        reason:
+            'server_name match must preserve the local mobile_uuid '
+            'so cross-doc Link references stay valid',
+      );
+    },
+  );
 }

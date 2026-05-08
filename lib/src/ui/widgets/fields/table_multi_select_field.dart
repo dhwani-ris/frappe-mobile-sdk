@@ -17,7 +17,7 @@ class TableMultiSelectFieldBase extends BaseField {
   final Map<String, dynamic> formData;
   final Map<String, dynamic> parentFormData;
   final LinkFilterBuilder? Function(String doctype, String fieldname)?
-      getLinkFilterBuilder;
+  getLinkFilterBuilder;
 
   const TableMultiSelectFieldBase({
     super.key,
@@ -72,7 +72,7 @@ class _Loader extends StatefulWidget {
   final Map<String, dynamic> formData;
   final Map<String, dynamic> parentFormData;
   final LinkFilterBuilder? Function(String doctype, String fieldname)?
-      getLinkFilterBuilder;
+  getLinkFilterBuilder;
 
   @override
   State<_Loader> createState() => _LoaderState();
@@ -120,7 +120,9 @@ class _LoaderState extends State<_Loader> {
           break;
         }
       }
-    } catch (_) {}
+    } catch (e, st) {
+      debugPrint('TableMultiSelectField: option load failed — $e\n$st');
+    }
     if (mounted) {
       setState(() => _loading = false);
       // Emit a clean list value into _formData immediately after load.

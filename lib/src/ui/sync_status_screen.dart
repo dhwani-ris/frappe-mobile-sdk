@@ -36,12 +36,14 @@ class _SyncStatusScreenState extends State<SyncStatusScreen> {
     });
 
     try {
+      // No `doctype` filter → scans every doctype with a docs__ table.
       final dirty = await widget.repository.getDirtyDocuments();
       setState(() {
         _dirtyDocuments = dirty;
         _isLoading = false;
       });
-    } catch (e) {
+    } catch (e, st) {
+      debugPrint('SyncStatusScreen._loadDirtyDocuments failed — $e\n$st');
       setState(() {
         _syncStatus = 'Error loading documents: $e';
         _isLoading = false;
@@ -82,7 +84,8 @@ class _SyncStatusScreenState extends State<SyncStatusScreen> {
           ),
         );
       }
-    } catch (e) {
+    } catch (e, st) {
+      debugPrint('SyncStatusScreen._syncAll failed — $e\n$st');
       setState(() {
         _syncStatus = 'Sync failed: $e';
         _isSyncing = false;
@@ -132,7 +135,8 @@ class _SyncStatusScreenState extends State<SyncStatusScreen> {
           ),
         );
       }
-    } catch (e) {
+    } catch (e, st) {
+      debugPrint('SyncStatusScreen._syncDoctype failed — $e\n$st');
       setState(() {
         _syncStatus = 'Sync failed: $e';
         _isSyncing = false;

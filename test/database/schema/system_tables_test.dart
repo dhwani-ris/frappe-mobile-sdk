@@ -23,12 +23,26 @@ void main() {
     test('outbox table exists with expected columns', () async {
       final rows = await db.rawQuery('PRAGMA table_info(outbox)');
       final names = rows.map((r) => r['name'] as String).toSet();
-      expect(names, containsAll(<String>{
-        'id', 'doctype', 'mobile_uuid', 'server_name',
-        'operation', 'payload', 'state',
-        'retry_count', 'last_attempt_at',
-        'error_message', 'error_code', 'created_at',
-      }));
+      // Slim outbox shape (retirement Phase 1): server_name, payload,
+      // retry_count, last_attempt_at moved to docs__<doctype>.
+      expect(
+        names,
+        containsAll(<String>{
+          'id',
+          'doctype',
+          'mobile_uuid',
+          'operation',
+          'state',
+          'created_at',
+          'error_code',
+          'error_message',
+        }),
+      );
+      // Removed columns must NOT be present.
+      expect(names.contains('server_name'), isFalse);
+      expect(names.contains('payload'), isFalse);
+      expect(names.contains('retry_count'), isFalse);
+      expect(names.contains('last_attempt_at'), isFalse);
     });
 
     test('outbox indexes exist', () async {
@@ -41,38 +55,60 @@ void main() {
     });
 
     test('pending_attachments table exists', () async {
-      final rows =
-          await db.rawQuery('PRAGMA table_info(pending_attachments)');
+      final rows = await db.rawQuery('PRAGMA table_info(pending_attachments)');
       final names = rows.map((r) => r['name'] as String).toSet();
-      expect(names, containsAll(<String>{
-        'id', 'parent_uuid', 'parent_doctype', 'parent_fieldname',
-        'local_path', 'file_name', 'mime_type', 'is_private',
-        'size_bytes', 'state', 'retry_count', 'last_attempt_at',
-        'error_message', 'server_file_name', 'server_file_url',
-        'created_at',
-      }));
+      expect(
+        names,
+        containsAll(<String>{
+          'id',
+          'parent_uuid',
+          'parent_doctype',
+          'parent_fieldname',
+          'local_path',
+          'file_name',
+          'mime_type',
+          'is_private',
+          'size_bytes',
+          'state',
+          'retry_count',
+          'last_attempt_at',
+          'error_message',
+          'server_file_name',
+          'server_file_url',
+          'created_at',
+        }),
+      );
     });
 
     test('sdk_meta table exists and seeds row', () async {
-      final rows =
-          await db.rawQuery('PRAGMA table_info(sdk_meta)');
+      final rows = await db.rawQuery('PRAGMA table_info(sdk_meta)');
       final names = rows.map((r) => r['name'] as String).toSet();
-      expect(names, containsAll(<String>{
-        'schema_version', 'session_user_json', 'bootstrap_done',
-      }));
+      expect(
+        names,
+        containsAll(<String>{
+          'schema_version',
+          'session_user_json',
+          'bootstrap_done',
+        }),
+      );
       final data = await db.rawQuery('SELECT * FROM sdk_meta');
-      expect(data, isNotEmpty,
-          reason: 'systemTablesDDL should seed a singleton row');
+      expect(
+        data,
+        isNotEmpty,
+        reason: 'systemTablesDDL should seed a singleton row',
+      );
     });
   });
 
-  group('doctypeMetaExtensionsDDL — adds new columns on existing doctype_meta', () {
-    late Database db;
+  group(
+    'doctypeMetaExtensionsDDL — adds new columns on existing doctype_meta',
+    () {
+      late Database db;
 
-    setUp(() async {
-      db = await databaseFactory.openDatabase(inMemoryDatabasePath);
-      // Seed a v1 doctype_meta like the current DoctypeMetaDao's schema.
-      await db.execute('''
+      setUp(() async {
+        db = await databaseFactory.openDatabase(inMemoryDatabasePath);
+        // Seed a v1 doctype_meta like the current DoctypeMetaDao's schema.
+        await db.execute('''
         CREATE TABLE doctype_meta (
           doctype TEXT PRIMARY KEY,
           meta_json TEXT NOT NULL,
@@ -80,27 +116,34 @@ void main() {
           sort_order INTEGER DEFAULT 0
         )
       ''');
-    });
+      });
 
-    tearDown(() async => db.close());
+      tearDown(() async => db.close());
 
-    test('adds meta_watermark, dep_graph_json, last_ok_cursor, etc.', () async {
-      for (final stmt in doctypeMetaExtensionsDDL()) {
-        await db.execute(stmt);
-      }
-      final rows = await db.rawQuery('PRAGMA table_info(doctype_meta)');
-      final names = rows.map((r) => r['name'] as String).toSet();
-      expect(names, containsAll(<String>{
-        'meta_watermark',
-        'dep_graph_json',
-        'last_ok_cursor',
-        'last_pull_started_at',
-        'last_pull_ok_at',
-        'is_entry_point',
-        'is_child_table',
-        'record_count',
-        'table_name',
-      }));
-    });
-  });
+      test(
+        'adds meta_watermark, dep_graph_json, last_ok_cursor, etc.',
+        () async {
+          for (final stmt in doctypeMetaExtensionsDDL()) {
+            await db.execute(stmt);
+          }
+          final rows = await db.rawQuery('PRAGMA table_info(doctype_meta)');
+          final names = rows.map((r) => r['name'] as String).toSet();
+          expect(
+            names,
+            containsAll(<String>{
+              'meta_watermark',
+              'dep_graph_json',
+              'last_ok_cursor',
+              'last_pull_started_at',
+              'last_pull_ok_at',
+              'is_entry_point',
+              'is_child_table',
+              'record_count',
+              'table_name',
+            }),
+          );
+        },
+      );
+    },
+  );
 }

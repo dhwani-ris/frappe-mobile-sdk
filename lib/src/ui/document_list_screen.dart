@@ -7,15 +7,18 @@ import '../api/client.dart';
 import '../models/doc_type_meta.dart';
 import '../models/document.dart';
 import '../models/link_filter_result.dart';
+import '../models/outbox_row.dart';
 import '../query/unified_resolver.dart';
 import '../services/link_option_service.dart';
 import '../services/meta_service.dart';
 import '../services/offline_repository.dart';
 import '../services/permission_service.dart';
+import '../services/sync_controller.dart';
 import '../services/sync_service.dart';
 import 'form_screen.dart';
 import 'widgets/form_builder.dart'
     show FrappeFormStyle, OnButtonPressedCallback, FieldChangeHandler;
+import 'widgets/sync_error_banner.dart' show humanizeOutboxError;
 
 /// Layout variants for [DocumentListScreen].
 enum DocumentListLayout { list, card }
@@ -86,6 +89,12 @@ class DocumentListScreen extends StatefulWidget {
   /// Optional form screen style passed to opened [FormScreen].
   final FormScreenStyle? formScreenStyle;
 
+  /// Imperative sync surface. When provided, list rows whose
+  /// `mobile_uuid` has a stuck outbox row (failed/blocked/conflict)
+  /// render a per-row error indicator, and the opened [FormScreen]
+  /// receives the same controller so its banner can offer Retry.
+  final SyncController? syncController;
+
   const DocumentListScreen({
     super.key,
     required this.doctype,
@@ -107,6 +116,7 @@ class DocumentListScreen extends StatefulWidget {
     this.style,
     this.formStyle,
     this.formScreenStyle,
+    this.syncController,
   });
 
   @override
@@ -127,6 +137,15 @@ class _DocumentListScreenState extends State<DocumentListScreen> {
   bool? _permCreate;
   bool? _permWrite;
   bool? _permDelete;
+
+  /// Stuck outbox rows for the current doctype, indexed by `mobile_uuid`.
+  /// Filled in [_pullDocuments] from a single
+  /// [SyncController.pendingErrors] query rather than one query per row.
+  /// A `mobile_uuid` may map to multiple rows (e.g., a blocked INSERT
+  /// followed by a queued UPDATE) — the worst-priority state drives the
+  /// per-row indicator.
+  final Map<String, List<OutboxRow>> _errorsByUuid =
+      <String, List<OutboxRow>>{};
 
   bool get _canCreate =>
       _permCreate ??
@@ -254,12 +273,33 @@ class _DocumentListScreenState extends State<DocumentListScreen> {
         }
       }
       final docs = await _fetchViaResolver();
+      await _refreshErrorIndex();
       if (mounted) setState(() => _documents = docs);
     } catch (e, st) {
       // ignore: avoid_print
       print('DocumentListScreen: _pullDocuments failed — $e\n$st');
     } finally {
       if (mounted) setState(() => _isSyncing = false);
+    }
+  }
+
+  /// Repopulates [_errorsByUuid] from `syncController.pendingErrors()`.
+  /// Best-effort: a query failure leaves the map empty rather than
+  /// blocking the list render. No-op when the list screen was hosted
+  /// without a SyncController.
+  Future<void> _refreshErrorIndex() async {
+    final controller = widget.syncController;
+    _errorsByUuid.clear();
+    if (controller == null) return;
+    try {
+      final all = await controller.pendingErrors();
+      for (final r in all) {
+        if (r.doctype != widget.doctype) continue;
+        _errorsByUuid.putIfAbsent(r.mobileUuid, () => <OutboxRow>[]).add(r);
+      }
+    } catch (e, st) {
+      // ignore: avoid_print
+      print('DocumentListScreen: pendingErrors load failed — $e\n$st');
     }
   }
 
@@ -461,6 +501,8 @@ class _DocumentListScreenState extends State<DocumentListScreen> {
                   statusValue.isNotEmpty &&
                   statusValue != 'null';
 
+              final errorRows = _errorsByUuid[doc.localId];
+              final hasError = errorRows != null && errorRows.isNotEmpty;
               final trailing = Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -476,7 +518,12 @@ class _DocumentListScreenState extends State<DocumentListScreen> {
                         materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                       ),
                     ),
-                  if (doc.status == 'dirty')
+                  if (hasError)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 6),
+                      child: _RowSyncErrorBadge(row: errorRows.first),
+                    ),
+                  if (doc.status == 'dirty' && !hasError)
                     const Icon(
                       Icons.cloud_upload,
                       color: Colors.orange,
@@ -558,7 +605,10 @@ class _DocumentListScreenState extends State<DocumentListScreen> {
           doc,
           widget.meta,
         );
-      } catch (_) {
+      } catch (e, st) {
+        debugPrint(
+          'DocumentListScreen: attachChildRows(${widget.doctype}) failed — $e\n$st',
+        );
         resolvedDoc = doc;
       }
     } else if (!isNew &&
@@ -571,15 +621,34 @@ class _DocumentListScreenState extends State<DocumentListScreen> {
           widget.doctype,
           doc.serverId!,
         );
-        // Update local repo with fresh server data so it's available offline too.
-        final updated = await widget.repository.saveServerDocument(
+        // Mirror fresh server data into docs__<doctype> so it's available
+        // offline too. applyServerDocument respects local sync_status —
+        // dirty/conflict rows are skipped to preserve unsynced edits.
+        try {
+          await widget.repository.applyServerDocument(
+            doctype: widget.doctype,
+            serverName: doc.serverId!,
+            data: freshData,
+          );
+        } catch (e, st) {
+          // Mirror is best-effort; the fresh data still drives the form.
+          // ignore: avoid_print
+          print(
+            'document_list_screen: applyServerDocument mirror failed for '
+            '${widget.doctype}/${doc.serverId} — $e\n$st',
+          );
+        }
+        resolvedDoc = Document.fromServer(
           doctype: widget.doctype,
           serverId: doc.serverId!,
           data: freshData,
+          localId: doc.localId,
         );
-        resolvedDoc = updated;
-      } catch (_) {
+      } catch (e, st) {
         // Network error — fall back to local cached data.
+        debugPrint(
+          'DocumentListScreen: getByName(${widget.doctype}/${doc.serverId}) failed — $e\n$st',
+        );
         resolvedDoc = doc;
       } finally {
         if (mounted) setState(() => _isSyncing = false);
@@ -609,6 +678,7 @@ class _DocumentListScreenState extends State<DocumentListScreen> {
           getLinkFilterBuilder: widget.getLinkFilterBuilder,
           style: widget.formStyle,
           screenStyle: widget.formScreenStyle,
+          syncController: widget.syncController,
           // Permissions
           readOnly: !isNew && !_canWrite,
           canSave: isNew ? _canCreate : _canWrite,
@@ -616,6 +686,51 @@ class _DocumentListScreenState extends State<DocumentListScreen> {
           translate: widget.translate,
         ),
       ),
+    ).then((_) {
+      // Banner state may have changed inside the form (retry tapped,
+      // save resolved a stuck row); refresh the per-row error index.
+      _refreshErrorIndex().then((_) {
+        if (mounted) setState(() {});
+      });
+    });
+  }
+}
+
+/// Compact icon that shows a colour cue + a tooltip with the
+/// human-readable headline. Tapping the row opens the form which has
+/// the full expandable banner.
+class _RowSyncErrorBadge extends StatelessWidget {
+  final OutboxRow row;
+  const _RowSyncErrorBadge({required this.row});
+
+  @override
+  Widget build(BuildContext context) {
+    final headline = humanizeOutboxError(row).headline;
+    final IconData icon;
+    final Color color;
+    switch (row.state) {
+      case OutboxState.blocked:
+        icon = Icons.hourglass_top_outlined;
+        color = const Color(0xFF8D6E00);
+        break;
+      case OutboxState.conflict:
+        icon = Icons.merge_type;
+        color = const Color(0xFFC62828);
+        break;
+      case OutboxState.failed:
+        icon = Icons.error_outline;
+        color = const Color(0xFFC62828);
+        break;
+      case OutboxState.pending:
+      case OutboxState.inFlight:
+      case OutboxState.done:
+        icon = Icons.sync;
+        color = Colors.grey;
+        break;
+    }
+    return Tooltip(
+      message: headline,
+      child: Icon(icon, color: color, size: 20),
     );
   }
 }

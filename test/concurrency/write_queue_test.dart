@@ -64,6 +64,33 @@ void main() {
     expect(r, 7);
   });
 
+  test('drains pending submits with error when database is closed', () async {
+    // Outer `db.transaction` failure (database closed mid-flight) used to
+    // leave already-queued submits hanging on their Completers forever
+    // because the kick loop's only catch was inside the transaction
+    // callback. Verify the queue now drains pending tasks with the same
+    // error so callers can observe the failure.
+    final q = WriteQueue(db: db, doctype: 'X', batchRows: 100);
+
+    // Close the database before any flush starts. The first submit's
+    // microtask enters _kick(), tries db.transaction(...), and throws.
+    await db.close();
+
+    final futs = <Future<void>>[
+      for (var i = 0; i < 5; i++)
+        q.submit<void>((txn) async {
+          await txn.insert('t', {'id': i, 'v': '$i'});
+        }),
+    ];
+
+    for (final f in futs) {
+      await expectLater(f, throwsA(isA<DatabaseException>()));
+    }
+
+    // Re-open for tearDown's close to be a no-op-safe.
+    db = await databaseFactory.openDatabase(inMemoryDatabasePath);
+  });
+
   test(
     'failed task in batch does not commit its partial writes; siblings do',
     () async {

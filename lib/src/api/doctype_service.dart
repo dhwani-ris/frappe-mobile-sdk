@@ -3,6 +3,9 @@
 
 import 'dart:convert';
 import 'dart:math' as math;
+
+import 'package:flutter/foundation.dart';
+
 import 'exceptions.dart';
 import 'rest_helper.dart';
 
@@ -45,7 +48,10 @@ class DoctypeService {
         }
       }
       return null;
-    } catch (_) {
+    } catch (e, st) {
+      debugPrint(
+        'DoctypeService.getDocTypeWatermark($doctype) failed — $e\n$st',
+      );
       return null;
     }
   }

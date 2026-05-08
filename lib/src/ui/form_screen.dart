@@ -7,13 +7,16 @@ import '../models/doc_field.dart';
 import '../models/doc_type_meta.dart';
 import '../models/document.dart';
 import '../models/link_filter_result.dart';
+import '../models/outbox_row.dart';
 import '../models/workflow_transition.dart';
 import '../services/link_option_service.dart';
 import '../services/meta_service.dart';
 import '../services/offline_repository.dart';
+import '../services/sync_controller.dart';
 import '../services/sync_service.dart';
 import '../services/workflow_service.dart';
-import 'sync_status_screen.dart';
+import '../utils/uuid_pattern.dart';
+import 'widgets/sync_error_banner.dart';
 import 'widgets/form_builder.dart'
     show
         FrappeFormBuilder,
@@ -77,13 +80,21 @@ class FormScreen extends StatefulWidget {
 
   /// Optional builder for runtime link filters. Called during link option resolution.
   final LinkFilterBuilder? Function(String doctype, String fieldname)?
-      getLinkFilterBuilder;
+  getLinkFilterBuilder;
 
   /// When true (default), use LinkFieldCoordinator for sequenced link option loading.
   final bool useLinkFieldCoordinator;
 
   /// Optional visual customization for AppBar/action buttons.
   final FormScreenStyle? screenStyle;
+
+  /// Imperative sync surface for the persistent in-form sync error
+  /// banner. When non-null and the document already has stuck outbox
+  /// rows (failed/blocked/conflict), a banner above the form lets the
+  /// user expand details and tap `Retry`. When null the banner is
+  /// suppressed entirely — useful in tests or hosting paths that have
+  /// no push engine wired.
+  final SyncController? syncController;
 
   const FormScreen({
     super.key,
@@ -107,14 +118,16 @@ class FormScreen extends StatefulWidget {
     this.getLinkFilterBuilder,
     this.useLinkFieldCoordinator = true,
     this.screenStyle,
+    this.syncController,
   });
 
   @override
   State<FormScreen> createState() => _FormScreenState();
 }
 
-class _FormScreenState extends State<FormScreen> {
+class _FormScreenState extends State<FormScreen> with WidgetsBindingObserver {
   bool _isSaving = false;
+  bool _isSyncing = false;
   String? _errorMessage;
   void Function()? _triggerSubmit;
 
@@ -122,6 +135,12 @@ class _FormScreenState extends State<FormScreen> {
   bool _workflowLoading = false;
   Map<String, dynamic>? _workflowUpdatedDocData;
   late WorkflowService? _workflowService;
+
+  /// Stuck outbox rows (failed/blocked/conflict) for `widget.document`,
+  /// or empty when the document is new or has no errors. Loaded from the
+  /// repo in [initState] / [didUpdateWidget] and refreshed on lifecycle
+  /// resume + after a Retry tap so the banner reflects the latest state.
+  List<OutboxRow> _syncErrorRows = const [];
 
   /// Baseline form data for dirty check. When current form data differs, show Save.
   Map<String, dynamic>? _baselineFormData;
@@ -180,9 +199,24 @@ class _FormScreenState extends State<FormScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _workflowService = widget.api != null ? WorkflowService(widget.api!) : null;
     _baselineFormData = Map<String, dynamic>.from(_currentDocData);
     _loadWorkflowTransitions();
+    _loadSyncErrors();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _loadSyncErrors();
+    }
   }
 
   @override
@@ -200,7 +234,78 @@ class _FormScreenState extends State<FormScreen> {
       _baselineFormData = Map<String, dynamic>.from(_currentDocData);
       _isFormDirty = false;
       _loadWorkflowTransitions();
+      _loadSyncErrors();
     }
+  }
+
+  Future<void> _loadSyncErrors() async {
+    final localId = widget.document?.localId;
+    if (localId == null || localId.isEmpty) {
+      if (_syncErrorRows.isNotEmpty && mounted) {
+        setState(() => _syncErrorRows = const []);
+      }
+      return;
+    }
+    try {
+      final rows = await widget.repository.getSyncErrorsForDoc(
+        doctype: widget.meta.name,
+        mobileUuid: localId,
+      );
+      if (!mounted) return;
+      setState(() => _syncErrorRows = rows);
+    } catch (e, st) {
+      // Banner is best-effort; a query failure should never block the
+      // form from rendering.
+      // ignore: avoid_print
+      print('FormScreen: _loadSyncErrors failed — $e\n$st');
+    }
+  }
+
+  Future<void> _retrySyncRow(int outboxId) async {
+    final controller = widget.syncController;
+    if (controller == null) return;
+    try {
+      await controller.retry(outboxId);
+    } catch (e, st) {
+      // ignore: avoid_print
+      print('FormScreen: retry($outboxId) failed — $e\n$st');
+    }
+    await _loadSyncErrors();
+  }
+
+  /// Drains the outbox without pulling. Upstream rows TierComputer
+  /// places ahead of this record go in the same drain.
+  Future<void> _handlePushRecord() async {
+    final svc = widget.syncService;
+    if (svc == null) return;
+    setState(() => _isSyncing = true);
+    try {
+      await svc.pushSync(doctype: widget.meta.name);
+    } catch (e, st) {
+      // ignore: avoid_print
+      print('FormScreen: pushSync failed — $e\n$st');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Push failed: ${toUserFriendlyMessage(e)}'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+      return;
+    } finally {
+      if (mounted) setState(() => _isSyncing = false);
+    }
+    await _loadSyncErrors();
+    if (!mounted) return;
+    final stuck = _syncErrorRows.isNotEmpty;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(stuck ? 'Push completed with errors' : 'Pushed'),
+        backgroundColor: stuck ? Colors.orange : Colors.green,
+        duration: const Duration(seconds: 2),
+      ),
+    );
   }
 
   Future<void> _loadWorkflowTransitions() async {
@@ -221,7 +326,8 @@ class _FormScreenState extends State<FormScreen> {
           _workflowLoading = false;
         });
       }
-    } catch (_) {
+    } catch (e, st) {
+      debugPrint('FormScreen._loadWorkflowTransitions failed — $e\n$st');
       if (mounted) {
         setState(() {
           _workflowTransitions = [];
@@ -239,9 +345,9 @@ class _FormScreenState extends State<FormScreen> {
         widget.document!.serverId!,
         action,
       );
-      await widget.repository.updateDocumentData(
-        widget.document!.localId,
-        updated,
+      await widget.repository.saveDocument(
+        doctype: widget.meta.name,
+        data: {...updated, 'mobile_uuid': widget.document!.localId},
       );
       if (mounted) {
         setState(() {
@@ -259,7 +365,8 @@ class _FormScreenState extends State<FormScreen> {
           );
         }
       }
-    } catch (e) {
+    } catch (e, st) {
+      debugPrint('FormScreen._applyWorkflowAction($action) failed — $e\n$st');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -375,7 +482,8 @@ class _FormScreenState extends State<FormScreen> {
           ),
         );
       }
-    } catch (e) {
+    } catch (e, st) {
+      debugPrint('FormScreen.action($method) failed — $e\n$st');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -399,11 +507,31 @@ class _FormScreenState extends State<FormScreen> {
         docName,
       );
       if (row != null) return row;
-    } catch (_) {}
+    } catch (e, st) {
+      // ignore: avoid_print
+      print(
+        'FormScreen: getRowFromPerDoctypeTable($linkedDoctype, $docName) '
+        'failed — $e\n$st',
+      );
+    }
+    // If the value is shaped like a mobile_uuid, it is a local identity
+    // and must never be looked up on the server — Frappe naming series
+    // never produce v4 UUIDs, so `getByName(..., uuid)` is guaranteed
+    // to 500. This guards against orphan-link cases (the linked local
+    // row was deleted/replaced after sync, or the `<field>__is_local`
+    // flag was never set) by failing closed instead of leaking the
+    // mobile_uuid out of the device.
+    if (looksLikeMobileUuid(docName)) return null;
     if (widget.api != null) {
       try {
         return await widget.api!.doctype.getByName(linkedDoctype, docName);
-      } catch (_) {}
+      } catch (e, st) {
+        // ignore: avoid_print
+        print(
+          'FormScreen: api.doctype.getByName($linkedDoctype, $docName) '
+          'failed — $e\n$st',
+        );
+      }
     }
     return null;
   }
@@ -429,14 +557,16 @@ class _FormScreenState extends State<FormScreen> {
       _errorMessage = null;
     });
 
-    // Decide path based on connectivity. Without network, take the
-    // offline-first path so the form is durably saved to the local DB
-    // and pushed later — instead of failing with "No Internet Connection".
-    bool serverReachable = widget.api != null;
+    // Offline-first contract: every save queues to docs__ + outbox;
+    // push is driven by the cloud icon / Sync. Server-first below
+    // runs only in legacy online-only mode where there is no outbox.
+    final offlineEnabled = widget.repository.offlineMode.enabled;
+    bool serverReachable = !offlineEnabled && widget.api != null;
     if (serverReachable && widget.syncService != null) {
       try {
         serverReachable = await widget.syncService!.isOnline();
-      } catch (_) {
+      } catch (e, st) {
+        debugPrint('FormScreen.save: isOnline check failed — $e\n$st');
         serverReachable = false;
       }
     }
@@ -451,6 +581,12 @@ class _FormScreenState extends State<FormScreen> {
         // L2 idempotency match the row when push-back lands.
         final isInsert =
             widget.document == null || widget.document!.serverId == null;
+        // True when this save edits a previously-saved offline record
+        // (lineage already exists locally with mobile_uuid = localId).
+        // Drives both the identity-locking below and the post-save
+        // reconcileServerSave path that collapses any failed outbox
+        // rows for this same lineage.
+        final isEditingExistingDoc = widget.document != null;
         if (isInsert) {
           // Preserve any existing offline data + mobile_uuid from the local doc.
           if (widget.document != null) {
@@ -467,6 +603,18 @@ class _FormScreenState extends State<FormScreen> {
             if (uuid != null && uuid.isNotEmpty) {
               payload['mobile_uuid'] = uuid;
             }
+          }
+          // Identity lock: when this is an edit-save of an existing
+          // local record, the mobile_uuid is system-owned metadata
+          // and MUST equal the document's localId. The form payload
+          // and the device-level getMobileUuid callback are both
+          // untrusted for this field — a stray empty string from
+          // either would otherwise fork lineage (the server generates
+          // a fresh UUID, leaving the original docs__ row + failed
+          // outbox row orphaned). See `reconcileServerSave` for the
+          // companion cleanup that runs after the server replies.
+          if (isEditingExistingDoc) {
+            payload['mobile_uuid'] = widget.document!.localId;
           }
           final result = await widget.api!.document.createDocument(
             widget.meta.name,
@@ -485,11 +633,25 @@ class _FormScreenState extends State<FormScreen> {
               );
               merged['docstatus'] = 1;
             }
-            await widget.repository.saveServerDocument(
-              doctype: widget.meta.name,
-              serverId: serverName,
-              data: merged,
-            );
+            if (isEditingExistingDoc) {
+              // Collapses lineage: attach server_name to the existing
+              // docs__ row, drop the failed outbox row, then apply
+              // the server snapshot. Without this, the failed outbox
+              // row + dirty docs__ row from the prior failed attempt
+              // would stay behind alongside the freshly-synced row.
+              await widget.repository.reconcileServerSave(
+                doctype: widget.meta.name,
+                mobileUuid: widget.document!.localId,
+                serverName: serverName,
+                serverData: merged,
+              );
+            } else {
+              await widget.repository.applyServerDocument(
+                doctype: widget.meta.name,
+                serverName: serverName,
+                data: merged,
+              );
+            }
             savedData = merged;
           } else {
             savedData = Map<String, dynamic>.from(payload);
@@ -514,9 +676,10 @@ class _FormScreenState extends State<FormScreen> {
               existingData['docstatus'] = 1;
             }
           }
-          await widget.repository.updateDocumentData(
-            widget.document!.localId,
-            existingData,
+          await widget.repository.applyServerDocument(
+            doctype: widget.meta.name,
+            serverName: widget.document!.serverId!,
+            data: existingData,
           );
           savedData = existingData;
         }
@@ -544,91 +707,17 @@ class _FormScreenState extends State<FormScreen> {
             payload['mobile_uuid'] = uuid;
           }
         }
-        await widget.repository.createDocument(
+        await widget.repository.saveDocument(
           doctype: widget.meta.name,
           data: payload,
         );
       } else {
         final existingData = Map<String, dynamic>.from(widget.document!.data);
         existingData.addAll(payload);
-        await widget.repository.updateDocumentData(
-          widget.document!.localId,
-          existingData,
+        await widget.repository.saveDocument(
+          doctype: widget.meta.name,
+          data: {...existingData, 'mobile_uuid': widget.document!.localId},
         );
-      }
-
-      if (widget.syncService != null) {
-        final isOnline = await widget.syncService!.isOnline();
-        if (isOnline) {
-          try {
-            final syncResult = await widget.syncService!.pushSync(
-              doctype: widget.meta.name,
-            );
-            if (mounted) {
-              if (syncResult.errors.isNotEmpty) {
-                _showSyncErrorDialog(syncResult.errors);
-              } else if (syncResult.failed > 0) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text(
-                      'Saved locally. ${syncResult.failed} update(s) failed to sync.',
-                    ),
-                    backgroundColor: Colors.orange,
-                    action: SnackBarAction(
-                      label: 'Details',
-                      textColor: Colors.white,
-                      onPressed: () => _showSyncErrorDialog(syncResult.errors),
-                    ),
-                  ),
-                );
-              } else if (syncResult.success > 0) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text(
-                      'Saved and synced (${syncResult.success} document(s))',
-                    ),
-                    backgroundColor: Colors.green,
-                  ),
-                );
-              }
-            }
-          } catch (e) {
-            if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text('Saved locally. Sync failed: ${e.toString()}'),
-                  backgroundColor: Colors.orange,
-                  duration: const Duration(seconds: 3),
-                  action: SnackBarAction(
-                    label: 'View Status',
-                    textColor: Colors.white,
-                    onPressed: () {
-                      if (widget.syncService != null) {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (context) => SyncStatusScreen(
-                              syncService: widget.syncService!,
-                              repository: widget.repository,
-                            ),
-                          ),
-                        );
-                      }
-                    },
-                  ),
-                ),
-              );
-            }
-          }
-        } else if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Saved locally. Will sync when online.'),
-              backgroundColor: Colors.blue,
-              duration: Duration(seconds: 2),
-            ),
-          );
-        }
       }
 
       if (mounted) {
@@ -649,7 +738,8 @@ class _FormScreenState extends State<FormScreen> {
         );
         widget.onSaveSuccess?.call();
       }
-    } catch (e) {
+    } catch (e, st) {
+      debugPrint('FormScreen.save (server-first/offline) failed — $e\n$st');
       setState(() {
         _errorMessage = e is FrappeException
             ? e.message
@@ -659,6 +749,9 @@ class _FormScreenState extends State<FormScreen> {
       setState(() {
         _isSaving = false;
       });
+      // Either branch above may have queued a fresh outbox row or
+      // resolved an existing one; refresh the persistent banner.
+      _loadSyncErrors();
     }
   }
 
@@ -690,22 +783,19 @@ class _FormScreenState extends State<FormScreen> {
     });
 
     try {
-      if (widget.api != null && widget.document!.serverId != null) {
+      final offlineEnabled = widget.repository.offlineMode.enabled;
+      if (!offlineEnabled &&
+          widget.api != null &&
+          widget.document!.serverId != null) {
         await widget.api!.document.deleteDocument(
           widget.meta.name,
           widget.document!.serverId!,
         );
-        await widget.repository.hardDeleteDocument(widget.document!.localId);
       } else {
-        await widget.repository.deleteDocument(widget.document!.localId);
-        if (widget.syncService != null) {
-          final isOnline = await widget.syncService!.isOnline();
-          if (isOnline) {
-            try {
-              await widget.syncService!.pushSync(doctype: widget.meta.name);
-            } catch (_) {}
-          }
-        }
+        await widget.repository.deleteDocument(
+          doctype: widget.meta.name,
+          mobileUuid: widget.document!.localId,
+        );
       }
 
       if (mounted) {
@@ -718,7 +808,8 @@ class _FormScreenState extends State<FormScreen> {
         Navigator.pop(context);
         widget.onSaveSuccess?.call();
       }
-    } catch (e) {
+    } catch (e, st) {
+      debugPrint('FormScreen.delete failed — $e\n$st');
       setState(() {
         _errorMessage = e is FrappeException
             ? e.message
@@ -729,76 +820,6 @@ class _FormScreenState extends State<FormScreen> {
         _isSaving = false;
       });
     }
-  }
-
-  void _showSyncErrorDialog(List<SyncError> errors) {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Row(
-          children: [
-            Icon(Icons.error, color: Colors.red),
-            SizedBox(width: 8),
-            Text('Sync Errors'),
-          ],
-        ),
-        content: SizedBox(
-          width: double.maxFinite,
-          child: ListView.builder(
-            shrinkWrap: true,
-            itemCount: errors.length,
-            itemBuilder: (context, index) {
-              final error = errors[index];
-              return Card(
-                margin: const EdgeInsets.only(bottom: 8),
-                color: Colors.red[50],
-                child: ListTile(
-                  leading: const Icon(Icons.error_outline, color: Colors.red),
-                  title: Text(
-                    '${error.operation.toUpperCase()}: ${error.doctype}',
-                    style: const TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                  subtitle: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('Document: ${error.documentId}'),
-                      const SizedBox(height: 4),
-                      Text(
-                        error.errorMessage,
-                        style: TextStyle(fontSize: 12, color: Colors.red[700]),
-                      ),
-                    ],
-                  ),
-                  isThreeLine: true,
-                ),
-              );
-            },
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Close'),
-          ),
-          if (widget.syncService != null)
-            TextButton(
-              onPressed: () {
-                Navigator.pop(context);
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (context) => SyncStatusScreen(
-                      syncService: widget.syncService!,
-                      repository: widget.repository,
-                    ),
-                  ),
-                );
-              },
-              child: const Text('View All'),
-            ),
-        ],
-      ),
-    );
   }
 
   @override
@@ -837,6 +858,21 @@ class _FormScreenState extends State<FormScreen> {
                   : const Icon(Icons.save),
               label: const Text('Save'),
             ),
+          if (widget.repository.offlineMode.enabled &&
+              widget.syncService != null &&
+              !widget.readOnly)
+            IconButton(
+              key: const Key('form_push_button'),
+              icon: _isSyncing
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.cloud_upload),
+              onPressed: _isSyncing || _isSaving ? null : _handlePushRecord,
+              tooltip: 'Push to server',
+            ),
           if (allowDelete)
             IconButton(
               icon: Icon(
@@ -852,6 +888,11 @@ class _FormScreenState extends State<FormScreen> {
         children: [
           Column(
             children: [
+              if (_syncErrorRows.isNotEmpty)
+                SyncErrorBanner(
+                  rows: _syncErrorRows,
+                  onRetry: widget.syncController == null ? null : _retrySyncRow,
+                ),
               if (_errorMessage != null)
                 Container(
                   width: double.infinity,

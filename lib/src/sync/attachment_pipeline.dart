@@ -1,5 +1,7 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
+
 import '../database/daos/pending_attachment_dao.dart';
 import '../models/pending_attachment.dart';
 import 'push_error.dart';
@@ -99,7 +101,10 @@ class AttachmentPipeline {
           serverFileUrl: fileUrl,
         );
         return AttachmentUploadResult(fileName: fileName, fileUrl: fileUrl);
-      } catch (e) {
+      } catch (e, st) {
+        debugPrint(
+          'AttachmentPipeline.upload(${p.id}) attempt $attempt failed — $e\n$st',
+        );
         lastError = e;
         if (attempt < backoff.length - 1) {
           await Future<void>.delayed(backoff[attempt + 1]);

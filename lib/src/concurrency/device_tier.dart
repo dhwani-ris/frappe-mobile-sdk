@@ -1,5 +1,7 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
+
 /// Maps device specs (RAM, cores) to a concurrency level for the SDK's
 /// HTTP and isolate pools. Spec §8 thresholds:
 ///
@@ -34,7 +36,8 @@ class DeviceTier {
     try {
       final cores = Platform.numberOfProcessors;
       return concurrencyForSpecs(totalRamMb: 1000000, cores: cores);
-    } catch (_) {
+    } catch (e, st) {
+      debugPrint('DeviceTier.detect failed, falling back to 2 — $e\n$st');
       return 2;
     }
   }

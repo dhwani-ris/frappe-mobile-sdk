@@ -1,9 +1,9 @@
 import 'dart:convert';
 import 'dart:developer' as developer;
+import 'package:sqflite/sqflite.dart';
 import 'package:uuid/uuid.dart';
 import '../api/client.dart';
 import '../database/app_database.dart';
-import '../database/entities/document_entity.dart';
 import '../database/field_type_mapping.dart';
 import '../database/schema/child_schema.dart';
 import '../database/schema/parent_schema.dart';
@@ -15,6 +15,9 @@ import '../models/document.dart';
 import '../models/meta_diff.dart';
 import '../models/offline_mode.dart';
 import '../models/offline_mode_notifier.dart';
+import '../database/daos/outbox_dao.dart';
+import '../models/outbox_row.dart';
+import '../sync/payload_serializer.dart';
 import '../sync/pull_apply.dart';
 import 'local_writer.dart';
 import 'meta_migration.dart';
@@ -52,7 +55,7 @@ class OfflineRepository {
 
   /// Per-parent child meta registry. Populated by
   /// [ensureSchemaForClosure] from the closure's `Table` / `Table
-  /// MultiSelect` fields. Used by [_writeToPerDoctypeTable] so child rows
+  /// MultiSelect` fields. Used by [applyServerDocument] so child rows
   /// in a pulled parent doc end up in their own `docs__<child>` table.
   final Map<String, Map<String, PullApplyChildInfo>> _childMetasByParent = {};
 
@@ -113,10 +116,10 @@ class OfflineRepository {
   /// closure visited — parents AND children — and registers the child
   /// metas so subsequent saves can populate child tables.
   ///
-  /// Without this, [saveServerDocument] only created tables lazily on
-  /// the first row it actually wrote, which means doctypes the user has
-  /// 0 rows for had no offline schema at all (Link pickers + filter
-  /// resolvers had nothing to read).
+  /// Without this, the lazy table-creation path inside [applyServerDocument]
+  /// would only build tables for doctypes that actually had rows on the
+  /// first pull — leaving 0-row doctypes without offline schema, so Link
+  /// pickers and filter resolvers had nothing to read.
   Future<void> ensureSchemaForClosure({
     required Map<String, DocTypeMeta> metas,
     required Set<String> childDoctypes,
@@ -141,8 +144,12 @@ class OfflineRepository {
         });
         try {
           await _database.doctypeMetaDao.setTableName(doctype, tableName);
-        } catch (_) {
+        } catch (e, st) {
           // setTableName may not be available on older schemas; harmless.
+          developer.log(
+            'OfflineRepository.ensureSchemaForClosure: setTableName($doctype) skipped — $e\n$st',
+            name: 'OfflineRepository',
+          );
         }
       } else if (!isChild) {
         // Heal an existing parent table whose meta has evolved (e.g. a new
@@ -179,58 +186,16 @@ class OfflineRepository {
         // process restart even before ensureSchemaForClosure runs again.
         try {
           await _database.doctypeMetaDao.setIsParentWithChildren(doctype, true);
-        } catch (_) {
+        } catch (e, st) {
           // setIsParentWithChildren may not be available on older schemas
           // (test fixtures that only seed v3 doctype_meta). Best-effort.
+          developer.log(
+            'OfflineRepository.ensureSchemaForClosure: setIsParentWithChildren($doctype) skipped — $e\n$st',
+            name: 'OfflineRepository',
+          );
         }
       }
     }
-  }
-
-  /// Create a new document locally
-  Future<Document> createDocument({
-    required String doctype,
-    required Map<String, dynamic> data,
-  }) async {
-    if (!offlineMode.enabled) {
-      _requireOnlineClient('createDocument');
-      final response = await client!.document.createDocument(doctype, data);
-      final serverName = response['name'] as String? ?? '';
-      return Document.fromServer(
-        doctype: doctype,
-        serverId: serverName,
-        data: response,
-        localId: serverName,
-      );
-    }
-
-    final rawUuid = data['mobile_uuid'] as String?;
-    final mobileUuid = (rawUuid != null && rawUuid.isNotEmpty)
-        ? rawUuid
-        : _uuid.v4();
-    final dataWithUuid = <String, dynamic>{...data, 'mobile_uuid': mobileUuid};
-    final document = Document.create(
-      doctype: doctype,
-      data: dataWithUuid,
-      localId: mobileUuid,
-    );
-
-    final entity = _documentToEntity(document);
-    await _database.documentDao.insertDocument(entity);
-
-    // Mirror to per-doctype tables (parent + split Table children) so the
-    // offline read path sees the new doc immediately. Best-effort: legacy
-    // `documents` row above is the source of truth for push.
-    if (_localWriter != null) {
-      try {
-        await _localWriter.writeParent(
-          parentDoctype: doctype,
-          data: dataWithUuid,
-        );
-      } catch (_) {}
-    }
-
-    return document;
   }
 
   void _requireOnlineClient(String method) {
@@ -243,22 +208,86 @@ class OfflineRepository {
     }
   }
 
-  /// Get document by local ID
-  Future<Document?> getDocumentByLocalId(String localId) async {
-    final entity = await _database.documentDao.findByLocalId(localId);
-    return entity != null ? _entityToDocument(entity) : null;
+  /// Reconciles local state after a server-first save (`createDocument`
+  /// or `updateDocument`) succeeded for an offline-created record.
+  ///
+  /// The contract is identity-preserving — the existing local row at
+  /// [mobileUuid] becomes the server-known row at [serverName], without
+  /// forking a second `docs__<doctype>` row:
+  ///
+  /// 1. Attaches [serverName] to the existing local row + flips its
+  ///    `sync_status` to `synced` ([LocalWriter.markSynced]).
+  /// 2. Cancels every collapsable outbox row (`pending`/`failed`/
+  ///    `blocked`/`conflict`) for `(doctype, mobileUuid)`. The server
+  ///    has the doc now, so a queued INSERT/UPDATE is no longer owed.
+  /// 3. Applies the full server snapshot via [applyServerDocument] so
+  ///    server-side defaults / formula columns / child-table
+  ///    reconciliation land in the local mirror. Step 1 must happen
+  ///    first because [PullApply] looks the row up by `server_name`
+  ///    and bails on `dirty/failed/blocked/conflict` rows — flipping
+  ///    `sync_status` to `synced` is what unblocks the upsert path.
+  ///
+  /// Used by `FormScreen._handleSubmit` on the server-first edit-save
+  /// path so a previously-failed offline record's lineage stays intact.
+  Future<void> reconcileServerSave({
+    required String doctype,
+    required String mobileUuid,
+    required String serverName,
+    required Map<String, dynamic> serverData,
+  }) async {
+    final writer = _localWriter;
+    if (writer != null) {
+      try {
+        await writer.markSynced(
+          parentDoctype: doctype,
+          mobileUuid: mobileUuid,
+          serverName: serverName,
+        );
+      } catch (e, st) {
+        // ignore: avoid_print
+        print(
+          'OfflineRepository.reconcileServerSave: markSynced failed for '
+          '$doctype/$mobileUuid → $serverName — $e\n$st',
+        );
+      }
+    }
+    try {
+      await OutboxDao(
+        _database.rawDatabase,
+      ).cancelPendingFor(doctype: doctype, mobileUuid: mobileUuid);
+    } catch (e, st) {
+      // ignore: avoid_print
+      print(
+        'OfflineRepository.reconcileServerSave: outbox cancelPendingFor '
+        'failed for $doctype/$mobileUuid — $e\n$st',
+      );
+    }
+    await applyServerDocument(
+      doctype: doctype,
+      serverName: serverName,
+      data: serverData,
+    );
   }
 
-  /// Get document by server ID
-  Future<Document?> getDocumentByServerId(
-    String serverId,
-    String doctype,
-  ) async {
-    final entity = await _database.documentDao.findByServerId(
-      serverId,
-      doctype,
-    );
-    return entity != null ? _entityToDocument(entity) : null;
+  /// Outbox rows for a single document (matched by `mobile_uuid`),
+  /// filtered to states the user can act on: `failed`, `blocked`,
+  /// `conflict`. `done`, `pending`, and `inFlight` are intentionally
+  /// excluded — only stuck-and-needs-attention rows reach the UI.
+  Future<List<OutboxRow>> getSyncErrorsForDoc({
+    required String doctype,
+    required String mobileUuid,
+  }) async {
+    final all = await OutboxDao(
+      _database.rawDatabase,
+    ).findByMobileUuid(doctype: doctype, mobileUuid: mobileUuid);
+    return all
+        .where(
+          (r) =>
+              r.state == OutboxState.failed ||
+              r.state == OutboxState.blocked ||
+              r.state == OutboxState.conflict,
+        )
+        .toList();
   }
 
   /// Fetches a single row from the per-doctype `docs__<doctype>` table
@@ -282,228 +311,316 @@ class OfflineRepository {
     return Map<String, dynamic>.from(rows.first);
   }
 
-  /// Get all documents for a DocType (excluding deleted)
-  Future<List<Document>> getDocumentsByDoctype(String doctype) async {
-    final entities = await _database.documentDao.findByDoctype(doctype);
-    final documents = entities.map(_entityToDocument).toList();
-    // Filter out deleted documents
-    return documents.where((doc) => doc.status != 'deleted').toList();
-  }
-
-  /// Get documents by status
-  Future<List<Document>> getDocumentsByStatus(String status) async {
-    final entities = await _database.documentDao.findByStatus(status);
-    return entities.map(_entityToDocument).toList();
-  }
-
-  /// Get dirty documents (need sync)
-  Future<List<Document>> getDirtyDocuments() async {
+  /// Returns rows from `docs__<doctype>` whose `sync_status` indicates
+  /// pending push work — `dirty` (offline insert/update), `deleted`
+  /// (tombstoned), or the terminal error states `sync_error`/`sync_blocked`.
+  ///
+  /// When [doctype] is null, scans every doctype that has a registered
+  /// `table_name` in `doctype_meta`. Short-circuits in online mode (the
+  /// outbox is the canonical push queue and is itself empty in that mode).
+  Future<List<Document>> getDirtyDocuments({String? doctype}) async {
     if (!offlineMode.enabled) return const [];
-    return await getDocumentsByStatus('dirty');
-  }
-
-  /// Get dirty documents for a specific DocType
-  Future<List<Document>> getDirtyDocumentsByDoctype(String doctype) async {
-    if (!offlineMode.enabled) return const [];
-    final entities = await _database.documentDao.findByDoctypeAndStatus(
-      doctype,
-      'dirty',
-    );
-    return entities.map(_entityToDocument).toList();
-  }
-
-  /// Update document
-  Future<Document> updateDocument(Document document) async {
-    final entity = _documentToEntity(document);
-    await _database.documentDao.updateDocument(entity);
-    return document;
-  }
-
-  /// Update document data
-  Future<Document> updateDocumentData(
-    String localId,
-    Map<String, dynamic> data,
-  ) async {
-    if (!offlineMode.enabled) {
-      _requireOnlineClient('updateDocumentData');
-      // In online mode, [localId] is the server-assigned name.
-      final document = await getDocumentByLocalId(localId);
-      final doctype = document?.doctype ?? data['doctype'] as String? ?? '';
-      if (doctype.isEmpty) {
-        throw ArgumentError(
-          'updateDocumentData in online mode needs the doctype in data '
-          'when no local document exists for the given name.',
-        );
-      }
-      final response = await client!.document.updateDocument(
-        doctype,
-        localId,
-        data,
-      );
-      return Document.fromServer(
-        doctype: doctype,
-        serverId: localId,
-        data: response,
-        localId: localId,
-      );
-    }
-
-    final document = await getDocumentByLocalId(localId);
-    if (document == null) {
-      throw Exception('Document not found: $localId');
-    }
-
-    final updated = document.updateData(data);
-    await updateDocument(updated);
-
-    if (_localWriter != null) {
+    final db = _database.rawDatabase;
+    final List<String> doctypes;
+    if (doctype != null) {
+      doctypes = [doctype];
+    } else {
       try {
-        await _localWriter.writeParent(
-          parentDoctype: updated.doctype,
-          data: {'mobile_uuid': updated.localId, ...data},
-          serverName: updated.serverId,
+        final rows = await db.rawQuery(
+          "SELECT doctype FROM doctype_meta "
+          "WHERE table_name IS NOT NULL AND table_name != ''",
         );
-      } catch (_) {}
+        doctypes = rows.map((r) => r['doctype'] as String).toList();
+      } on DatabaseException catch (e, st) {
+        // ignore: avoid_print
+        print(
+          'OfflineRepository.getDirtyDocuments: doctype_meta scan failed '
+          '— $e\n$st',
+        );
+        return const [];
+      }
     }
-
-    return updated;
-  }
-
-  /// Delete document (soft delete - marks as deleted)
-  Future<Document> deleteDocument(String localId) async {
-    if (!offlineMode.enabled) {
-      _requireOnlineClient('deleteDocument');
-      final document = await getDocumentByLocalId(localId);
-      final doctype = document?.doctype ?? '';
-      if (doctype.isEmpty) {
-        throw ArgumentError(
-          'deleteDocument in online mode needs a known doctype. '
-          'Either pre-load the document or call client.document.deleteDocument '
-          'directly.',
+    final out = <Document>[];
+    for (final dt in doctypes) {
+      final tableName = normalizeDoctypeTableName(dt);
+      if (!await sqliteTableExists(db, tableName)) continue;
+      try {
+        final rows = await db.query(
+          tableName,
+          where:
+              "sync_status IN "
+              "('dirty', 'deleted', 'sync_error', 'sync_blocked')",
+        );
+        for (final r in rows) {
+          out.add(Document.fromResolverRow(dt, r));
+        }
+      } on DatabaseException catch (e, st) {
+        // ignore: avoid_print
+        print(
+          'OfflineRepository.getDirtyDocuments: query failed for $dt '
+          '— $e\n$st',
         );
       }
-      await client!.document.deleteDocument(doctype, localId);
-      return Document(
-        localId: localId,
-        doctype: doctype,
-        serverId: localId,
-        data: const {},
-        status: 'deleted',
-        modified: DateTime.now().millisecondsSinceEpoch,
-      );
     }
-
-    final document = await getDocumentByLocalId(localId);
-    if (document == null) {
-      throw Exception('Document not found: $localId');
-    }
-
-    final deleted = document.markDeleted();
-    await updateDocument(deleted);
-    return deleted;
+    return out;
   }
 
-  /// Hard delete document (permanently remove from database)
-  Future<void> hardDeleteDocument(String localId) async {
-    await _database.documentDao.deleteByLocalId(localId);
-  }
+  // ===== Phase 4: Offline-first save surface =====
 
-  /// Save server document locally
-  Future<Document> saveServerDocument({
+  /// Single offline-or-online save entry point. Returns `mobile_uuid`
+  /// (offline) or the server name (online). Routes through
+  /// [LocalWriter.writeParentInTxn] + [OutboxDao.recordSave] in one
+  /// spanning transaction so docs__ + outbox stay consistent.
+  Future<String> saveDocument({
     required String doctype,
-    required String serverId,
     required Map<String, dynamic> data,
   }) async {
-    // Check if already exists
-    final existing = await getDocumentByServerId(serverId, doctype);
-    final Document document;
-    if (existing != null) {
-      // Update existing
-      document = existing.copyWith(
-        serverId: serverId,
-        data: data,
-        status: 'clean',
-        modified: DateTime.now().millisecondsSinceEpoch,
-      );
-      await updateDocument(document);
-    } else {
-      final localId = _uuid.v4();
-      document = Document.fromServer(
-        doctype: doctype,
-        serverId: serverId,
-        data: data,
-        localId: localId,
-      );
-      final entity = _documentToEntity(document);
-      await _database.documentDao.insertDocument(entity);
-    }
-
-    // If this server-confirm is the writeback for a row that was
-    // originally created offline, the per-doctype table already has
-    // a `mobile_uuid=<X>, server_name=null, sync_status='dirty'` row.
-    // Promote it to `server_name=<serverId>, sync_status='synced'`
-    // BEFORE the meta-driven mirror below — otherwise `_writeToPerDoctypeTable`
-    // looks the row up by `server_name`, finds nothing, and inserts a
-    // duplicate alongside the offline row. Spec §3.2.
-    final priorMobileUuid = data['mobile_uuid'] as String?;
-    if (_localWriter != null &&
-        priorMobileUuid != null &&
-        priorMobileUuid.isNotEmpty) {
-      try {
-        await _localWriter.markSynced(
-          parentDoctype: doctype,
-          mobileUuid: priorMobileUuid,
-          serverName: serverId,
+    if (!offlineMode.enabled) {
+      _requireOnlineClient('saveDocument');
+      // Online: HTTP only — no docs__ or outbox writes (Section 5,
+      // "Online vs offline mode invariant").
+      final hasServerName =
+          data['name'] is String && (data['name'] as String).isNotEmpty;
+      if (hasServerName) {
+        final response = await client!.document.updateDocument(
+          doctype,
+          data['name'] as String,
+          data,
         );
-      } catch (_) {}
+        return (response['name'] as String?) ?? data['name'] as String;
+      }
+      final response = await client!.document.createDocument(doctype, data);
+      return (response['name'] as String?) ?? '';
     }
 
-    // Mirror the row into the per-doctype `docs__<doctype>` table so
-    // P5's UnifiedResolver/FilterParser can serve list screens, Link
-    // pickers, and `fetch_from` directly from native columns. Spec §3.
-    // Best-effort: the legacy `documents` write above is the source of
-    // truth for now; if the per-doctype write fails (e.g. meta absent
-    // because closure expansion couldn't reach this doctype), the
-    // consumer still sees the legacy data.
-    await _writeToPerDoctypeTable(doctype, data);
+    if (_localWriter == null) {
+      throw StateError(
+        'OfflineRepository.saveDocument: offline mode requires localWriter',
+      );
+    }
 
-    return document;
+    final rawUuid = data['mobile_uuid'] as String?;
+    final mobileUuid = (rawUuid != null && rawUuid.isNotEmpty)
+        ? rawUuid
+        : _uuid.v4();
+    final dataWithUuid = <String, dynamic>{...data, 'mobile_uuid': mobileUuid};
+
+    // Pre-resolve metas and the existing row BEFORE opening the write txn.
+    // Anything that queries via the outer Database while a txn is active
+    // deadlocks (sqflite serializes ops through one queue, and the txn
+    // holds it).
+    final parentMeta = await _loadMeta(doctype);
+    final childMetasByDoctype = <String, DocTypeMeta>{};
+    if (parentMeta != null) {
+      for (final f in parentMeta.fields) {
+        final opt = f.options;
+        if ((f.fieldtype == 'Table' || f.fieldtype == 'Table MultiSelect') &&
+            opt != null &&
+            opt.isNotEmpty) {
+          final cm = await _loadMeta(opt);
+          if (cm != null) childMetasByDoctype[opt] = cm;
+        }
+      }
+    }
+
+    final tableName = normalizeDoctypeTableName(doctype);
+    Map<String, Object?>? existing;
+    try {
+      final rows = await _database.rawDatabase.query(
+        tableName,
+        where: 'mobile_uuid = ?',
+        whereArgs: [mobileUuid],
+        limit: 1,
+      );
+      existing = rows.isEmpty ? null : rows.first;
+    } on DatabaseException catch (e, st) {
+      // Per-doctype table not provisioned yet — proceed with INSERT.
+      // ignore: avoid_print
+      print(
+        'OfflineRepository.saveDocument: existing-row probe failed for '
+        '$doctype/$mobileUuid (table likely missing) — $e\n$st',
+      );
+      existing = null;
+    }
+
+    final op = (existing == null || existing['server_name'] == null)
+        ? OutboxOperation.insert
+        : OutboxOperation.update;
+
+    String? pushBase;
+    if (existing != null) {
+      final preserved = existing['push_base_payload'] as String?;
+      if (preserved != null) {
+        // Don't overwrite a base captured by an earlier edit (Invariant 6).
+        pushBase = preserved;
+      } else if (parentMeta != null) {
+        pushBase = jsonEncode(
+          PayloadSerializer.serializeForBase(existing, parentMeta),
+        );
+      }
+    }
+
+    await _database.rawDatabase.transaction((txn) async {
+      await _localWriter.writeParentInTxn(
+        txn: txn,
+        parentDoctype: doctype,
+        mobileUuid: mobileUuid,
+        data: dataWithUuid,
+        syncOp: op.wireName,
+        pushBasePayload: pushBase,
+        parentMeta: parentMeta,
+        childMetasByDoctype: childMetasByDoctype,
+      );
+
+      await OutboxDao(
+        txn,
+      ).recordSave(doctype: doctype, mobileUuid: mobileUuid, operation: op);
+
+      // docstatus transitions get their own outbox row, ordered after
+      // the INSERT/UPDATE via a +1ms created_at bump.
+      final docstatus = (data['docstatus'] is num)
+          ? (data['docstatus'] as num).toInt()
+          : null;
+      if (docstatus == 1) {
+        await OutboxDao(txn).recordSave(
+          doctype: doctype,
+          mobileUuid: mobileUuid,
+          operation: OutboxOperation.submit,
+          createdAt: DateTime.now().toUtc().add(
+            const Duration(milliseconds: 1),
+          ),
+        );
+      } else if (docstatus == 2) {
+        await OutboxDao(txn).recordSave(
+          doctype: doctype,
+          mobileUuid: mobileUuid,
+          operation: OutboxOperation.cancel,
+          createdAt: DateTime.now().toUtc().add(
+            const Duration(milliseconds: 1),
+          ),
+        );
+      }
+    });
+
+    return mobileUuid;
   }
 
-  Future<void> _writeToPerDoctypeTable(
-    String doctype,
-    Map<String, dynamic> data,
-  ) async {
-    try {
-      final meta = await _loadMeta(doctype);
-      if (meta == null) return;
-      final tableName = normalizeDoctypeTableName(doctype);
-      await _ensurePerDoctypeTable(doctype, tableName, meta);
-      // If the closure didn't pre-register child metas for this parent
-      // (e.g. returning user where `ensureSchemaForClosure` ran on the
-      // previous launch only), lazily build the registry from cached
-      // child metas in `doctype_meta`. Keeps child mirroring working
-      // across app restarts without requiring re-login.
-      final childMetas = await _resolveChildMetas(doctype, meta);
-      await PullApply.applyPage(
-        db: _database.rawDatabase,
-        parentMeta: meta,
-        parentTable: tableName,
-        childMetasByFieldname: childMetas,
-        rows: [data],
-      );
-    } catch (e, st) {
-      // Mirror is best-effort — the legacy `documents` row is still the
-      // source of truth. We log so silent data-loss bugs (like the
-      // PK-collision the system-column overwrite caused) are visible
-      // next time instead of vanishing into a swallowed catch.
-      developer.log(
-        'per-doctype mirror write failed for $doctype/${data['name']}: $e',
-        name: 'OfflineRepository',
-        error: e,
-        stackTrace: st,
-      );
+  /// Tombstones the docs__ row and enqueues a DELETE outbox row. If a
+  /// pending INSERT existed (the doc never reached the server), cancels
+  /// it and hard-deletes the docs__ row instead — there is nothing to
+  /// push.
+  Future<void> deleteDocument({
+    required String doctype,
+    required String mobileUuid,
+  }) async {
+    if (!offlineMode.enabled) {
+      _requireOnlineClient('deleteDocument');
+      await client!.document.deleteDocument(doctype, mobileUuid);
+      return;
     }
+
+    // Pre-load parent meta BEFORE opening the txn — `_loadMeta` queries
+    // `doctype_meta` through the outer Database, which would deadlock
+    // against our in-flight write txn.
+    final parentMeta = await _loadMeta(doctype);
+
+    await _database.rawDatabase.transaction((txn) async {
+      final result = await OutboxDao(txn).recordSave(
+        doctype: doctype,
+        mobileUuid: mobileUuid,
+        operation: OutboxOperation.delete,
+      );
+
+      final tableName = normalizeDoctypeTableName(doctype);
+      if (result == RecordSaveResult.cancelledLocally) {
+        // Pending INSERT cancelled; server never knew about this doc.
+        try {
+          await txn.delete(
+            tableName,
+            where: 'mobile_uuid = ?',
+            whereArgs: [mobileUuid],
+          );
+          // Cascade-delete child rows (no FK, must be explicit).
+          if (parentMeta != null) {
+            for (final f in parentMeta.fields) {
+              if (f.fieldtype != 'Table' &&
+                  f.fieldtype != 'Table MultiSelect') {
+                continue;
+              }
+              final childDoctype = f.options;
+              if (childDoctype == null || childDoctype.isEmpty) continue;
+              final childTable = normalizeDoctypeTableName(childDoctype);
+              try {
+                await txn.delete(
+                  childTable,
+                  where: 'parent_uuid = ?',
+                  whereArgs: [mobileUuid],
+                );
+              } on DatabaseException catch (e, st) {
+                // ignore: avoid_print
+                print(
+                  'OfflineRepository.deleteDocument: child cascade delete '
+                  'failed for $childDoctype — $e\n$st',
+                );
+              }
+            }
+          }
+        } on DatabaseException catch (e, st) {
+          // ignore: avoid_print
+          print(
+            'OfflineRepository.deleteDocument: hard-delete failed for '
+            '$doctype/$mobileUuid — $e\n$st',
+          );
+        }
+        return;
+      }
+
+      // Otherwise: tombstone the docs__ row.
+      try {
+        await txn.update(
+          tableName,
+          {'sync_status': 'deleted', 'sync_op': 'DELETE'},
+          where: 'mobile_uuid = ?',
+          whereArgs: [mobileUuid],
+        );
+      } on DatabaseException catch (e, st) {
+        // ignore: avoid_print
+        print(
+          'OfflineRepository.deleteDocument: tombstone update failed for '
+          '$doctype/$mobileUuid — $e\n$st',
+        );
+      }
+    });
+  }
+
+  /// Applies a server-pulled snapshot via PullApply (which respects
+  /// local sync_status — dirty/failed/conflict/blocked/deleted rows are
+  /// skipped). Single source of truth for "the server says this doc
+  /// looks like X" — writes only to `docs__<doctype>`.
+  Future<void> applyServerDocument({
+    required String doctype,
+    required String serverName,
+    required Map<String, dynamic> data,
+  }) async {
+    final meta = await _loadMeta(doctype);
+    if (meta == null) {
+      // ignore: avoid_print
+      print(
+        'OfflineRepository.applyServerDocument: meta missing for $doctype; '
+        'pull skipped for $serverName',
+      );
+      return;
+    }
+    final tableName = normalizeDoctypeTableName(doctype);
+    await _ensurePerDoctypeTable(doctype, tableName, meta);
+    final childMetas = await _resolveChildMetas(doctype, meta);
+    await PullApply.applyPage(
+      db: _database.rawDatabase,
+      parentMeta: meta,
+      parentTable: tableName,
+      childMetasByFieldname: childMetas,
+      rows: [data],
+    );
   }
 
   Future<DocTypeMeta?> _loadMeta(String doctype) async {
@@ -517,7 +634,11 @@ class OfflineRepository {
       final meta = DocTypeMeta.fromJson(parsed);
       _metaCache[doctype] = meta;
       return meta;
-    } catch (_) {
+    } catch (e, st) {
+      developer.log(
+        'OfflineRepository._loadMeta($doctype) parse failed — $e\n$st',
+        name: 'OfflineRepository',
+      );
       return null;
     }
   }
@@ -550,9 +671,13 @@ class OfflineRepository {
         try {
           childMeta = await _metaFetcher(childDoctype);
           _metaCache[childDoctype] = childMeta;
-        } catch (_) {
+        } catch (e, st) {
           // Network failure on the fallback fetch — fall through and skip
           // the slot. Better than crashing the entire pull.
+          developer.log(
+            'OfflineRepository._resolveChildMetas: _metaFetcher($childDoctype) failed — $e\n$st',
+            name: 'OfflineRepository',
+          );
         }
       }
       if (childMeta == null) continue;
@@ -598,8 +723,12 @@ class OfflineRepository {
       // etc.) can route through DoctypeMetaDao.getTableName(...).
       try {
         await _database.doctypeMetaDao.setTableName(doctype, tableName);
-      } catch (_) {
+      } catch (e, st) {
         // setTableName may not be available on older schemas; harmless.
+        developer.log(
+          'OfflineRepository._ensurePerDoctypeTable: setTableName($doctype) skipped — $e\n$st',
+          name: 'OfflineRepository',
+        );
       }
     } else {
       await _reconcileParentTableSchema(doctype, tableName, meta);
@@ -694,83 +823,6 @@ class OfflineRepository {
     }
   }
 
-  /// Updates `server_name` in per-doctype tables after a successful push.
-  ///
-  /// [mobileUuid] is the parent's `mobile_uuid` / `localId`.
-  /// [serverName] is the server-assigned `name` for the parent row.
-  /// [serverData] is the full Frappe document returned by the server,
-  /// including child table arrays with server-assigned `name` per row.
-  Future<void> markPushed({
-    required String doctype,
-    required String mobileUuid,
-    required String serverName,
-    required Map<String, dynamic> serverData,
-  }) async {
-    if (_localWriter == null) return;
-
-    // 1. Parent per-doctype table.
-    try {
-      await _localWriter.markSynced(
-        parentDoctype: doctype,
-        mobileUuid: mobileUuid,
-        serverName: serverName,
-      );
-    } catch (_) {}
-
-    // 2. Child per-doctype tables.
-    final meta = await _loadMeta(doctype);
-    if (meta == null) return;
-    final db = _database.rawDatabase;
-
-    for (final field in meta.fields) {
-      final fname = field.fieldname;
-      final ftype = field.fieldtype;
-      if (fname == null) continue;
-      if (ftype != 'Table' && ftype != 'Table MultiSelect') continue;
-      final childDoctype = field.options;
-      if (childDoctype == null || childDoctype.isEmpty) continue;
-
-      final serverList = serverData[fname];
-      if (serverList is! List || serverList.isEmpty) continue;
-
-      final childTable = normalizeDoctypeTableName(childDoctype);
-      if (!await sqliteTableExists(db, childTable)) continue;
-
-      for (var idx = 0; idx < serverList.length; idx++) {
-        final serverRow = serverList[idx];
-        if (serverRow is! Map) continue;
-        final childServerName = serverRow['name']?.toString();
-        if (childServerName == null || childServerName.isEmpty) continue;
-
-        // Try by mobile_uuid first (server echoes it when mobile_control is active).
-        final childMobileUuid = serverRow['mobile_uuid']?.toString();
-        bool updated = false;
-        if (childMobileUuid != null && childMobileUuid.isNotEmpty) {
-          try {
-            final count = await db.update(
-              childTable,
-              {'server_name': childServerName},
-              where: 'mobile_uuid = ?',
-              whereArgs: [childMobileUuid],
-            );
-            updated = count > 0;
-          } catch (_) {}
-        }
-        // Fallback: match by parent_uuid + parentfield + idx.
-        if (!updated) {
-          try {
-            await db.update(
-              childTable,
-              {'server_name': childServerName},
-              where: 'parent_uuid = ? AND parentfield = ? AND idx = ?',
-              whereArgs: [mobileUuid, fname, idx],
-            );
-          } catch (_) {}
-        }
-      }
-    }
-  }
-
   /// Returns [doc] with child-table rows attached to [doc.data] under each
   /// Table field's fieldname. Reads from the per-child-doctype SQLite tables
   /// (`docs__<child_doctype>`) by `parent_uuid = doc.localId`, ordered by
@@ -811,29 +863,5 @@ class OfflineRepository {
       }).toList();
     }
     return doc.copyWith(data: enriched);
-  }
-
-  /// Convert Document to Entity
-  DocumentEntity _documentToEntity(Document document) {
-    return DocumentEntity(
-      localId: document.localId,
-      doctype: document.doctype,
-      serverId: document.serverId,
-      dataJson: jsonEncode(document.data),
-      status: document.status,
-      modified: document.modified,
-    );
-  }
-
-  /// Convert Entity to Document
-  Document _entityToDocument(DocumentEntity entity) {
-    return Document(
-      localId: entity.localId,
-      doctype: entity.doctype,
-      serverId: entity.serverId,
-      data: jsonDecode(entity.dataJson) as Map<String, dynamic>,
-      status: entity.status,
-      modified: entity.modified,
-    );
   }
 }

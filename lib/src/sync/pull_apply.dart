@@ -120,11 +120,18 @@ class PullApply {
         limit: 1,
       );
 
+      // Tombstoned rows never resurrect — local DELETE is queued in
+      // outbox waiting to push. Skip silently; once the DELETE outbox
+      // row drains, the row is hard-deleted server-side too.
+      if (existing.isNotEmpty && existing.first['sync_status'] == 'deleted') {
+        continue;
+      }
       if (existing.isNotEmpty &&
           const [
             'dirty',
             'failed',
             'conflict',
+            'blocked',
           ].contains(existing.first['sync_status'])) {
         // Spec §5.1 requires "server has advanced" before flagging a
         // conflict. Cursor filtering normally guarantees this, but
@@ -206,6 +213,30 @@ class PullApply {
         final childTable = normalizeDoctypeTableName(childInfo.doctype);
         final list = (r[fieldname] as List?) ?? const [];
 
+        // Snapshot existing local children before the wipe so we can
+        // preserve their mobile_uuid. Cross-doc Link fields point at
+        // this uuid; a fresh v4 on every re-pull orphans them.
+        // Priority: server_name → mobile_uuid → position (0-based).
+        final existingChildren = await txn.query(
+          childTable,
+          columns: ['mobile_uuid', 'server_name'],
+          where: 'parent_uuid = ? AND parentfield = ?',
+          whereArgs: [uuid, fieldname],
+          orderBy: 'idx ASC',
+        );
+        final byServerName = <String, String>{};
+        final byPosition = <int, String>{};
+        final localUuids = <String>{};
+        for (var i = 0; i < existingChildren.length; i++) {
+          final ec = existingChildren[i];
+          final mu = ec['mobile_uuid'] as String?;
+          if (mu == null || mu.isEmpty) continue;
+          byPosition[i] = mu;
+          localUuids.add(mu);
+          final sn = ec['server_name'] as String?;
+          if (sn != null && sn.isNotEmpty) byServerName[sn] = mu;
+        }
+
         await txn.delete(
           childTable,
           where: 'parent_uuid = ? AND parentfield = ?',
@@ -214,9 +245,24 @@ class PullApply {
 
         for (var idx = 0; idx < list.length; idx++) {
           final cr = Map<String, dynamic>.from(list[idx] as Map);
+          final serverChildName = cr['name'] as String?;
+          final rawChildUuid = cr['mobile_uuid']?.toString();
+          final hasRawUuid = rawChildUuid != null && rawChildUuid.isNotEmpty;
+          String? preserved;
+          if (serverChildName != null && serverChildName.isNotEmpty) {
+            preserved = byServerName[serverChildName];
+          }
+          if (preserved == null &&
+              hasRawUuid &&
+              localUuids.contains(rawChildUuid)) {
+            preserved = rawChildUuid;
+          }
+          preserved ??= byPosition[idx];
+          final childUuid =
+              preserved ?? (hasRawUuid ? rawChildUuid : uuidGen.v4());
           final childRow = <String, Object?>{
-            'mobile_uuid': uuidGen.v4(),
-            'server_name': cr['name'] as String?,
+            'mobile_uuid': childUuid,
+            'server_name': serverChildName,
             'parent_uuid': uuid,
             'parent_doctype': parentMeta.name,
             'parentfield': fieldname,

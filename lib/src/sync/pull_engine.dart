@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:sqflite/sqflite.dart';
 
 import '../concurrency/concurrency_pool.dart';
@@ -76,17 +77,25 @@ class PullEngine {
   Future<Set<String>> run(ClosureResult closure) async {
     notifier.value = notifier.value.copyWith(isPulling: true);
     final deferred = <String>{};
-    final futures = <Future<void>>[];
-    for (final dt in closure.doctypes) {
-      if (closure.childDoctypes.contains(dt)) continue;
-      futures.add(pool.submit<void>(() => _runDoctype(dt, closure, deferred)));
+    try {
+      final futures = <Future<void>>[];
+      for (final dt in closure.doctypes) {
+        if (closure.childDoctypes.contains(dt)) continue;
+        futures.add(
+          pool.submit<void>(() => _runDoctype(dt, closure, deferred)),
+        );
+      }
+      await Future.wait(futures);
+      return deferred;
+    } finally {
+      // Always reset `isPulling` and stamp `lastSyncAt` — without this,
+      // an unhandled error in any worker (or the closure walk itself)
+      // would leave the notifier showing "syncing…" forever.
+      notifier.value = notifier.value.copyWith(
+        isPulling: false,
+        lastSyncAt: DateTime.now().toUtc(),
+      );
     }
-    await Future.wait(futures);
-    notifier.value = notifier.value.copyWith(
-      isPulling: false,
-      lastSyncAt: DateTime.now().toUtc(),
-    );
-    return deferred;
   }
 
   Future<void> _runDoctype(
@@ -222,10 +231,11 @@ class PullEngine {
           lastOkCursor: scratchComplete,
         ),
       );
-    } catch (e) {
+    } catch (e, st) {
       // Mid-pull failure: do NOT persist cursor. Surface the doctype's
       // current progress so the UI can show partial counts; full retry
       // happens on next pull cycle.
+      debugPrint('PullEngine.pull($doctype) failed mid-pull — $e\n$st');
       notifier.value = notifier.value.updatePerDoctype(
         doctype,
         DoctypeSyncState(

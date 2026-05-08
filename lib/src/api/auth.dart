@@ -40,8 +40,11 @@ class AuthService {
   Future<void> logout() async {
     try {
       await _restHelper.post('/api/method/mobile_auth.logout');
-    } catch (_) {
-      // Ignore logout errors
+    } catch (e, st) {
+      // ignore: avoid_print
+      print(
+        'AuthApi: server logout failed (continuing local cleanup) — $e\n$st',
+      );
     } finally {
       _restHelper.clearSession();
       await _sessionStorage.clearSession();

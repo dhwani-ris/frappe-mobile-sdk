@@ -10,10 +10,7 @@ void main() {
           return BulkProbeResult(
             headerVersion: '1.0',
             rows: [
-              {
-                'doctype': doctypes.first,
-                'modified': '2026-01-01 00:00:00',
-              },
+              {'doctype': doctypes.first, 'modified': '2026-01-01 00:00:00'},
             ],
           );
         },
@@ -40,7 +37,7 @@ void main() {
         appMethodName: 'x.y',
         requester: (method, doctypes) async {
           calls++;
-          return BulkProbeResult(headerVersion: '1', rows: const []);
+          return const BulkProbeResult(headerVersion: '1', rows: []);
         },
       );
       await probe.detect(candidates: const ['DocType']);
@@ -54,7 +51,7 @@ void main() {
         appMethodName: 'x.y',
         requester: (method, doctypes) async {
           calls++;
-          return BulkProbeResult(headerVersion: '1', rows: const []);
+          return const BulkProbeResult(headerVersion: '1', rows: []);
         },
       );
       await probe.detect(candidates: const ['DocType']);

@@ -12,13 +12,21 @@ abstract class ChildInfo {
   String get tableName;
 }
 
+// Columns dropped before the assembled payload reaches the wire. This
+// is intentionally NARROWER than `PayloadSerializer.serializeForBase` —
+// `__is_local` companion columns are kept here so [UuidRewriter] can
+// see which Link values are local UUIDs that need rewriting. UuidRewriter
+// strips `__is_local` itself before returning.
 const _systemColumns = <String>{
   'mobile_uuid',
   'server_name',
   'sync_status',
   'sync_error',
+  'error_code',
   'sync_attempts',
+  'last_attempt_at',
   'sync_op',
+  'push_base_payload',
   'local_modified',
   'pulled_at',
   // `modified` is handled explicitly: included for UPDATE/SUBMIT (Frappe's
@@ -97,6 +105,7 @@ class PayloadAssembler {
         final out = <String, Object?>{'doctype': info.doctype};
         for (final e in c.entries) {
           if (_systemColumns.contains(e.key)) continue;
+          if (e.key.endsWith('__norm')) continue;
           if (e.key == 'parent_doctype' || e.key == 'parent_uuid') continue;
           out[e.key] = e.value;
         }

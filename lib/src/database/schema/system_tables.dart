@@ -16,15 +16,11 @@ List<String> systemTablesDDL() => <String>[
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         doctype TEXT NOT NULL,
         mobile_uuid TEXT NOT NULL,
-        server_name TEXT,
         operation TEXT NOT NULL,
-        payload TEXT,
         state TEXT NOT NULL,
-        retry_count INTEGER NOT NULL DEFAULT 0,
-        last_attempt_at INTEGER,
-        error_message TEXT,
+        created_at INTEGER NOT NULL,
         error_code TEXT,
-        created_at INTEGER NOT NULL
+        error_message TEXT
       )
       ''',
   'CREATE INDEX IF NOT EXISTS ix_outbox_state ON outbox(state, created_at)',
@@ -65,16 +61,6 @@ List<String> systemTablesDDL() => <String>[
       )
       ''',
   'INSERT OR IGNORE INTO sdk_meta (id, schema_version) VALUES (1, 0)',
-];
-
-/// v5 extension: server-driven offline mode toggle.
-///
-/// Adds two columns to `sdk_meta`. NOT idempotent on its own — the call
-/// site in `app_database.dart` wraps each ALTER in try/catch on
-/// "duplicate column name" so the upgrade tolerates partial reruns.
-List<String> sdkMetaV5ExtensionsDDL() => <String>[
-  'ALTER TABLE sdk_meta ADD COLUMN offline_enabled INTEGER NOT NULL DEFAULT 0',
-  'ALTER TABLE sdk_meta ADD COLUMN offline_enabled_set_at INTEGER',
 ];
 
 /// ALTER statements to add the new columns to a pre-existing

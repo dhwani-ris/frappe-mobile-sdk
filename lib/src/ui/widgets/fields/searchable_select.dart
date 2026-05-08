@@ -79,7 +79,6 @@ class _SearchableSelectState extends State<SearchableSelect> {
               _search.isEmpty ||
               (o.label ?? o.name).toLowerCase().contains(_search.toLowerCase()),
         )
-        .take(8)
         .toList();
   }
 

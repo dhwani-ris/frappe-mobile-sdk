@@ -58,13 +58,43 @@ class ResponseWriteback {
       );
     }
     final serverModified = response['modified'] as String?;
+
+    // Are any other non-done outbox rows pending for this uuid? If so,
+    // leave sync_status='dirty' so the next push picks them up — flipping
+    // to 'synced' would falsely advertise the doc is in sync with the
+    // server while local edits remain queued. Spec §"In-flight collision
+    // handling".
+    final more = await txn.rawQuery(
+      '''
+      SELECT 1 FROM outbox
+       WHERE doctype = ?
+         AND mobile_uuid = ?
+         AND id != ?
+         AND state IN (?, ?, ?, ?, ?)
+       LIMIT 1
+      ''',
+      [
+        row.doctype,
+        row.mobileUuid,
+        row.id,
+        OutboxState.pending.wireName,
+        OutboxState.inFlight.wireName,
+        OutboxState.failed.wireName,
+        OutboxState.blocked.wireName,
+        OutboxState.conflict.wireName,
+      ],
+    );
+    final hasMore = more.isNotEmpty;
+
     await txn.update(
       parentTable,
       <String, Object?>{
         'server_name': serverName,
         'modified': serverModified,
-        'sync_status': 'synced',
-        'sync_error': null,
+        'sync_status': hasMore ? 'dirty' : 'synced',
+        if (!hasMore) 'sync_error': null,
+        if (!hasMore) 'error_code': null,
+        if (!hasMore) 'push_base_payload': null,
         'sync_attempts': 0,
       },
       where: 'mobile_uuid = ?',
@@ -76,29 +106,43 @@ class ResponseWriteback {
       final tableName = entry.value;
       final childList = response[fieldname] as List?;
       if (childList == null) continue;
-      for (final c in childList) {
-        final cm = Map<String, dynamic>.from(c as Map);
-        await txn.update(
-          tableName,
-          <String, Object?>{
-            'server_name': cm['name'],
-            'modified': cm['modified'],
-          },
-          where: 'parent_uuid = ? AND parentfield = ? AND idx = ?',
-          whereArgs: [row.mobileUuid, fieldname, cm['idx']],
-        );
+      // Match priority:
+      //   1. mobile_uuid — when mobile_control echoes it back, the
+      //      most stable key.
+      //   2. Position in the response list (0-based) against the
+      //      local row's idx. Frappe's `base_document.append`
+      //      overwrites idx=0 → 1 because `getattr(d, "idx", False)`
+      //      treats 0 as falsy, so matching on `cm['idx']` directly
+      //      silently misses the local row.
+      for (var pos = 0; pos < childList.length; pos++) {
+        final cm = Map<String, dynamic>.from(childList[pos] as Map);
+        final values = <String, Object?>{
+          'server_name': cm['name'],
+          'modified': cm['modified'],
+        };
+        var updated = 0;
+        final childMobileUuid = cm['mobile_uuid']?.toString();
+        if (childMobileUuid != null && childMobileUuid.isNotEmpty) {
+          updated = await txn.update(
+            tableName,
+            values,
+            where: 'mobile_uuid = ?',
+            whereArgs: [childMobileUuid],
+          );
+        }
+        if (updated == 0) {
+          await txn.update(
+            tableName,
+            values,
+            where: 'parent_uuid = ? AND parentfield = ? AND idx = ?',
+            whereArgs: [row.mobileUuid, fieldname, pos],
+          );
+        }
       }
     }
 
-    await txn.update(
-      'outbox',
-      <String, Object?>{
-        'state': OutboxState.done.wireName,
-        'server_name': serverName,
-        'last_attempt_at': DateTime.now().toUtc().millisecondsSinceEpoch,
-      },
-      where: 'id = ?',
-      whereArgs: [row.id],
-    );
+    // Outbox holds only owed-to-server work (Invariant 2). Delete the
+    // row outright instead of marking it `done`.
+    await txn.delete('outbox', where: 'id = ?', whereArgs: [row.id]);
   }
 }

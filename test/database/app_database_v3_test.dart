@@ -37,15 +37,18 @@ void main() {
     );
   });
 
-  test(
-    'sdk_meta seeded with schema_version=0 awaiting data migration',
-    () async {
-      final appDb = await AppDatabase.inMemoryDatabase();
-      final raw = appDb.rawDatabase;
-      final rows = await raw.query('sdk_meta', limit: 1);
-      expect(rows.first['schema_version'], 0);
-    },
-  );
+  test('AppDatabase._version equals 3 and sdk_meta row matches', () async {
+    final appDb = await AppDatabase.inMemoryDatabase();
+    expect(AppDatabaseTestSeam.version, 3);
+    final raw = appDb.rawDatabase;
+    final pragma = await raw.rawQuery('PRAGMA user_version');
+    expect(pragma.first.values.first, 3);
+    final meta = await raw.query('sdk_meta', where: 'id = 1');
+    expect(meta, hasLength(1));
+    expect(meta.first['schema_version'], 3);
+    expect(meta.first['offline_enabled'], 0);
+    expect(meta.first['bootstrap_done'], 0);
+  });
 
   test(
     'clearAllData drops all app-owned tables, recreates schema, preserves SQLite internals',
@@ -112,9 +115,9 @@ void main() {
       expect(meta, hasLength(1));
       expect(meta.first['session_user_json'], isNull);
       expect(meta.first['bootstrap_done'], 0);
-      // schema_version bumped to 2 so V1ToV2Migration skips on next call
-      // (the now-empty `documents` table has nothing to migrate).
-      expect(meta.first['schema_version'], 2);
+      // schema_version bumped to 3 — the legacy `documents` migration is
+      // gone in v6; nothing to migrate from here.
+      expect(meta.first['schema_version'], 3);
 
       // Engine still functions — re-insert into a recreated table works.
       await raw.insert('outbox', {

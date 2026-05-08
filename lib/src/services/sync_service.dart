@@ -1,10 +1,9 @@
 import 'dart:convert';
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:meta/meta.dart';
 import '../api/client.dart';
 import '../concurrency/sync_mutex.dart';
 import '../database/app_database.dart';
-import '../database/sqlite_utils.dart';
-import '../database/table_name.dart';
 import '../models/doc_type_meta.dart';
 import '../models/offline_mode.dart';
 import '../models/offline_mode_notifier.dart';
@@ -36,6 +35,7 @@ class SyncService {
   final FrappeClient _client;
   final OfflineRepository _repository;
   final AppDatabase _database; // ignore: unused_field
+  // ignore: unused_field
   final Future<String?> Function()? _getMobileUuid;
   final SyncMutex _syncMutex = SyncMutex();
 
@@ -45,6 +45,11 @@ class SyncService {
   /// mid-session flips by `FrappeSDK._applyOfflineFlag` take effect
   /// immediately at every gate site below.
   OfflineMode get offlineMode => _modeNotifier.value;
+
+  /// Drives the actual push. When non-null, [pushSync] delegates to it
+  /// (via [_syncMutex]) instead of running the legacy [_pushOneInternal]
+  /// pipeline. Wired by `FrappeSDK` to `PushEngine.runOnce()`.
+  final Future<void> Function()? _pushRunner;
 
   SyncService(
     this._client,
@@ -56,8 +61,10 @@ class SyncService {
       isPersisted: true,
     ),
     OfflineModeNotifier? offlineModeNotifier,
+    Future<void> Function()? pushRunner,
   }) : _getMobileUuid = getMobileUuid,
-       _modeNotifier = offlineModeNotifier ?? OfflineModeNotifier(offlineMode);
+       _modeNotifier = offlineModeNotifier ?? OfflineModeNotifier(offlineMode),
+       _pushRunner = pushRunner;
 
   /// Check if device is online
   Future<bool> isOnline() async {
@@ -67,124 +74,56 @@ class SyncService {
         connectivityResult.contains(ConnectivityResult.ethernet);
   }
 
-  /// Sync all dirty documents (push). Public entrypoint — guarded by
-  /// [_syncMutex] so concurrent callers see "already in progress" rather
-  /// than racing each other.
+  /// Sync all dirty documents (push). Now a thin wrapper over
+  /// [PushEngine.runOnce] via the injected [_pushRunner]. The
+  /// [_syncMutex] still guards concurrent callers.
+  ///
+  /// The [doctype] parameter is informational — `PushEngine.runOnce`
+  /// drains the entire outbox; per-doctype filtering can be added in a
+  /// follow-up. When [_pushRunner] is null (e.g. tests that don't wire
+  /// the engine), returns [SyncResult.empty()] and logs a warning.
+  ///
+  /// Detail counts (success/failure/error list) are not populated here;
+  /// callers wanting that signal should subscribe to
+  /// `SyncStateNotifier` (exposed via `sdk.sync.state$`).
   Future<SyncResult> pushSync({String? doctype}) async {
     if (!offlineMode.enabled) return SyncResult.empty();
-    if (!await isOnline()) {
+    bool online = false;
+    try {
+      online = await isOnline();
+    } catch (e, st) {
+      // Platform-channel failure (e.g. headless test environment without
+      // connectivity_plus mocks). Treat as offline; surface the failure
+      // mode in logs rather than silently swallowing it.
+      // ignore: avoid_print
+      print('SyncService.pushSync: isOnline() threw — $e\n$st');
+    }
+    if (!online) {
       return SyncResult(0, 0, 0, 'No internet connection', errors: []);
     }
-    final result = await _syncMutex.tryProtect(
-      () => _pushOneInternal(doctype: doctype),
-    );
-    return result ??
-        SyncResult(0, 0, 0, 'Sync already in progress', errors: []);
-  }
-
-  /// Push body — no mutex, no online probe. Callers are responsible for
-  /// both. Used directly by [syncDoctype] (which already holds the mutex
-  /// for its combined push+pull phase).
-  Future<SyncResult> _pushOneInternal({String? doctype}) async {
-    int success = 0;
-    int failed = 0;
-    int total = 0;
-    final List<SyncError> errors = [];
-
-    final dirtyDocs = doctype != null
-        ? await _repository.getDirtyDocumentsByDoctype(doctype)
-        : await _repository.getDirtyDocuments();
-
-    total = dirtyDocs.length;
-
-    for (final doc in dirtyDocs) {
-      try {
-        if (doc.status == 'deleted') {
-          if (doc.serverId != null) {
-            try {
-              await _client.document.deleteDocument(doc.doctype, doc.serverId!);
-            } catch (e) {
-              rethrow;
-            }
-          }
-          await _repository.hardDeleteDocument(doc.localId);
-          success++;
-        } else if (doc.serverId == null) {
-          try {
-            var data = Map<String, dynamic>.from(doc.data);
-            final existingUuid = data['mobile_uuid'] as String?;
-            if ((existingUuid == null || existingUuid.isEmpty) &&
-                _getMobileUuid != null) {
-              final uuid = await _getMobileUuid();
-              if (uuid != null && uuid.isNotEmpty) {
-                data['mobile_uuid'] = uuid;
-              }
-            }
-            data = await _resolveLinkedUuids(doc.doctype, data);
-            final result = await _client.document.createDocument(
-              doc.doctype,
-              data,
-            );
-
-            final serverId =
-                result['name'] as String? ?? result['docname'] as String?;
-            if (serverId != null) {
-              final updated = doc.copyWith(
-                serverId: serverId,
-                status: 'clean',
-                modified: DateTime.now().millisecondsSinceEpoch,
-              );
-              await _repository.updateDocument(updated);
-              // Update server_name in per-doctype tables for parent + children.
-              try {
-                await _repository.markPushed(
-                  doctype: doc.doctype,
-                  mobileUuid: doc.localId,
-                  serverName: serverId,
-                  serverData: result,
-                );
-              } catch (_) {}
-            }
-          } catch (e) {
-            rethrow;
-          }
-          success++;
-        } else {
-          try {
-            await _client.document.updateDocument(
-              doc.doctype,
-              doc.serverId!,
-              doc.data,
-            );
-          } catch (e) {
-            rethrow;
-          }
-
-          final updated = doc.markClean();
-          await _repository.updateDocument(updated);
-          success++;
-        }
-      } catch (e) {
-        final errorMsg = e.toString();
-        failed++;
-
-        // Track error details
-        final operation = doc.status == 'deleted'
-            ? 'delete'
-            : (doc.serverId == null ? 'create' : 'update');
-        errors.add(
-          SyncError(
-            documentId: doc.serverId ?? doc.localId,
-            doctype: doc.doctype,
-            operation: operation,
-            errorMessage: errorMsg,
-          ),
-        );
-      }
+    final runner = _pushRunner;
+    if (runner == null) {
+      // ignore: avoid_print
+      print(
+        'SyncService.pushSync: pushRunner not wired; returning empty result',
+      );
+      return SyncResult.empty();
     }
-
-    return SyncResult(success, failed, total, null, errors: errors);
+    final result = await _syncMutex.tryProtect<bool>(() async {
+      await runner();
+      return true;
+    });
+    if (result == null) {
+      return SyncResult(0, 0, 0, 'Sync already in progress', errors: []);
+    }
+    return SyncResult(0, 0, 0, null, errors: const []);
   }
+
+  // The legacy `_pushOneInternal` push pipeline (read dirty rows from
+  // the `documents` table → HTTP via FrappeClient → write back) was
+  // deleted in retirement Phase 6. PushEngine.runOnce() is now the only
+  // push driver. SyncService.pushSync delegates to it via the injected
+  // `pushRunner` callback.
 
   /// Returns the current pull phase of [doctype] — drives UI choices
   /// (blocking screen vs background indicator) without forcing the
@@ -197,8 +136,10 @@ class SyncService {
       return cursor.complete
           ? DoctypePullPhase.incremental
           : DoctypePullPhase.resume;
-    } catch (_) {
+    } catch (e, st) {
       // Corrupted cursor reads as INITIAL — the next pull will refresh it.
+      // ignore: avoid_print
+      print('SyncService.getPullPhase: corrupted cursor — $e\n$st');
       return DoctypePullPhase.initial;
     }
   }
@@ -278,7 +219,9 @@ class SyncService {
           final dt = doctypes[myIdx];
           try {
             out[dt] = await _pullOneInternal(doctype: dt);
-          } catch (e) {
+          } catch (e, st) {
+            // ignore: avoid_print
+            print('SyncService.pullSyncMany($dt) failed — $e\n$st');
             out[dt] = SyncResult(
               0,
               0,
@@ -357,10 +300,42 @@ class SyncService {
   /// persisted cursor — preserves the old `syncDoctype` flow's
   /// behaviour for callers that still pass it.
   /// ────────────────────────────────────────────────────────────────────
+  /// True when [doctype] is a child table (`istable=1`). Frappe doesn't
+  /// permit `frappe.client.get_list` on child doctypes — the request
+  /// raises `PermissionError` (Insufficient Permission), which the SDK
+  /// surfaces as a 500 + cascading DB locks while the failure unwinds.
+  /// Children must come embedded in their parent's pull payload (via
+  /// `mobile_sync.get_docs_with_children`), so there is no legitimate
+  /// reason to call pullSync on a child doctype.
+  ///
+  /// Reads the persisted meta JSON; defensively returns `false` if no
+  /// meta is on file so an unknown doctype isn't silently skipped.
+  @visibleForTesting
+  Future<bool> isChildTableForTest(String doctype) => _isChildTable(doctype);
+
+  Future<bool> _isChildTable(String doctype) async {
+    final raw = await _database.doctypeMetaDao.getMetaJson(doctype);
+    if (raw == null || raw.isEmpty || raw == '{}') return false;
+    try {
+      final parsed = jsonDecode(raw) as Map<String, dynamic>;
+      if (parsed.isEmpty) return false;
+      return DocTypeMeta.fromJson(parsed).isTable;
+    } catch (e, st) {
+      // ignore: avoid_print
+      print('SyncService._isChildTable($doctype) parse failed — $e\n$st');
+      return false;
+    }
+  }
+
   Future<SyncResult> _pullOneInternal({
     required String doctype,
     int? since,
   }) async {
+    // Child-table guard: see _isChildTable for rationale.
+    if (await _isChildTable(doctype)) {
+      return SyncResult(0, 0, 0, null, errors: const []);
+    }
+
     int success = 0;
     int failed = 0;
     int total = 0;
@@ -383,8 +358,10 @@ class SyncService {
         if (mv is String && mv.isNotEmpty) cursorModified = mv;
         if (nv is String && nv.isNotEmpty) cursorName = nv;
         cursorComplete = cv == true;
-      } catch (_) {
+      } catch (e, st) {
         // Corrupted cursor — treat as fresh INITIAL pull.
+        // ignore: avoid_print
+        print('SyncService.pullSync: corrupted cursor — $e\n$st');
       }
     }
 
@@ -488,15 +465,19 @@ class SyncService {
         }
 
         try {
-          await _repository.saveServerDocument(
+          await _repository.applyServerDocument(
             doctype: doctype,
-            serverId: serverId,
+            serverName: serverId,
             data: docData,
           );
           success++;
           pageLastModified = modifiedAt;
           pageLastName = serverId;
-        } catch (e) {
+        } catch (e, st) {
+          // ignore: avoid_print
+          print(
+            'SyncService.pullSync applyServerDocument($doctype/$serverId) failed — $e\n$st',
+          );
           failed++;
           errors.add(
             SyncError(
@@ -561,121 +542,13 @@ class SyncService {
     return SyncResult(success, failed, total, null, errors: errors);
   }
 
-  /// Resolves local mobile_uuid values to server_names for all Link fields
-  /// in [doctype]'s parent payload AND inside every child table row.
-  ///
-  /// Lookup order per UUID:
-  ///   1. Legacy `documents` table — `localId = uuid` with a non-null
-  ///      `serverId` (set immediately after a successful push in this pass).
-  ///   2. Per-doctype `docs__<target>` table — `mobile_uuid = uuid` with
-  ///      a non-null `server_name` (set after a server pull or markSynced).
-  ///
-  /// No-ops gracefully on missing meta, missing tables, or any DB error.
-  Future<Map<String, dynamic>> _resolveLinkedUuids(
-    String doctype,
-    Map<String, dynamic> data,
-  ) async {
-    final raw = await _database.doctypeMetaDao.getMetaJson(doctype);
-    if (raw == null || raw.isEmpty || raw == '{}') return data;
-    DocTypeMeta meta;
-    try {
-      final parsed = jsonDecode(raw) as Map<String, dynamic>;
-      meta = DocTypeMeta.fromJson(parsed);
-    } catch (_) {
-      return data;
-    }
-    return _rewritePayload(meta, data);
-  }
-
-  Future<Map<String, dynamic>> _rewritePayload(
-    DocTypeMeta meta,
-    Map<String, dynamic> data,
-  ) async {
-    final resolved = Map<String, dynamic>.from(data);
-    for (final field in meta.fields) {
-      final fname = field.fieldname;
-      if (fname == null) continue;
-
-      if (field.fieldtype == 'Link') {
-        final targetDoctype = field.options;
-        if (targetDoctype == null || targetDoctype.isEmpty) continue;
-        final value = resolved[fname] as String?;
-        if (value == null || value.isEmpty || !_looksLikeMobileUuid(value)) {
-          continue;
-        }
-        final serverName = await _uuidToServerName(targetDoctype, value);
-        if (serverName != null) resolved[fname] = serverName;
-      } else if (field.fieldtype == 'Table' ||
-          field.fieldtype == 'Table MultiSelect') {
-        final childDoctype = field.options;
-        if (childDoctype == null || childDoctype.isEmpty) continue;
-        final list = resolved[fname];
-        if (list is! List || list.isEmpty) continue;
-        final childRaw = await _database.doctypeMetaDao.getMetaJson(
-          childDoctype,
-        );
-        if (childRaw == null || childRaw.isEmpty) continue;
-        DocTypeMeta childMeta;
-        try {
-          final parsed = jsonDecode(childRaw) as Map<String, dynamic>;
-          childMeta = DocTypeMeta.fromJson(parsed);
-        } catch (_) {
-          continue;
-        }
-        final rewritten = <dynamic>[];
-        for (final row in list) {
-          if (row is Map) {
-            rewritten.add(
-              await _rewritePayload(childMeta, Map<String, dynamic>.from(row)),
-            );
-          } else {
-            rewritten.add(row);
-          }
-        }
-        resolved[fname] = rewritten;
-      }
-    }
-    return resolved;
-  }
-
-  /// Resolves a mobile_uuid to its server name. Checks the legacy
-  /// `documents` table first (populated immediately after a successful push
-  /// in this same sync pass), then the per-doctype table.
-  Future<String?> _uuidToServerName(String targetDoctype, String uuid) async {
-    // 1. Legacy documents table — localId = uuid, serverId set by updateDocument
-    try {
-      final doc = await _repository.getDocumentByLocalId(uuid);
-      if (doc?.serverId != null && doc!.serverId!.isNotEmpty) {
-        return doc.serverId;
-      }
-    } catch (_) {}
-
-    // 2. Per-doctype table — server_name set by pull or markSynced
-    try {
-      final targetTable = normalizeDoctypeTableName(targetDoctype);
-      final db = _database.rawDatabase;
-      if (!await sqliteTableExists(db, targetTable)) return null;
-      final rows = await db.query(
-        targetTable,
-        columns: ['server_name'],
-        where: 'mobile_uuid = ? AND server_name IS NOT NULL',
-        whereArgs: [uuid],
-        limit: 1,
-      );
-      if (rows.isNotEmpty) {
-        return rows.first['server_name'] as String?;
-      }
-    } catch (_) {}
-
-    return null;
-  }
-
-  static final _uuidRegex = RegExp(
-    r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
-    caseSensitive: false,
-  );
-
-  static bool _looksLikeMobileUuid(String value) => _uuidRegex.hasMatch(value);
+  // The legacy `_resolveLinkedUuids` / `_rewritePayload` /
+  // `_uuidToServerName` / `_looksLikeMobileUuid` helpers were deleted in
+  // retirement Phase 6. UUID rewriting on the push path now flows through
+  // `UuidRewriter.rewrite` (uuid_rewriter.dart) inside `PayloadAssembler`,
+  // keyed off the `__is_local` flag on docs__<doctype> rows. The docs__
+  // server_name lookup that `_uuidToServerName` did is now provided by
+  // `SyncEngineBuilder._resolveServerNameFor`.
 
   Future<bool> _doctypeHasChildTables(String doctype) async {
     final raw = await _database.doctypeMetaDao.getMetaJson(doctype);
@@ -689,61 +562,26 @@ class SyncService {
         }
       }
       return false;
-    } catch (_) {
+    } catch (e, st) {
+      // ignore: avoid_print
+      print(
+        'SyncService._doctypeHasChildTables($doctype) parse failed — $e\n$st',
+      );
       return false;
     }
   }
 
-  /// Full sync (push + pull) for a DocType. Takes the mutex once around
-  /// the combined operation and calls the mutex-free internals directly —
-  /// previously this delegated to [pushSync]/[pullSync], which themselves
-  /// gated on `_isSyncing` and silently turned the push leg into a no-op
-  /// (CRIT-1).
-  Future<SyncResult> syncDoctype(String doctype) async {
-    if (!offlineMode.enabled) return SyncResult.empty();
-    if (!await isOnline()) {
-      return SyncResult(0, 0, 0, 'No internet connection', errors: []);
-    }
-    final result = await _syncMutex.tryProtect(() async {
-      final pushResult = await _pushOneInternal(doctype: doctype);
-
-      final localDocs = await _repository.getDocumentsByDoctype(doctype);
-      int? lastModified;
-      if (localDocs.isNotEmpty) {
-        lastModified = localDocs
-            .map((d) => d.modified)
-            .reduce((a, b) => a > b ? a : b);
-      }
-
-      final pullResult = await _pullOneInternal(
-        doctype: doctype,
-        since: lastModified,
-      );
-
-      final allErrors = <SyncError>[];
-      allErrors.addAll(pushResult.errors);
-      allErrors.addAll(pullResult.errors);
-
-      return SyncResult(
-        pushResult.success + pullResult.success,
-        pushResult.failed + pullResult.failed,
-        pushResult.total + pullResult.total,
-        null,
-        errors: allErrors,
-      );
-    });
-    return result ??
-        SyncResult(0, 0, 0, 'Sync already in progress', errors: []);
-  }
+  // `syncDoctype` was deleted in retirement Phase 6 — no production
+  // caller existed. Use `pushSync()` + `pullSync(doctype:)` separately,
+  // or go through `sdk.sync.syncNow()` (SyncController) for the combined
+  // pull-then-push cycle.
 
   /// Get sync statistics
   Future<Map<String, int>> getSyncStats({String? doctype}) async {
     if (!offlineMode.enabled) {
       return const {'dirty': 0, 'deleted': 0, 'total': 0};
     }
-    final dirtyDocs = doctype != null
-        ? await _repository.getDirtyDocumentsByDoctype(doctype)
-        : await _repository.getDirtyDocuments();
+    final dirtyDocs = await _repository.getDirtyDocuments(doctype: doctype);
 
     final deletedCount = dirtyDocs.where((d) => d.status == 'deleted').length;
     final dirtyCount = dirtyDocs.where((d) => d.status == 'dirty').length;

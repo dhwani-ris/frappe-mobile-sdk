@@ -19,9 +19,12 @@ void main() {
         return const [];
       },
     );
-    final meta = DocTypeMeta(name: 'Customer', fields: [
-      DocField(fieldname: 'customer_name', fieldtype: 'Data', label: 'N'),
-    ]);
+    final meta = DocTypeMeta(
+      name: 'Customer',
+      fields: [
+        DocField(fieldname: 'customer_name', fieldtype: 'Data', label: 'N'),
+      ],
+    );
     await fetcher.fetch(
       doctype: 'Customer',
       meta: meta,
@@ -55,20 +58,24 @@ void main() {
       await fetcher.fetch(
         doctype: 'X',
         meta: meta,
-        cursor: Cursor(modified: '2026-01-01 00:00:00', name: 'A'),
+        cursor: const Cursor(modified: '2026-01-01 00:00:00', name: 'A'),
         pageSize: 500,
       );
 
       final filters = cap.params!['filters'] as List?;
       expect(filters, isNotNull);
-      expect(filters!.length, 1,
-          reason:
-              'must NOT also include `name > X` — that AND-clause would '
-              'silently exclude later-modified earlier-named rows');
+      expect(
+        filters!.length,
+        1,
+        reason:
+            'must NOT also include `name > X` — that AND-clause would '
+            'silently exclude later-modified earlier-named rows',
+      );
       expect(
         filters.first,
         ['modified', '>=', '2026-01-01 00:00:00'],
-        reason: 'plan-compliant single >= predicate; seam row absorbed '
+        reason:
+            'plan-compliant single >= predicate; seam row absorbed '
             'by PullApply UPSERT idempotency',
       );
 
@@ -104,7 +111,7 @@ void main() {
       listHttp: (doctype, params) async => const [],
     );
     final meta = DocTypeMeta(name: 'X', fields: const []);
-    final start = Cursor(modified: '2026-01-01', name: 'A');
+    final start = const Cursor(modified: '2026-01-01', name: 'A');
     final result = await fetcher.fetch(
       doctype: 'X',
       meta: meta,
@@ -123,18 +130,30 @@ void main() {
         return const [];
       },
     );
-    final meta = DocTypeMeta(name: 'SO', fields: [
-      DocField(
-          fieldname: 'customer', fieldtype: 'Link', label: 'C',
-          options: 'Customer'),
-      DocField(
-          fieldname: 'items', fieldtype: 'Table', label: 'I',
-          options: 'Sales Order Item'),
-      DocField(
-          fieldname: 'taxes', fieldtype: 'Table MultiSelect',
-          label: 'T', options: 'Tax'),
-      DocField(fieldname: 'break1', fieldtype: 'Section Break', label: 'B'),
-    ]);
+    final meta = DocTypeMeta(
+      name: 'SO',
+      fields: [
+        DocField(
+          fieldname: 'customer',
+          fieldtype: 'Link',
+          label: 'C',
+          options: 'Customer',
+        ),
+        DocField(
+          fieldname: 'items',
+          fieldtype: 'Table',
+          label: 'I',
+          options: 'Sales Order Item',
+        ),
+        DocField(
+          fieldname: 'taxes',
+          fieldtype: 'Table MultiSelect',
+          label: 'T',
+          options: 'Tax',
+        ),
+        DocField(fieldname: 'break1', fieldtype: 'Section Break', label: 'B'),
+      ],
+    );
     await fetcher.fetch(
       doctype: 'SO',
       meta: meta,

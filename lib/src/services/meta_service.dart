@@ -60,6 +60,13 @@ class MetaService {
     } else {
       await _database.doctypeMetaDao.insertDoctypeMeta(entity);
     }
+    // Invalidate the in-memory LRU so the next getMeta() reload reads the
+    // freshly-persisted row instead of serving the previous cached copy.
+    // Without this, schema changes synced via prefetchToDb /
+    // checkAndSyncDoctypes / resyncMobileConfiguration stay invisible to
+    // the form layer until the entry is naturally evicted (15 reads later)
+    // or the app restarts.
+    clearDocTypeCache(doctype);
   }
 
   Future<Map<String, dynamic>> _fetchMetaFromServer(String doctype) async {
@@ -144,8 +151,8 @@ class MetaService {
     for (final doctype in doctypes) {
       try {
         await fetchAndStoreInDb(doctype);
-      } catch (_) {
-        // skip failed doctypes
+      } catch (e, st) {
+        debugPrint('MetaService.prefetchToDb($doctype) failed — $e\n$st');
       }
     }
   }
@@ -156,7 +163,9 @@ class MetaService {
     for (final doctype in doctypes) {
       try {
         result[doctype] = await getMeta(doctype);
-      } catch (_) {}
+      } catch (e, st) {
+        debugPrint('MetaService.getMetas getMeta($doctype) failed — $e\n$st');
+      }
     }
     return result;
   }
@@ -220,14 +229,17 @@ class MetaService {
         for (final doctype in doctypesToSync) {
           try {
             await fetchAndStoreInDb(doctype);
-          } catch (e) {
-            // Skip failed doctypes, continue with others
+          } catch (e, st) {
+            debugPrint(
+              'MetaService.checkAndSyncDoctypes($doctype) failed — $e\n$st',
+            );
             continue;
           }
         }
       }
-    } catch (e) {
-      // Silently fail - don't block app launch
+    } catch (e, st) {
+      // Don't block app launch on errors here, but surface them.
+      debugPrint('MetaService.checkAndSyncDoctypes failed — $e\n$st');
       return;
     }
   }
@@ -267,8 +279,8 @@ class MetaService {
       if (mobileFormDoctypes.isNotEmpty) {
         await prefetchToDb(mobileFormDoctypes);
       }
-    } catch (e) {
-      // Silently fail
+    } catch (e, st) {
+      debugPrint('MetaService.prefetchMobileFormDoctypes failed — $e\n$st');
       return;
     }
   }
@@ -286,14 +298,16 @@ class MetaService {
         for (final doctype in mobileFormDoctypes) {
           try {
             await fetchAndStoreInDb(doctype);
-          } catch (e) {
-            // Continue with other doctypes
+          } catch (e, st) {
+            debugPrint(
+              'MetaService.syncAllMobileFormDoctypes($doctype) failed — $e\n$st',
+            );
             continue;
           }
         }
       }
-    } catch (e) {
-      // Silently fail
+    } catch (e, st) {
+      debugPrint('MetaService.syncAllMobileFormDoctypes failed — $e\n$st');
       return;
     }
   }
@@ -430,8 +444,10 @@ class MetaService {
         for (final doctype in doctypesToSync) {
           try {
             await fetchAndStoreInDb(doctype);
-          } catch (e) {
-            // Skip failed doctypes, continue with others
+          } catch (e, st) {
+            debugPrint(
+              'MetaService.resyncMobileConfiguration($doctype) failed — $e\n$st',
+            );
             continue;
           }
         }
@@ -452,7 +468,10 @@ class MetaService {
       final date2 = _parseTimestamp(timestamp2);
       if (date1 == null || date2 == null) return false;
       return date1.isAfter(date2);
-    } catch (e) {
+    } catch (e, st) {
+      debugPrint(
+        'MetaService._isTimestampNewer($timestamp1, $timestamp2) failed — $e\n$st',
+      );
       return false;
     }
   }
@@ -469,7 +488,8 @@ class MetaService {
       }
       // Try just date
       return DateTime.parse(timestamp);
-    } catch (e) {
+    } catch (e, st) {
+      debugPrint('MetaService._parseTimestamp($timestamp) failed — $e\n$st');
       return null;
     }
   }
@@ -518,7 +538,10 @@ class MetaService {
     for (final dt in doctypes) {
       try {
         out[dt] = await fallback(dt);
-      } catch (_) {
+      } catch (e, st) {
+        debugPrint(
+          'MetaService.refreshWatermarks fallback($dt) failed — $e\n$st',
+        );
         out[dt] = null;
       }
     }
@@ -572,9 +595,7 @@ class MetaService {
         final oldJson = await dao.getMetaJson(dt);
         final old = (oldJson == null || oldJson.isEmpty || oldJson == '{}')
             ? DocTypeMeta(name: dt, fields: const [])
-            : DocTypeMeta.fromJson(
-                jsonDecode(oldJson) as Map<String, dynamic>,
-              );
+            : DocTypeMeta.fromJson(jsonDecode(oldJson) as Map<String, dynamic>);
 
         final diff = MetaDiffer.diff(oldMeta: old, newMeta: fresh);
         if (!diff.isNoOp) {
@@ -592,7 +613,8 @@ class MetaService {
         final dg = DependencyGraphBuilder.buildOutgoing(fresh);
         await dao.setDepGraphJson(dt, jsonEncode(dg.toJson()));
         updated.add(dt);
-      } catch (e) {
+      } catch (e, st) {
+        debugPrint('MetaService.ensureUpToDate($dt) failed — $e\n$st');
         failed[dt] = e.toString();
       }
     }

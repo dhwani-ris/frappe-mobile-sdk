@@ -77,15 +77,14 @@ void main() {
       db: db,
       metaDao: DoctypeMetaDao(db),
       isOnline: () => false,
-      backgroundFetch: (_, __) async {},
+      backgroundFetch: (_, _) async {},
       metaResolver: (dt) async => m,
     );
   });
 
   tearDown(() async => db.close());
 
-  LinkOptionService makeSvc() =>
-      LinkOptionService(resolver, (dt) async => m);
+  LinkOptionService makeSvc() => LinkOptionService(resolver, (dt) async => m);
 
   test('routes through resolver, returns LinkOptionEntity per row', () async {
     final svc = makeSvc();

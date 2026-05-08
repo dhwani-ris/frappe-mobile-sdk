@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart';
+
 /// Result of a single call to the optional `<consumer_app>.get_meta_watermarks`
 /// helper endpoint. Includes the `X-Mobile-Essentials-Version` header value
 /// when present (used to gate other optimisations the consumer app may
@@ -15,10 +17,8 @@ class BulkProbeDetection {
   const BulkProbeDetection({required this.available, this.version});
 }
 
-typedef BulkProbeRequester = Future<BulkProbeResult> Function(
-  String method,
-  List<String> doctypes,
-);
+typedef BulkProbeRequester =
+    Future<BulkProbeResult> Function(String method, List<String> doctypes);
 
 /// Detects whether the consumer Frappe app exposes a bulk watermark endpoint.
 /// On the first call after login, [detect] issues a tiny request with one
@@ -30,10 +30,7 @@ class BulkWatermarkProbe {
 
   BulkProbeDetection? _cached;
 
-  BulkWatermarkProbe({
-    required this.appMethodName,
-    required this.requester,
-  });
+  BulkWatermarkProbe({required this.appMethodName, required this.requester});
 
   Future<BulkProbeDetection> detect({required List<String> candidates}) async {
     if (_cached != null) return _cached!;
@@ -44,7 +41,10 @@ class BulkWatermarkProbe {
         available: true,
         version: result.headerVersion,
       );
-    } catch (_) {
+    } catch (e, st) {
+      debugPrint(
+        'BulkWatermarkProbe.detect($appMethodName) unavailable — $e\n$st',
+      );
       _cached = const BulkProbeDetection(available: false);
     }
     return _cached!;

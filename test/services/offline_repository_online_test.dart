@@ -15,35 +15,25 @@ void main() {
     final repo = OfflineRepository(
       db,
       offlineMode: const OfflineMode(enabled: false, isPersisted: true),
-      // client null is fine — getDirtyDocuments short-circuits before
-      // touching the client.
     );
-    final dirty = await repo.getDirtyDocuments();
-    expect(dirty, isEmpty);
+    expect(await repo.getDirtyDocuments(), isEmpty);
+    expect(await repo.getDirtyDocuments(doctype: 'Customer'), isEmpty);
     await db.close();
   });
 
-  test('getDirtyDocumentsByDoctype returns empty in online mode', () async {
-    final db = await AppDatabase.inMemoryDatabase();
-    final repo = OfflineRepository(
-      db,
-      offlineMode: const OfflineMode(enabled: false, isPersisted: true),
-    );
-    final dirty = await repo.getDirtyDocumentsByDoctype('Customer');
-    expect(dirty, isEmpty);
-    await db.close();
-  });
-
-  test('createDocument throws StateError when client is missing', () async {
-    final db = await AppDatabase.inMemoryDatabase();
-    final repo = OfflineRepository(
-      db,
-      offlineMode: const OfflineMode(enabled: false, isPersisted: true),
-    );
-    expect(
-      () => repo.createDocument(doctype: 'Customer', data: const {}),
-      throwsStateError,
-    );
-    await db.close();
-  });
+  test(
+    'saveDocument throws StateError when client is missing in online mode',
+    () async {
+      final db = await AppDatabase.inMemoryDatabase();
+      final repo = OfflineRepository(
+        db,
+        offlineMode: const OfflineMode(enabled: false, isPersisted: true),
+      );
+      expect(
+        () => repo.saveDocument(doctype: 'Customer', data: const {}),
+        throwsStateError,
+      );
+      await db.close();
+    },
+  );
 }

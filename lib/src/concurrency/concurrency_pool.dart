@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:collection';
 
+import 'package:flutter/foundation.dart';
+
 class _Pending<T> {
   final Future<T> Function() task;
   final Completer<T> completer = Completer<T>();
@@ -21,7 +23,7 @@ class ConcurrencyPool {
   final Queue<_Pending<Object?>> _queue = Queue();
 
   ConcurrencyPool({required int maxConcurrent})
-      : _maxConcurrent = maxConcurrent;
+    : _maxConcurrent = maxConcurrent;
 
   int get maxConcurrent => _maxConcurrent;
 
@@ -46,6 +48,7 @@ class ConcurrencyPool {
           final r = await p.task();
           p.completer.complete(r);
         } catch (e, st) {
+          debugPrint('ConcurrencyPool: task failed — $e\n$st');
           p.completer.completeError(e, st);
         } finally {
           _inFlight--;

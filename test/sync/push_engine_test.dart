@@ -73,7 +73,6 @@ void main() {
       doctype: 'Customer',
       mobileUuid: 'u-c-1',
       operation: OutboxOperation.insert,
-      payload: '{}',
     );
   });
 
@@ -106,8 +105,9 @@ void main() {
       childMetaResolver: (dt) async =>
           DocTypeMeta(name: dt, isTable: true, fields: const []),
       send: send,
-      serverFetcher: serverFetcher ??
-          (_, __) async =>
+      serverFetcher:
+          serverFetcher ??
+          (_, _) async =>
               throw StateError('serverFetcher not expected in this test'),
       serverLookupByUuid: serverLookupByUuid,
       resolveServerName: (doctype, uuid) async {
@@ -123,33 +123,42 @@ void main() {
         );
         return r.isEmpty ? null : r.first['server_name'] as String?;
       },
-      attachmentUploader: (file, {doctype, docname, fileName, isPrivate = true}) =>
-          throw UnimplementedError('no attachments in this test'),
+      attachmentUploader:
+          (file, {doctype, docname, fileName, isPrivate = true}) =>
+              throw UnimplementedError('no attachments in this test'),
       writeQueueResolver: writeQueueResolver,
       attachmentBackoff: const [Duration.zero, Duration.zero, Duration.zero],
       networkBackoff: const [Duration.zero, Duration.zero, Duration.zero],
     );
   }
 
-  test('happy path INSERT: sends payload, writes back name + marks synced',
-      () async {
-    final engine = buildEngine(
-      send: (method, payload, serverName) async {
-        expect(method, 'POST');
-        expect(payload['doctype'], 'Customer');
-        expect(payload['customer_name'], 'ACME');
-        expect(payload['mobile_uuid'], 'u-c-1');
-        return {'name': 'CUST-1', 'modified': '2026-01-01 00:00:00'};
-      },
-    );
-    await engine.runOnce();
-    final row = (await db.query('docs__customer')).first;
-    expect(row['server_name'], 'CUST-1');
-    expect(row['sync_status'], 'synced');
-    expect(row['modified'], '2026-01-01 00:00:00');
-    final outRows = await outbox.findByState(OutboxState.done);
-    expect(outRows.length, 1);
-  });
+  test(
+    'happy path INSERT: sends payload, writes back name + marks synced',
+    () async {
+      final engine = buildEngine(
+        send: (method, payload, serverName) async {
+          expect(method, 'POST');
+          expect(payload['doctype'], 'Customer');
+          expect(payload['customer_name'], 'ACME');
+          expect(payload['mobile_uuid'], 'u-c-1');
+          return {'name': 'CUST-1', 'modified': '2026-01-01 00:00:00'};
+        },
+      );
+      await engine.runOnce();
+      final row = (await db.query('docs__customer')).first;
+      expect(row['server_name'], 'CUST-1');
+      expect(row['sync_status'], 'synced');
+      expect(row['modified'], '2026-01-01 00:00:00');
+      // Slim outbox: markDone deletes the row outright. After a successful
+      // push the outbox is empty for this uuid.
+      final remaining = await db.query(
+        'outbox',
+        where: 'mobile_uuid = ?',
+        whereArgs: ['u-c-1'],
+      );
+      expect(remaining, isEmpty);
+    },
+  );
 
   test('UPDATE: writes back, marks synced', () async {
     await db.update(
@@ -158,9 +167,10 @@ void main() {
       where: 'mobile_uuid=?',
       whereArgs: ['u-c-1'],
     );
+    // server_name lives on docs__ now; outbox just records the operation.
     await db.update(
       'outbox',
-      {'operation': 'UPDATE', 'server_name': 'CUST-1'},
+      {'operation': 'UPDATE'},
       where: 'mobile_uuid=?',
       whereArgs: ['u-c-1'],
     );
@@ -168,8 +178,11 @@ void main() {
       send: (method, payload, serverName) async {
         expect(method, 'PUT');
         expect(serverName, 'CUST-1');
-        expect(payload['modified'], '2026-01-01',
-            reason: 'check_if_latest needs the local snapshot modified');
+        expect(
+          payload['modified'],
+          '2026-01-01',
+          reason: 'check_if_latest needs the local snapshot modified',
+        );
         return {'name': 'CUST-1', 'modified': '2026-01-15 10:00:00'};
       },
     );
@@ -194,8 +207,11 @@ void main() {
     final row = await outbox.findById(1);
     expect(row!.state, OutboxState.failed);
     expect(row.errorCode, ErrorCode.NETWORK);
-    expect(attempts, greaterThanOrEqualTo(2),
-        reason: 'must retry at least once before giving up');
+    expect(
+      attempts,
+      greaterThanOrEqualTo(2),
+      reason: 'must retry at least once before giving up',
+    );
   });
 
   test('TimeoutError surfaces with TIMEOUT errorCode', () async {
@@ -211,9 +227,7 @@ void main() {
     'BlockedByUpstream from UuidRewriter (unresolved Link) → markBlocked',
     () async {
       // Add an unresolved local Link to a non-existent target.
-      await db.execute(
-        'ALTER TABLE docs__customer ADD COLUMN territory TEXT',
-      );
+      await db.execute('ALTER TABLE docs__customer ADD COLUMN territory TEXT');
       await db.execute(
         'ALTER TABLE docs__customer ADD COLUMN territory__is_local INTEGER',
       );
@@ -240,8 +254,11 @@ void main() {
         },
       );
       await engine.runOnce();
-      expect(sendCalled, isFalse,
-          reason: 'send must NOT be called when payload assembly blocks');
+      expect(
+        sendCalled,
+        isFalse,
+        reason: 'send must NOT be called when payload assembly blocks',
+      );
       final row = await outbox.findById(1);
       expect(row!.state, OutboxState.blocked);
     },
@@ -260,39 +277,41 @@ void main() {
     expect(row.errorCode, ErrorCode.MANDATORY);
   });
 
-  test(
-    'LinkExistsError on DELETE → markFailed with structured JSON',
-    () async {
-      await db.update(
-        'docs__customer',
-        {'server_name': 'CUST-1'},
-        where: 'mobile_uuid=?',
-        whereArgs: ['u-c-1'],
-      );
-      await db.update(
-        'outbox',
-        {'operation': 'DELETE', 'server_name': 'CUST-1'},
-        where: 'mobile_uuid=?',
-        whereArgs: ['u-c-1'],
-      );
-      final engine = buildEngine(
-        send: (m, p, sn) async => throw LinkExistsError(
-          linked: {
-            'Sales Invoice': ['INV-1', 'INV-2'],
-          },
-        ),
-      );
-      await engine.runOnce();
-      final row = await outbox.findById(1);
-      expect(row!.state, OutboxState.failed);
-      expect(row.errorCode, ErrorCode.LINK_EXISTS);
-      expect(row.errorMessage, contains('INV-1'));
-    },
-  );
+  test('LinkExistsError on DELETE → markFailed with structured JSON', () async {
+    await db.update(
+      'docs__customer',
+      {'server_name': 'CUST-1'},
+      where: 'mobile_uuid=?',
+      whereArgs: ['u-c-1'],
+    );
+    // server_name lives on docs__; outbox only carries the operation.
+    await db.update(
+      'outbox',
+      {'operation': 'DELETE'},
+      where: 'mobile_uuid=?',
+      whereArgs: ['u-c-1'],
+    );
+    final engine = buildEngine(
+      send: (m, p, sn) async => throw LinkExistsError(
+        linked: {
+          'Sales Invoice': ['INV-1', 'INV-2'],
+        },
+      ),
+    );
+    await engine.runOnce();
+    final row = await outbox.findById(1);
+    expect(row!.state, OutboxState.failed);
+    expect(row.errorCode, ErrorCode.LINK_EXISTS);
+    expect(row.errorMessage, contains('INV-1'));
+  });
 
   test('blocked rows are NOT dispatched', () async {
-    await db.update('outbox', {'state': 'blocked'},
-        where: 'id=?', whereArgs: [1]);
+    await db.update(
+      'outbox',
+      {'state': 'blocked'},
+      where: 'id=?',
+      whereArgs: [1],
+    );
     var called = false;
     final engine = buildEngine(
       send: (m, p, sn) async {
@@ -304,64 +323,62 @@ void main() {
     expect(called, isFalse);
   });
 
-  test(
-    'TimestampMismatch → auto-merge + retry once → succeeds',
-    () async {
-      await db.update(
-        'docs__customer',
-        {
-          'server_name': 'CUST-1',
-          'modified': '2026-01-01',
-          'customer_name': 'LocalEdit',
-        },
-        where: 'mobile_uuid=?',
-        whereArgs: ['u-c-1'],
-      );
-      await db.update(
-        'outbox',
-        {
-          'operation': 'UPDATE',
-          'server_name': 'CUST-1',
-          // Base snapshot: customer_name was 'ACME' when user started editing.
-          'payload': '{"customer_name":"ACME"}',
-        },
-        where: 'mobile_uuid=?',
-        whereArgs: ['u-c-1'],
-      );
+  test('TimestampMismatch → auto-merge + retry once → succeeds', () async {
+    // Slim outbox: server_name + push_base_payload live on docs__.
+    // The outbox row only carries operation/state/created_at.
+    await db.update(
+      'docs__customer',
+      {
+        'server_name': 'CUST-1',
+        'modified': '2026-01-01',
+        'customer_name': 'LocalEdit',
+        // Base snapshot: customer_name was 'ACME' when the user started
+        // editing — captured by OfflineRepository.saveDocument and
+        // consumed by PushEngine._autoMergeAndRetry.
+        'push_base_payload': '{"customer_name":"ACME"}',
+      },
+      where: 'mobile_uuid=?',
+      whereArgs: ['u-c-1'],
+    );
+    await db.update(
+      'outbox',
+      {'operation': 'UPDATE'},
+      where: 'mobile_uuid=?',
+      whereArgs: ['u-c-1'],
+    );
 
-      var sendCalls = 0;
-      var fetchCalls = 0;
-      final engine = buildEngine(
-        send: (m, p, sn) async {
-          sendCalls++;
-          if (sendCalls == 1) {
-            throw TimestampMismatchError(serverModified: '2026-01-02');
-          }
-          // After auto-merge, the second call sends the merged payload.
-          // Local edit "LocalEdit" must have survived the merge (ours
-          // diverged from base 'ACME'). Server change to 'description'
-          // would also be present if we modeled it.
-          expect(p['customer_name'], 'LocalEdit');
-          return {'name': 'CUST-1', 'modified': '2026-01-03'};
-        },
-        serverFetcher: (doctype, name) async {
-          fetchCalls++;
-          // Server's current version: name unchanged since base, modified
-          // advanced.
-          return {
-            'name': 'CUST-1',
-            'modified': '2026-01-02',
-            'customer_name': 'ACME',
-          };
-        },
-      );
-      await engine.runOnce();
-      expect(sendCalls, 2, reason: 'one initial + one retry after merge');
-      expect(fetchCalls, 1, reason: 'serverFetcher called once for refetch');
-      final row = await outbox.findById(1);
-      expect(row!.state, OutboxState.done);
-    },
-  );
+    var sendCalls = 0;
+    var fetchCalls = 0;
+    final engine = buildEngine(
+      send: (m, p, sn) async {
+        sendCalls++;
+        if (sendCalls == 1) {
+          throw TimestampMismatchError(serverModified: '2026-01-02');
+        }
+        // After auto-merge, the second call sends the merged payload.
+        // Local edit "LocalEdit" must have survived the merge (ours
+        // diverged from base 'ACME'). Server change to 'description'
+        // would also be present if we modeled it.
+        expect(p['customer_name'], 'LocalEdit');
+        return {'name': 'CUST-1', 'modified': '2026-01-03'};
+      },
+      serverFetcher: (doctype, name) async {
+        fetchCalls++;
+        // Server's current version: name unchanged since base, modified
+        // advanced.
+        return {
+          'name': 'CUST-1',
+          'modified': '2026-01-02',
+          'customer_name': 'ACME',
+        };
+      },
+    );
+    await engine.runOnce();
+    expect(sendCalls, 2, reason: 'one initial + one retry after merge');
+    expect(fetchCalls, 1, reason: 'serverFetcher called once for refetch');
+    // Slim outbox: markDone deletes the row outright.
+    expect(await outbox.findById(1), isNull);
+  });
 
   test(
     'L1 INSERT: DuplicateEntryError → fetch by mobile_uuid + write-back',
@@ -389,8 +406,8 @@ void main() {
       expect(sendCalls, 1);
       expect(fetchCalls, 1, reason: 'L1 fetches existing doc by mobile_uuid');
       expect(fetchedName, 'u-c-1');
-      final outRow = await outbox.findById(1);
-      expect(outRow!.state, OutboxState.done);
+      // Slim outbox: markDone deletes the row outright.
+      expect(await outbox.findById(1), isNull);
       final docRow = (await db.query('docs__customer')).first;
       expect(docRow['server_name'], 'u-c-1');
       expect(docRow['sync_status'], 'synced');
@@ -415,17 +432,14 @@ void main() {
         serverFetcher: (doctype, name) async {
           fetchCalls++;
           fetchedName = name;
-          return {
-            'name': 'CUST-existing-7',
-            'modified': '2026-01-02 00:00:00',
-          };
+          return {'name': 'CUST-existing-7', 'modified': '2026-01-02 00:00:00'};
         },
       );
       await engine.runOnce();
       expect(fetchCalls, 1);
       expect(fetchedName, 'CUST-existing-7');
-      final outRow = await outbox.findById(1);
-      expect(outRow!.state, OutboxState.done);
+      // Slim outbox: markDone deletes the row outright.
+      expect(await outbox.findById(1), isNull);
       final docRow = (await db.query('docs__customer')).first;
       expect(docRow['server_name'], 'CUST-existing-7');
     },
@@ -464,44 +478,41 @@ void main() {
       expect(sendCalls, 1, reason: 'GET found row → no retry POST');
       expect(lookupCalls, 1);
       expect(lookupUuid, 'u-c-1');
-      final outRow = await outbox.findById(1);
-      expect(outRow!.state, OutboxState.done);
+      // Slim outbox: markDone deletes the row outright.
+      expect(await outbox.findById(1), isNull);
       final docRow = (await db.query('docs__customer')).first;
       expect(docRow['server_name'], 'CUST-was-committed');
     },
   );
 
-  test(
-    'L3 INSERT: pre-retry GET finds nothing → continues retrying',
-    () async {
-      var sendCalls = 0;
-      var lookupCalls = 0;
-      final engine = buildEngine(
-        idempotencyStrategy: IdempotencyStrategy(serverHasDedupHook: false),
-        customMeta: DocTypeMeta(
-          name: 'Customer',
-          autoname: null,
-          fields: [f('customer_name', 'Data')],
-        ),
-        send: (m, p, sn) async {
-          sendCalls++;
-          throw NetworkError(message: 'flaky');
-        },
-        serverLookupByUuid: (doctype, uuid) async {
-          lookupCalls++;
-          return null; // server has nothing — original POSTs really failed
-        },
-      );
-      await engine.runOnce();
-      // 4 send attempts (1 initial + 3 retries given networkBackoff length 3).
-      // Lookup runs once before each retry → 3 lookups.
-      expect(sendCalls, 4);
-      expect(lookupCalls, 3);
-      final outRow = await outbox.findById(1);
-      expect(outRow!.state, OutboxState.failed);
-      expect(outRow.errorCode, ErrorCode.NETWORK);
-    },
-  );
+  test('L3 INSERT: pre-retry GET finds nothing → continues retrying', () async {
+    var sendCalls = 0;
+    var lookupCalls = 0;
+    final engine = buildEngine(
+      idempotencyStrategy: IdempotencyStrategy(serverHasDedupHook: false),
+      customMeta: DocTypeMeta(
+        name: 'Customer',
+        autoname: null,
+        fields: [f('customer_name', 'Data')],
+      ),
+      send: (m, p, sn) async {
+        sendCalls++;
+        throw NetworkError(message: 'flaky');
+      },
+      serverLookupByUuid: (doctype, uuid) async {
+        lookupCalls++;
+        return null; // server has nothing — original POSTs really failed
+      },
+    );
+    await engine.runOnce();
+    // 4 send attempts (1 initial + 3 retries given networkBackoff length 3).
+    // Lookup runs once before each retry → 3 lookups.
+    expect(sendCalls, 4);
+    expect(lookupCalls, 3);
+    final outRow = await outbox.findById(1);
+    expect(outRow!.state, OutboxState.failed);
+    expect(outRow.errorCode, ErrorCode.NETWORK);
+  });
 
   test(
     'WriteQueue: response writeback routes through per-doctype queue',
@@ -509,8 +520,10 @@ void main() {
       final resolved = <String>[];
       final queues = <String, WriteQueue>{};
       final engine = buildEngine(
-        send: (m, p, sn) async =>
-            {'name': 'CUST-1', 'modified': '2026-01-01 00:00:00'},
+        send: (m, p, sn) async => {
+          'name': 'CUST-1',
+          'modified': '2026-01-01 00:00:00',
+        },
         writeQueueResolver: (doctype) {
           resolved.add(doctype);
           return queues.putIfAbsent(
@@ -520,63 +533,64 @@ void main() {
         },
       );
       await engine.runOnce();
-      expect(resolved, ['Customer'],
-          reason: 'one queue resolved per parent doctype');
+      expect(resolved, [
+        'Customer',
+      ], reason: 'one queue resolved per parent doctype');
       final docRow = (await db.query('docs__customer')).first;
       expect(docRow['server_name'], 'CUST-1');
       expect(docRow['sync_status'], 'synced');
-      final outRow = await outbox.findById(1);
-      expect(outRow!.state, OutboxState.done);
+      // Slim outbox: markDone deletes the row outright.
+      expect(await outbox.findById(1), isNull);
     },
   );
 
-  test('tier ordering: dependent row dispatches AFTER its dependency', () async {
-    // Add a second outbox row that depends on the first via a UUID-shaped
-    // reference in its payload. Tier 1 (dependent) must dispatch after
-    // tier 0 (the original row).
-    await db.insert('docs__customer', {
-      'mobile_uuid': 'b1c2d3e4-f5a6-4789-89ab-cdef01234567',
-      'sync_status': 'dirty',
-      'local_modified': 2,
-      'customer_name': 'Dependent',
-    });
-    await outbox.insertPending(
-      doctype: 'Customer',
-      mobileUuid: 'b1c2d3e4-f5a6-4789-89ab-cdef01234567',
-      operation: OutboxOperation.insert,
-      // Reference the first row's mobile_uuid in the payload, dressed up
-      // as a uuid-v4 since the default scanner uses that regex.
-      payload: '{"parent":"a1b2c3d4-e5f6-4789-89ab-cdef01234567"}',
-    );
-    // Update the first outbox row to use a v4-shaped uuid so the scanner
-    // can match the reference.
-    await db.update(
-      'docs__customer',
-      {'mobile_uuid': 'a1b2c3d4-e5f6-4789-89ab-cdef01234567'},
-      where: 'mobile_uuid=?',
-      whereArgs: ['u-c-1'],
-    );
-    await db.update(
-      'outbox',
-      {'mobile_uuid': 'a1b2c3d4-e5f6-4789-89ab-cdef01234567'},
-      where: 'mobile_uuid=?',
-      whereArgs: ['u-c-1'],
-    );
+  test(
+    'tier ordering: dependent row dispatches AFTER its dependency',
+    () async {
+      // Add a second outbox row that depends on the first via a UUID-shaped
+      // reference in its payload. Tier 1 (dependent) must dispatch after
+      // tier 0 (the original row).
+      await db.insert('docs__customer', {
+        'mobile_uuid': 'b1c2d3e4-f5a6-4789-89ab-cdef01234567',
+        'sync_status': 'dirty',
+        'local_modified': 2,
+        'customer_name': 'Dependent',
+      });
+      await outbox.insertPending(
+        doctype: 'Customer',
+        mobileUuid: 'b1c2d3e4-f5a6-4789-89ab-cdef01234567',
+        operation: OutboxOperation.insert,
+      );
+      // Update the first outbox row to use a v4-shaped uuid so the scanner
+      // can match the reference.
+      await db.update(
+        'docs__customer',
+        {'mobile_uuid': 'a1b2c3d4-e5f6-4789-89ab-cdef01234567'},
+        where: 'mobile_uuid=?',
+        whereArgs: ['u-c-1'],
+      );
+      await db.update(
+        'outbox',
+        {'mobile_uuid': 'a1b2c3d4-e5f6-4789-89ab-cdef01234567'},
+        where: 'mobile_uuid=?',
+        whereArgs: ['u-c-1'],
+      );
 
-    final dispatchOrder = <String>[];
-    final engine = buildEngine(
-      send: (method, payload, serverName) async {
-        dispatchOrder.add(payload['mobile_uuid'] as String);
-        return {
-          'name': 'SRV-${dispatchOrder.length}',
-          'modified': '2026-01-0${dispatchOrder.length}',
-        };
-      },
-    );
-    await engine.runOnce();
-    expect(dispatchOrder, [
-      'a1b2c3d4-e5f6-4789-89ab-cdef01234567',
-      'b1c2d3e4-f5a6-4789-89ab-cdef01234567',
-    ]);
-  });
+      final dispatchOrder = <String>[];
+      final engine = buildEngine(
+        send: (method, payload, serverName) async {
+          dispatchOrder.add(payload['mobile_uuid'] as String);
+          return {
+            'name': 'SRV-${dispatchOrder.length}',
+            'modified': '2026-01-0${dispatchOrder.length}',
+          };
+        },
+      );
+      await engine.runOnce();
+      expect(dispatchOrder, [
+        'a1b2c3d4-e5f6-4789-89ab-cdef01234567',
+        'b1c2d3e4-f5a6-4789-89ab-cdef01234567',
+      ]);
+    },
+  );
 }

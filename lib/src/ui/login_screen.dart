@@ -160,8 +160,11 @@ class _LoginScreenState extends State<LoginScreen> {
           .toList();
       if (!mounted || parsed.isEmpty) return;
       setState(() => _socialProviders = parsed);
-    } catch (_) {
+    } catch (e, st) {
       // Keep configured providers as fallback.
+      debugPrint(
+        'LoginScreen: fetchSocialLoginProviders failed, keeping configured fallback — $e\n$st',
+      );
     }
   }
 
@@ -169,7 +172,9 @@ class _LoginScreenState extends State<LoginScreen> {
     try {
       final uri = await _appLinks.getInitialLink();
       if (uri != null && mounted) _handleOAuthRedirect(uri);
-    } catch (_) {}
+    } catch (e, st) {
+      debugPrint('LoginScreen._checkInitialUri failed — $e\n$st');
+    }
   }
 
   void _listenForOAuthRedirect() {
@@ -227,7 +232,8 @@ class _LoginScreenState extends State<LoginScreen> {
           widget.onLoginSuccess?.call();
         }
       }
-    } catch (e) {
+    } catch (e, st) {
+      debugPrint('LoginScreen._handleOAuthRedirect failed — $e\n$st');
       if (mounted) {
         setState(() {
           _errorMessage = e.toString().replaceAll('Exception: ', '');
@@ -289,7 +295,8 @@ class _LoginScreenState extends State<LoginScreen> {
         _cancelOAuthListener();
       }
       if (!mounted) return;
-    } catch (e) {
+    } catch (e, st) {
+      debugPrint('LoginScreen._startOAuth failed — $e\n$st');
       _cancelOAuthListener();
       setState(() {
         _errorMessage = e.toString().replaceAll('Exception: ', '');
@@ -337,7 +344,8 @@ class _LoginScreenState extends State<LoginScreen> {
         });
         _cancelOAuthListener();
       }
-    } catch (e) {
+    } catch (e, st) {
+      debugPrint('LoginScreen._startSocialOAuth failed — $e\n$st');
       _cancelOAuthListener();
       setState(() {
         _errorMessage = e.toString().replaceAll('Exception: ', '');
@@ -375,7 +383,8 @@ class _LoginScreenState extends State<LoginScreen> {
         await Future.delayed(const Duration(milliseconds: 100));
         widget.onLoginSuccess?.call();
       }
-    } catch (e) {
+    } catch (e, st) {
+      debugPrint('LoginScreen._handleLogin failed — $e\n$st');
       setState(() {
         _errorMessage = e.toString().replaceAll('Exception: ', '');
         _isLoading = false;
@@ -416,7 +425,8 @@ class _LoginScreenState extends State<LoginScreen> {
           _isLoading = false;
         });
       }
-    } catch (e) {
+    } catch (e, st) {
+      debugPrint('LoginScreen._handleSendOtp failed — $e\n$st');
       if (mounted) {
         setState(() {
           _errorMessage = e.toString().replaceAll('Exception: ', '');
@@ -439,7 +449,8 @@ class _LoginScreenState extends State<LoginScreen> {
         await Future.delayed(const Duration(milliseconds: 100));
         widget.onLoginSuccess?.call();
       }
-    } catch (e) {
+    } catch (e, st) {
+      debugPrint('LoginScreen._handleVerifyOtp failed — $e\n$st');
       setState(() {
         _errorMessage = e.toString().replaceAll('Exception: ', '');
         _isLoading = false;

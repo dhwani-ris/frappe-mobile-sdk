@@ -23,12 +23,12 @@ void main() {
     final svc = SessionUserService(db);
     final emitted = <SessionUser?>[];
     final sub = svc.stream.listen(emitted.add);
-    final u = SessionUser(
+    final u = const SessionUser(
       name: 'x@y.com',
-      roles: const ['A'],
-      permissions: const {},
-      userDefaults: const {},
-      extras: const {},
+      roles: ['A'],
+      permissions: {},
+      userDefaults: {},
+      extras: {},
     );
     await svc.set(u);
     await Future<void>.delayed(Duration.zero);
@@ -40,12 +40,12 @@ void main() {
 
   test('persists to sdk_meta.session_user_json', () async {
     final svc = SessionUserService(db);
-    final u = SessionUser(
+    final u = const SessionUser(
       name: 'x',
-      roles: const [],
-      permissions: const {},
-      userDefaults: const {},
-      extras: const {},
+      roles: [],
+      permissions: {},
+      userDefaults: {},
+      extras: {},
     );
     await svc.set(u);
     final rows = await db.query('sdk_meta', limit: 1);
@@ -55,13 +55,15 @@ void main() {
 
   test('restoreFromDb loads the persisted user', () async {
     final svc1 = SessionUserService(db);
-    await svc1.set(SessionUser(
-      name: 'a',
-      roles: const [],
-      permissions: const {},
-      userDefaults: const {},
-      extras: const {},
-    ));
+    await svc1.set(
+      const SessionUser(
+        name: 'a',
+        roles: [],
+        permissions: {},
+        userDefaults: {},
+        extras: {},
+      ),
+    );
     await svc1.dispose();
     // new service reading same db
     final svc2 = SessionUserService(db);
@@ -72,13 +74,15 @@ void main() {
 
   test('clear emits null, wipes persisted json', () async {
     final svc = SessionUserService(db);
-    await svc.set(SessionUser(
-      name: 'a',
-      roles: const [],
-      permissions: const {},
-      userDefaults: const {},
-      extras: const {},
-    ));
+    await svc.set(
+      const SessionUser(
+        name: 'a',
+        roles: [],
+        permissions: {},
+        userDefaults: {},
+        extras: {},
+      ),
+    );
     await svc.clear();
     final rows = await db.query('sdk_meta', limit: 1);
     expect(rows.first['session_user_json'], isNull);

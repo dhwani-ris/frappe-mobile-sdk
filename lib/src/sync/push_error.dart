@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
+
 import '../models/outbox_row.dart';
 
 /// Common base for every error the push pipeline can raise. Each maps to
@@ -54,8 +56,9 @@ class LinkExistsError extends PushError {
 
   @override
   String get message {
-    final parts =
-        linked.entries.map((e) => '${e.key}×${e.value.length}').join(', ');
+    final parts = linked.entries
+        .map((e) => '${e.key}×${e.value.length}')
+        .join(', ');
     return 'LinkExists: $parts';
   }
 
@@ -123,7 +126,8 @@ class ServerRejection extends PushError {
     Map<String, dynamic>? body;
     try {
       body = jsonDecode(rawBody) as Map<String, dynamic>?;
-    } catch (_) {
+    } catch (e, st) {
+      debugPrint('ServerRejection.toErrorCode: jsonDecode failed — $e\n$st');
       body = null;
     }
     final exc = body?['exc_type'] as String?;

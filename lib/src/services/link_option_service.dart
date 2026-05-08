@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
+
 import '../database/entities/link_option_entity.dart';
 import '../models/doc_field.dart';
 import '../models/link_filter_result.dart';
@@ -113,6 +115,10 @@ class LinkOptionService {
         }
       }
       label ??= name;
+      // Offline-only rows (no server_name yet) carry their mobile_uuid as
+      // the picker value; the form must mark `<field>__is_local: 1` so the
+      // push pipeline rewrites the UUID after the target's INSERT lands.
+      final isLocal = (row['server_name'] as String?) == null;
       out.add(
         LinkOptionEntity(
           doctype: doctype,
@@ -120,6 +126,7 @@ class LinkOptionService {
           label: label,
           dataJson: jsonEncode(row),
           lastUpdated: now,
+          isLocal: isLocal,
         ),
       );
     }
@@ -176,7 +183,10 @@ class LinkOptionService {
         }
       }
       return names;
-    } catch (_) {
+    } catch (e, st) {
+      debugPrint(
+        'LinkOptionService.dependentFieldNames parse failed — $e\n$st',
+      );
       return [];
     }
   }
@@ -209,7 +219,8 @@ class LinkOptionService {
         result.add([filter[0], filter[1], filter[2], value]);
       }
       return result.isEmpty ? null : result;
-    } catch (_) {
+    } catch (e, st) {
+      debugPrint('LinkOptionService.parseLinkFilters parse failed — $e\n$st');
       return null;
     }
   }

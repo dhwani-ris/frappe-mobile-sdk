@@ -52,14 +52,14 @@ void main() {
   tearDown(() async => db.close());
 
   test('added field → ALTER TABLE ADD COLUMN', () async {
-    final diff = MetaDiff(
+    final diff = const MetaDiff(
       doctype: 'Cust',
-      addedFields: const [AddedField(name: 'age', sqlType: 'INTEGER')],
-      removedFields: const [],
-      typeChanged: const [],
-      addedIsLocalFor: const [],
-      addedNormFor: const [],
-      indexesToDrop: const [],
+      addedFields: [AddedField(name: 'age', sqlType: 'INTEGER')],
+      removedFields: [],
+      typeChanged: [],
+      addedIsLocalFor: [],
+      addedNormFor: [],
+      indexesToDrop: [],
     );
     await MetaMigration.apply(db, diff, tableName: 'docs__cust');
     final cols = await db.rawQuery('PRAGMA table_info(docs__cust)');
@@ -67,14 +67,14 @@ void main() {
   });
 
   test('added Link → adds both column and __is_local', () async {
-    final diff = MetaDiff(
+    final diff = const MetaDiff(
       doctype: 'Cust',
-      addedFields: const [AddedField(name: 'territory', sqlType: 'TEXT')],
-      removedFields: const [],
-      typeChanged: const [],
-      addedIsLocalFor: const ['territory'],
-      addedNormFor: const [],
-      indexesToDrop: const [],
+      addedFields: [AddedField(name: 'territory', sqlType: 'TEXT')],
+      removedFields: [],
+      typeChanged: [],
+      addedIsLocalFor: ['territory'],
+      addedNormFor: [],
+      indexesToDrop: [],
     );
     await MetaMigration.apply(db, diff, tableName: 'docs__cust');
     final cols = await db.rawQuery('PRAGMA table_info(docs__cust)');
@@ -90,14 +90,14 @@ void main() {
       'sync_status': 'synced',
       'local_modified': 0,
     });
-    final diff = MetaDiff(
+    final diff = const MetaDiff(
       doctype: 'Cust',
-      addedFields: const [],
-      removedFields: const [],
-      typeChanged: const [],
-      addedIsLocalFor: const [],
-      addedNormFor: const ['name'],
-      indexesToDrop: const [],
+      addedFields: [],
+      removedFields: [],
+      typeChanged: [],
+      addedIsLocalFor: [],
+      addedNormFor: ['name'],
+      indexesToDrop: [],
     );
     await MetaMigration.apply(db, diff, tableName: 'docs__cust');
     final row = await db.query(
@@ -109,14 +109,14 @@ void main() {
   });
 
   test('indexesToDrop — silently no-ops when missing', () async {
-    final diff = MetaDiff(
+    final diff = const MetaDiff(
       doctype: 'Cust',
-      addedFields: const [],
-      removedFields: const ['legacy'],
-      typeChanged: const [],
-      addedIsLocalFor: const [],
-      addedNormFor: const [],
-      indexesToDrop: const ['ix_cust_legacy', 'ix_cust_nonexistent'],
+      addedFields: [],
+      removedFields: ['legacy'],
+      typeChanged: [],
+      addedIsLocalFor: [],
+      addedNormFor: [],
+      indexesToDrop: ['ix_cust_legacy', 'ix_cust_nonexistent'],
     );
     // Should not throw even though neither index exists.
     await MetaMigration.apply(db, diff, tableName: 'docs__cust');
@@ -135,14 +135,14 @@ void main() {
     }
     await batch.commit(noResult: true);
 
-    final diff = MetaDiff(
+    final diff = const MetaDiff(
       doctype: 'Cust',
-      addedFields: const [],
-      removedFields: const [],
-      typeChanged: const [],
-      addedIsLocalFor: const [],
-      addedNormFor: const ['name'],
-      indexesToDrop: const [],
+      addedFields: [],
+      removedFields: [],
+      typeChanged: [],
+      addedIsLocalFor: [],
+      addedNormFor: ['name'],
+      indexesToDrop: [],
     );
     await MetaMigration.apply(db, diff, tableName: 'docs__cust');
 
@@ -151,8 +151,11 @@ void main() {
         "SELECT COUNT(*) FROM docs__cust WHERE name__norm IS NOT NULL",
       ),
     );
-    expect(cnt, 501,
-        reason: 'every row across the chunk boundary must be backfilled');
+    expect(
+      cnt,
+      501,
+      reason: 'every row across the chunk boundary must be backfilled',
+    );
     final sample = await db.query(
       'docs__cust',
       where: 'mobile_uuid=?',
@@ -170,14 +173,14 @@ void main() {
         'sync_status': 'synced',
         'local_modified': 0,
       });
-      final diff = MetaDiff(
+      final diff = const MetaDiff(
         doctype: 'Cust',
-        addedFields: const [],
-        removedFields: const [],
-        typeChanged: const [],
-        addedIsLocalFor: const [],
-        addedNormFor: const ['name'],
-        indexesToDrop: const [],
+        addedFields: [],
+        removedFields: [],
+        typeChanged: [],
+        addedIsLocalFor: [],
+        addedNormFor: ['name'],
+        indexesToDrop: [],
       );
       await MetaMigration.apply(db, diff, tableName: 'docs__cust');
       // Second invocation must NOT throw (column already exists) and must
@@ -223,14 +226,14 @@ void main() {
         });
       }
 
-      final diff = MetaDiff(
+      final diff = const MetaDiff(
         doctype: 'Cust',
-        addedFields: const [],
-        removedFields: const [],
-        typeChanged: const [],
-        addedIsLocalFor: const [],
-        addedNormFor: const ['nm'], // forces backfill of `nm__norm`
-        indexesToDrop: const [],
+        addedFields: [],
+        removedFields: [],
+        typeChanged: [],
+        addedIsLocalFor: [],
+        addedNormFor: ['nm'], // forces backfill of `nm__norm`
+        indexesToDrop: [],
       );
 
       await expectLater(
@@ -245,28 +248,31 @@ void main() {
           'SELECT COUNT(*) FROM docs__cust WHERE nm__norm IS NOT NULL',
         ),
       );
-      expect(filled, 0,
-          reason:
-              'partial backfill UPDATE for "dup1" must roll back when '
-              '"dup2" UPDATE violates the unique index');
+      expect(
+        filled,
+        0,
+        reason:
+            'partial backfill UPDATE for "dup1" must roll back when '
+            '"dup2" UPDATE violates the unique index',
+      );
     },
   );
 
   test('wrapped in a transaction (rollback on failure)', () async {
     // Pre-create a column so a duplicate ADD COLUMN forces failure.
     await db.execute('ALTER TABLE docs__cust ADD COLUMN pre_exists TEXT');
-    final diff = MetaDiff(
+    final diff = const MetaDiff(
       doctype: 'Cust',
-      addedFields: const [
+      addedFields: [
         AddedField(name: 'safe_addition', sqlType: 'TEXT'),
         // Second add reuses an existing column → SQLite throws.
         AddedField(name: 'pre_exists', sqlType: 'TEXT'),
       ],
-      removedFields: const [],
-      typeChanged: const [],
-      addedIsLocalFor: const [],
-      addedNormFor: const [],
-      indexesToDrop: const [],
+      removedFields: [],
+      typeChanged: [],
+      addedIsLocalFor: [],
+      addedNormFor: [],
+      indexesToDrop: [],
     );
     await expectLater(
       MetaMigration.apply(db, diff, tableName: 'docs__cust'),
@@ -279,7 +285,10 @@ void main() {
     // wraps the block in BEGIN/ROLLBACK, and the SQLite engine handles
     // ALTER TABLE inside transactions on modern versions.)
     expect(names, isNot(contains('safe_addition')));
-    expect(names, contains('pre_exists'),
-        reason: 'pre-existing column must still be there');
+    expect(
+      names,
+      contains('pre_exists'),
+      reason: 'pre-existing column must still be there',
+    );
   });
 }

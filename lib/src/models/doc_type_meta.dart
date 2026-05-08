@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart';
+
 import 'doc_field.dart';
 
 /// Represents Frappe DocType metadata
@@ -52,7 +54,10 @@ class DocTypeMeta {
     final fields = fieldsJson.map((field) {
       try {
         return DocField.fromJson(field as Map<String, dynamic>);
-      } catch (e) {
+      } catch (e, st) {
+        debugPrint(
+          'DocTypeMeta.fromJson: DocField parse failed (${field is Map ? field['fieldname'] : 'unknown'}) — $e\n$st',
+        );
         return DocField(
           fieldname: field['fieldname'] as String?,
           fieldtype: field['fieldtype'] as String? ?? 'Data',
@@ -165,11 +170,10 @@ class DocTypeMeta {
 
   /// Get field by fieldname
   DocField? getField(String fieldname) {
-    try {
-      return fields.firstWhere((f) => f.fieldname == fieldname);
-    } catch (e) {
-      return null;
+    for (final f in fields) {
+      if (f.fieldname == fieldname) return f;
     }
+    return null;
   }
 
   /// Get all data fields (excluding layout fields)

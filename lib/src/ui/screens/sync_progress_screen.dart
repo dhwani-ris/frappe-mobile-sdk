@@ -10,8 +10,7 @@ import '../../sync/sync_state_notifier.dart';
 /// Pause persists cursors via the engine; Cancel triggers
 /// [SyncController.cancelInitialSync] and (typically) navigates away.
 ///
-/// Replaces the P1 [MigrationBlockedScreen] stub once the consumer
-/// wires SDK init through this surface — see Task 12.
+/// Used as the bootstrap progress surface during initial sync.
 class SyncProgressScreen extends StatelessWidget {
   final SyncStateNotifier notifier;
   final Future<void> Function() onPause;
@@ -44,12 +43,9 @@ class SyncProgressScreen extends StatelessWidget {
                     final label = d.deferred
                         ? 'deferred'
                         : (d.completedAt != null
-                            ? 'done: ${d.pulledCount}'
-                            : '${d.pulledCount} so far');
-                    return ListTile(
-                      title: Text(e.key),
-                      subtitle: Text(label),
-                    );
+                              ? 'done: ${d.pulledCount}'
+                              : '${d.pulledCount} so far');
+                    return ListTile(title: Text(e.key), subtitle: Text(label));
                   }).toList(),
                 ),
               ),
@@ -64,8 +60,7 @@ class SyncProgressScreen extends StatelessWidget {
                     ),
                     TextButton(
                       onPressed: onCancel,
-                      style: TextButton.styleFrom(
-                          foregroundColor: Colors.red),
+                      style: TextButton.styleFrom(foregroundColor: Colors.red),
                       child: const Text('Cancel'),
                     ),
                   ],
@@ -81,8 +76,7 @@ class SyncProgressScreen extends StatelessWidget {
   double? _progressFor(SyncState s) {
     final totalDoc = s.perDoctype.length;
     if (totalDoc == 0) return null;
-    final done =
-        s.perDoctype.values.where((d) => d.completedAt != null).length;
+    final done = s.perDoctype.values.where((d) => d.completedAt != null).length;
     return done / totalDoc;
   }
 }

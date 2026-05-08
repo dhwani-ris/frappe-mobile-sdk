@@ -1,6 +1,8 @@
 // Copyright (c) 2026, Bhushan Barbuddhe and contributors
 // For license information, please see license.txt
 
+import 'package:flutter/foundation.dart';
+
 /// Evaluates Frappe depends_on expressions
 class DependsOnEvaluator {
   /// Evaluate depends_on expression
@@ -147,8 +149,11 @@ class DependsOnEvaluator {
       final fieldName = _extractFieldName(expr);
       final value = formData[fieldName];
       return value != null && value != '' && value != 0 && value != false;
-    } catch (e) {
+    } catch (e, st) {
       // If evaluation fails, default to true (show field)
+      debugPrint(
+        'DependsOnEvaluator.evaluate failed for "$expression" — $e\n$st',
+      );
       return true;
     }
   }

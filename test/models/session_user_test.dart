@@ -4,22 +4,21 @@ import 'package:frappe_mobile_sdk/src/models/session_user.dart';
 
 void main() {
   test('round-trip to/from JSON', () {
-    final u = SessionUser(
+    final u = const SessionUser(
       name: 'ankit@example.com',
       fullName: 'Ankit J',
       userImage: null,
       language: 'en',
       timeZone: 'Asia/Kolkata',
-      roles: const ['System Manager', 'Customer'],
-      permissions: const {
+      roles: ['System Manager', 'Customer'],
+      permissions: {
         'Customer': ['read', 'create', 'write'],
       },
-      userDefaults: const {'company': 'ACME'},
-      extras: const {'custom_key': 42},
+      userDefaults: {'company': 'ACME'},
+      extras: {'custom_key': 42},
     );
     final json = jsonEncode(u.toJson());
-    final back =
-        SessionUser.fromJson(jsonDecode(json) as Map<String, dynamic>);
+    final back = SessionUser.fromJson(jsonDecode(json) as Map<String, dynamic>);
     expect(back.name, 'ankit@example.com');
     expect(back.roles, contains('Customer'));
     expect(back.permissions['Customer'], contains('create'));
@@ -28,26 +27,26 @@ void main() {
   });
 
   test('empty user with only name', () {
-    final u = SessionUser(
+    final u = const SessionUser(
       name: 'bob@b.com',
-      roles: const [],
-      permissions: const {},
-      userDefaults: const {},
-      extras: const {},
+      roles: [],
+      permissions: {},
+      userDefaults: {},
+      extras: {},
     );
     final back = SessionUser.fromJson(u.toJson());
     expect(back.name, 'bob@b.com');
   });
 
   test('hasPermission helper', () {
-    final u = SessionUser(
+    final u = const SessionUser(
       name: 'x@x.com',
-      roles: const [],
-      permissions: const {
+      roles: [],
+      permissions: {
         'Customer': ['read', 'write'],
       },
-      userDefaults: const {},
-      extras: const {},
+      userDefaults: {},
+      extras: {},
     );
     expect(u.hasPermission('Customer', 'read'), isTrue);
     expect(u.hasPermission('Customer', 'delete'), isFalse);
@@ -55,19 +54,19 @@ void main() {
   });
 
   test('equality + hashCode for riverpod/provider friendly compare', () {
-    final a = SessionUser(
+    final a = const SessionUser(
       name: 'x',
-      roles: const ['A'],
-      permissions: const {},
-      userDefaults: const {},
-      extras: const {},
+      roles: ['A'],
+      permissions: {},
+      userDefaults: {},
+      extras: {},
     );
-    final b = SessionUser(
+    final b = const SessionUser(
       name: 'x',
-      roles: const ['A'],
-      permissions: const {},
-      userDefaults: const {},
-      extras: const {},
+      roles: ['A'],
+      permissions: {},
+      userDefaults: {},
+      extras: {},
     );
     expect(a, b);
     expect(a.hashCode, b.hashCode);

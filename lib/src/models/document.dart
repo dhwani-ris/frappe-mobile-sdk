@@ -99,6 +99,7 @@ class Document {
     final syncStatus = (row['sync_status']?.toString()) ?? 'synced';
     final status = switch (syncStatus) {
       'dirty' => 'dirty',
+      'deleted' => 'deleted',
       'sync_error' || 'sync_blocked' => 'sync_error',
       _ => 'clean',
     };

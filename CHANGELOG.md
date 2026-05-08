@@ -1,67 +1,128 @@
-# [2.1.0] - 2026-05-01
+# Changelog
+
+All notable changes to this project are documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [2.0.0] - Unreleased
+
+Major release: offline-first foundation, server-driven offline-mode toggle, and a new query/sync surface. Upgrades from `1.x` use a single transactional migration from database schema v2 to v3.
 
 ### Added
 
-- **Server-driven offline mode toggle** — new `offline_enabled` Check field on `Mobile Configuration` (server-side) controls whether the SDK runs as an offline-first client or a thin online client. Default is off (online). Companion server release: `frappe-mobile-control` 1.x with the `offline_enabled` field surfaced on every authenticated login response.
-- **`OfflineMode`** value object exposed via `OfflineMode(enabled, isPersisted)` and `OfflineMode.fallback`.
-- **`SdkMetaDao`** — read/write helpers for the persisted offline-mode flag on the existing `sdk_meta` table.
-- **`OfflineTransitionService`** — sealed-state stream (`TransitionIdle` / `TransitionDraining` / `TransitionDrainFailed` / `TransitionWipingTables` / `TransitionCompleted`) plus `runDrainAndWipe()`, `retry()`, `forceExit()`. Drives the offline → online migration: pushes pending records, then drops local tables.
-- **`OfflineTransitionScreen`** — full-screen UI with `PopScope` guard for drain progress, drain failure, retry, and force-exit confirmation.
-- **`OfflineTransitionGuard`** — wraps a child widget and overlays the transition screen for as long as the SDK's transition stream is non-idle. Recommended integration point for consumer apps.
-- **`AppDatabase.wipeOfflineDocumentTables()`** — drops every `docs__<doctype>` table and clears `outbox`, `pending_attachments`, `link_options`. Preserves `doctype_meta`, `auth_tokens`, `doctype_permission`, `sdk_meta`.
-- **`FrappeSDK.offlineTransition`** getter and **`runOfflineTransitionIfPending()`** public method for explicit foreground orchestration.
-- **`doc/OFFLINE_MODE_TOGGLE.md`** — feature documentation, integration guide, and known limitations.
+**Offline foundation**
+
+- `OfflineMode` value object (`enabled`, `isPersisted`) bound to a session, plus `OfflineModeNotifier`. The mode is persisted in `sdk_meta` and re-resolved on each launch.
+- `OfflineRepository` — primary write path for local edits; manages per-doctype tables and child rows via `LocalWriter`.
+- `OfflineTransitionService` with sealed-state stream (`TransitionIdle`, `TransitionDraining`, `TransitionDrainFailed`, `TransitionWipingTables`, `TransitionCompleted`) plus `runDrainAndWipe()`, `retry()`, `forceExit()`. Drives the offline → online transition: drains pending records, then drops local data tables.
+- `OfflineTransitionScreen` — full-screen transition UI with `PopScope` guard; drain progress, drain failure, retry, and force-exit flows.
+- `OfflineTransitionGuard` — wraps a child widget and overlays the transition screen for as long as the SDK's transition stream is non-idle. Recommended integration point for consumer apps.
+- `AtomicWipe` — deletes and rebuilds the SQLite database atomically; used during logout-wipe.
+- `FrappeSDK.offlineTransition` getter and `runOfflineTransitionIfPending()` for explicit foreground orchestration.
+
+**Query / read path**
+
+- `UnifiedResolver` — single offline-first read path used by Link pickers, list screens, and `fetch_from`. DB-first; background API refresh when online.
+- `FilterParser` + `ParsedQuery` — translate Frappe-style filter lists into parameter-bound SQLite queries; pure functions, no I/O.
+- `QueryResult` + `RowOrigin` — read results carry per-row provenance (local edit vs server) for filter chips and observability.
+- `LinkDecorator` + `TargetMetaResolver` — display companions for Link / Dynamic Link values.
+- `FrappeTimespan` + `TimespanRange` — Frappe-style timespan keywords resolved to absolute ISO ranges offline.
+
+**Link fields**
+
+- `LinkFilterBuilder` callback — runtime filter builder for link-option fetch, keyed on the **target doctype**. Replaces static `linkFilters` JSON when dynamic field/row dependencies are needed.
+- `LinkOptionService` — offline-first Link picker; routes through `UnifiedResolver` with DB-first reads and background refresh.
+- `LinkFieldCoordinator` — dependency-aware sequencing and progress tracking for cascading Link fields.
+
+**Sync engine**
+
+- Cursor-based pull. `SyncService` uses `(modified, name)` cursors with `DoctypePullPhase` (`initial` / `resume` / `incremental`), look-ahead pagination, and resume-on-crash. Final-page lookahead persists `complete: true` and transitions to `incremental`.
+- Tier-ordered push. `PushEngine` drains the outbox via `TierComputer`-grouped dispatch — tier 0 has no inter-pending dependencies; tier k depends only on tiers `< k`. Concurrent dispatch within a tier; stable order `createdAt asc, id asc`.
+- L1 / L2 / L3 idempotency on INSERT. L1 uses `autoname=field:mobile_uuid`; L2 uses a consumer-supplied dedup hook; L3 GETs by `mobile_uuid` to detect prior successful POSTs before retry.
+- `pullSyncMany` — batch pull for multiple doctypes through a bounded worker pool.
+- `getPullPhase` / `getPullPhases` — query pull phase per doctype for UX gating (blocking screen vs background indicator).
+- UUID rewrite on push. `UuidRewriter` rewrites Link fields containing `mobile_uuid` values to their `server_name` before push, using `<field>__is_local` companion columns.
+- Three-key child identity match on pull-apply (`server_name → mobile_uuid → position`); preserves UUIDs across re-pulls and avoids orphaning Link references.
+- `SyncController` — public imperative surface: `syncNow`, `pause` / `resume`, `retry`, `retryAll`, `resolveConflict`, `previewDeleteCascade`, `acceptDeleteCascade`. Observable `state$` stream.
+- `SyncState`, `DoctypeSyncState`, `QueueSummary`, `SyncErrorSummary`, `SyncStateNotifier` — composable sync-state snapshot for UI widgets; per-doctype progress, queue counts, last error.
+- `RetryPriority` — reorders outbox rows for "Retry all" so user-visible errors retry first.
+
+**Sync UI**
+
+- `SyncStatusBar`, `SyncProgressScreen`, `SyncErrorsScreen` — status bar, blocking bootstrap-pull screen, errors list with per-row Retry / View error / Open actions and a header Retry-all.
+- `DocumentListFilterChip` (with `DocumentListFilter` / `DocumentListFilterCounts`) — Material `SegmentedButton` chip for tri-state filtering (all / unsynced / errors) with live counts.
+- `showDeleteCascadePrompt` (with `DeleteCascadeAction`) — shown when DELETE fails with `LinkExistsError`; lets the user delete-all, fix-manually, or cancel.
+- `showLogoutGuardDialog` (with `LogoutGuardAction`) — soft-gate dialog when Logout is tapped with unsynced rows.
+- `showForceLogoutConfirm` — hard-gate dialog requiring "LOGOUT" text entry before destructive logout.
+
+**Session**
+
+- `SessionUser` value object plus `SessionUserService` — owns the in-memory session user and publishes changes via stream.
+- All login paths (username/password, OTP, API key, OAuth) now populate `SessionUser` automatically. `sdk.sessionUser` and `sdk.sessionUser$` are available immediately after login.
+- Persisted to `sdk_meta.session_user_json` so restore-session paths rehydrate without an extra round-trip.
+
+**Server-driven offline-mode toggle** (companion server feature)
+
+- New `offline_enabled` Check field on the server-side `Mobile Configuration` doctype controls whether the SDK runs as an offline-first client or a thin online client. Default is **off** (online).
+- Companion server release: `frappe-mobile-control` 1.x with `offline_enabled` surfaced on every authenticated login response.
+- `SdkMetaDao` — read/write helpers for the persisted offline-mode flag on `sdk_meta`.
+
+**Other**
+
+- `ClosureBuilder` — parallel BFS, level-by-level meta fetching with bounded concurrency (default 4 workers); reduces closure build time on large schemas.
+- `DoctypeService.bulkGetWithChildren` — batches per-name GET requests into a single `mobile_sync.get_docs_with_children` call (200 docs/batch); falls back to individual GETs on 404 for older deployments.
+- `DoctypeService.list` accepts an optional `orFilters` parameter (additive; passes Frappe's `or_filters` query param through).
+- `RestHelper` — error messages distinguish "connection refused" from "no internet".
+- `FormScreen` offline-first save — checks connectivity before save; treats `serverId == null` docs as INSERT when going back online.
+- `ApiTracer` — debug-mode tracing utility for API calls.
+- `extractErrorMessage` / `toUserFriendlyMessage` — shared helpers for error-string normalization across the SDK.
 
 ### Changed
 
-- **Schema bump v4 → v5.** `sdk_meta` gains two columns: `offline_enabled INTEGER NOT NULL DEFAULT 0` and `offline_enabled_set_at INTEGER` (epoch ms; NULL until the first login response carries the flag). Migration is automatic and idempotent.
-- **`UnifiedResolver`** accepts optional `offlineMode` and `client` parameters. When `offlineMode.enabled = false`, `resolve()` short-circuits to a REST passthrough via `client.doctype.list`. No DB read, no `LinkDecorator`, no background-refresh dedupe.
-- **`OfflineRepository`** accepts the same two parameters. `create` / `updateDocumentData` / `deleteDocument` route to `FrappeClient` directly when offline mode is off; `getDirtyDocuments` returns empty.
-- **`SyncService`** accepts `offlineMode`. Every public method (`pushSync`, `pullSync`, `pullSyncMany`, `syncDoctype`, `getSyncStats`) returns `SyncResult.empty()` (or zeros) when offline mode is off. Adds `SyncResult.empty()` factory.
-- **`FrappeSDK.initialize()`** reads the persisted flag, resolves the session-bound mode via `_resolveBootMode`, and gates the closure pull in `_initialMetaAndDataSync` accordingly.
-- **`FrappeSDK.forTesting`** accepts an `offlineMode` parameter (default: offline) so existing tests continue to exercise the offline path without changes.
-- **`DoctypeService.list`** now accepts an optional `orFilters` parameter (additive; passes Frappe's `or_filters` query param through).
-- **`Mobile Configuration` doctype** (server-side) gains the `offline_enabled` Check field with `depends_on: eval:doc.enabled`. Field is the source of truth for the SDK's behavior.
+- **Single read path.** All list reads route through `UnifiedResolver`. DB-first with background refresh on connectivity; Link decoration via `LinkDecorator`.
+- **`pullSync` guards child doctypes.** Doctypes with `istable=1` are skipped at the entrypoint — `frappe.client.get_list` does not permit listing them, and children arrive embedded in parent pulls.
+- **Form-level cascade clears.** When a Link field changes, the SDK auto-clears dependent Link fields whose `linkFilters` contain `eval:doc.{fieldname}` references. Consumer `FieldChangeHandler` callbacks should add value-derivation only — the form owns cascade cleanup.
+- **Local UUID resolution.** Values matching the v4-UUID shape resolve from `docs__*` only; the SDK never calls `getByName(...)` for UUID-shaped values, since server names never match the UUID pattern.
+- **Conflict surfaces.** When a pulled row is newer than a local dirty/failed row, `PullApply` sets `sync_status = 'conflict'`. Resolve via `SyncController.resolveConflict()` with two actions: `pullAndOverwriteLocal` (apply server snapshot) or `keepLocalAndRetry` (requeue; runs `ThreeWayMerge` against the pre-edit base).
+- **Mobile-UUID round-trip.** After a successful first push, `OfflineRepository.reconcileServerSave` attaches the server's `server_name` to the local row keyed by `mobile_uuid`, cancels pending outbox rows for the pair, and applies the full server snapshot so server-derived columns (defaults, formulas) land in the mirror.
+- **`OfflineRepository`** constructor — accepts an optional `LocalWriter`, plus `OfflineMode` and `FrappeClient`. When offline mode is off, `create` / `updateDocumentData` / `deleteDocument` route to `FrappeClient` directly; `getDirtyDocuments` returns empty.
+- **`OfflineRepository.createDocument`** — preserves an existing `mobile_uuid` from the payload rather than always generating a fresh one.
+- **`OfflineRepository.getRowFromPerDoctypeTable`** — added for `fetch_from` offline resolution.
+- **`UnifiedResolver`** — translates the `parent` filter column to `parent_uuid` for child-table queries. Accepts optional `OfflineMode` and `FrappeClient`; when offline mode is off, `resolve()` short-circuits to a REST passthrough (no DB read, no `LinkDecorator`, no background-refresh dedupe).
+- **`LinkOptionService`** constructor — now takes `UnifiedResolver` and a meta-resolver instead of `FrappeClient`.
+- **`SyncService`** — accepts `OfflineMode`. Every public method (`pushSync`, `pullSync`, `pullSyncMany`, `syncDoctype`, `getSyncStats`) returns `SyncResult.empty()` (or zeros) when offline mode is off. Adds the `SyncResult.empty()` factory.
+- **`FrappeSDK.initialize()`** — reads the persisted offline-mode flag, resolves the session-bound mode via `_resolveBootMode`, and gates closure pull in `_initialMetaAndDataSync` accordingly. `autoRestoreAndSync` defaults to `false`; when `true`, restores session and runs post-login bootstrap.
+- **`FrappeSDK.forTesting`** — accepts an `offlineMode` parameter (default: offline) so existing tests continue to exercise the offline path.
+
+### Removed
+
+- **`DocumentDao`** — deleted, no replacement. All single-bag CRUD is replaced by `OfflineRepository` + `UnifiedResolver`.
+- **Legacy `documents` table** — dropped during the v2 → v3 migration. The single-bag JSON store is replaced by per-doctype `docs__<doctype>` tables. Drop is safe because `1.x` devices push before persisting, so there are no unsynced rows in `documents` at upgrade time.
+
+### Schema
+
+- **`AppDatabase._version` bumped from `2` to `3`.** `sdk_meta.schema_version` is written in lockstep by both `_onCreate` and the upgrade path.
+- **Single migration step** `_migrateV2ToV3` runs entirely within one transaction and replaces any prior multi-step v3→v4→v5→v6 chain.
+- **Steps:** (1) safely add v3 + v4 column extensions to `doctype_meta` via wrapped `ALTER TABLE ADD COLUMN` (catches "duplicate column name"); (2) idempotently create system tables (`outbox`, `pending_attachments`, `sdk_meta`) with `CREATE TABLE IF NOT EXISTS`; (3) drop the legacy `documents` table and its indexes; (4) upsert the singleton `sdk_meta` row with `schema_version = 3`.
+- **Storage layers:**
+  - **Per-doctype mirror** — `docs__<doctype>` tables with `mobile_uuid` PK, `server_name`, `sync_status`, `sync_op`, `push_base_payload`, and field columns. Children carry `parent_uuid`. Tables are **lazily created** on first pull via `OfflineRepository.ensureSchemaForClosure`.
+  - **System** — `sdk_meta` (singleton row tracking `schema_version`, bootstrap state, offline mode, session user); `outbox` (operation log indexed by state + created_at); `pending_attachments` (file upload queue with retry).
+- Fresh installs and migrated devices end in identical schema state.
+
+### Fixed
+
+- `system_tables.dart` — all `CREATE TABLE` statements use `IF NOT EXISTS`; `sdk_meta` seed uses `INSERT OR IGNORE` for migration idempotency.
+- `pull_apply.dart` — conflict flag now only fires when the server `modified` timestamp is strictly after the local `modified` (previously flagged any dirty row unconditionally).
+- `SyncController.pause()` / `resume()` — `syncNow` now checks the `isPaused` flag before running.
 
 ### Notes for upgraders
 
 - All new constructor parameters are optional with sensible defaults; existing call sites continue to compile and run.
-- An existing offline deployment that does **not** flip `offline_enabled = true` on the server before upgrading the SDK to 2.1 will see clients persist `false` on first login and will eventually drain + wipe local data on the next launch. Deploy the server-side update first if you want offline to remain on.
-- Token refresh does not refresh the flag; long-lived sessions stay in their previous mode until the user re-authenticates via password / OTP / OAuth / API key.
-
-# [2.0.0] - 2026-04-27
-
-### Added
-
-- **Offline-first data layer** — two-store design: every form save now writes to both the legacy `documents` JSON store and normalized per-doctype `docs__<dt>` / `docs__<child_dt>` SQLite tables via `LocalWriter`.
-- **`UnifiedResolver`** — single offline read path for Link pickers, list screens, and `fetch_from`; queries per-doctype tables first, triggers background API refresh when online.
-- **`LinkOptionService` offline-first** — backed by `UnifiedResolver`; Link dropdowns now work fully offline.
-- **Cursor-based pull** — `SyncService` uses `(modified, name)` cursors with `DoctypePullPhase` (initial / resume / incremental), look-ahead pagination, and resume-on-crash.
-- **`pullSyncMany`** — batch pull for multiple doctypes through a bounded worker pool.
-- **`getPullPhase` / `getPullPhases`** — query pull phase per doctype for UX gating (blocking screen vs background indicator).
-- **UUID-to-server-name resolution on push** — Link fields containing `mobile_uuid` values are rewritten to their `server_name` before the document is sent to the server.
-- **`SyncController`** — imperative sync surface: `syncNow`, `pause`/`resume`, `retry`, `retryAll`, `resolveConflict`, `previewDeleteCascade`, `acceptDeleteCascade`; observable `state$` stream.
-- **`SessionUser` auto-populated** — all login paths (username/password, OTP, API key, OAuth) now call `SessionUserService.set()` automatically; `sdk.sessionUser` and `sdk.sessionUser$` are available immediately after login.
-- **New UI exports** — `MigrationBlockedScreen`, `SyncStatusBar`, `SyncProgressScreen`, `SyncErrorsScreen`, `DocumentListFilterChip`, `showDeleteCascadePrompt`, `showLogoutGuardDialog`, `showForceLogoutConfirm`.
-- **`ClosureBuilder` parallel BFS** — level-by-level meta fetching with bounded concurrency (default 4 workers) reduces closure build time on large schemas.
-- **`DoctypeService.bulkGetWithChildren`** — batches per-name GET requests into a single `mobile_sync.get_docs_with_children` server call (200 docs/batch); falls back to individual GETs on 404 for older deployments.
-- **`RestHelper` improved error messages** — distinguishes "connection refused" from "no internet".
-- **`FormScreen` offline-first save** — checks connectivity before save; treats `serverId == null` docs as INSERT when going back online.
-- **`doc/OFFLINE_FIRST.md`** — new reference document for the offline-first architecture.
-
-### Changed
-
-- `OfflineRepository` constructor now accepts an optional `LocalWriter` (wired automatically by `FrappeSDK`).
-- `LinkOptionService` constructor now takes `UnifiedResolver` + `MetaResolverFn` instead of `FrappeClient`.
-- `OfflineRepository.createDocument` preserves an existing `mobile_uuid` from the payload rather than always generating a fresh one.
-- `OfflineRepository.getRowFromPerDoctypeTable` added for `fetch_from` offline resolution.
-- `UnifiedResolver` translates `parent` filter column to `parent_uuid` for child-table queries.
-
-### Fixed
-
-- `system_tables.dart` — all `CREATE TABLE` statements use `IF NOT EXISTS`; `sdk_meta` seed uses `INSERT OR IGNORE` (migration idempotency).
-- `pull_apply.dart` — conflict flag now only fires when the server `modified` timestamp is strictly after the local `modified` (previously flagged any dirty row unconditionally).
-- `SyncController.pause()` / `resume()` — `syncNow` now checks the `isPaused` flag before running.
+- Offline mode is **off by default**. To run as an offline-first client, deploy the `frappe-mobile-control` server release that flips `offline_enabled = true` on `Mobile Configuration` **before** upgrading the SDK on devices. An offline deployment that does **not** flip the flag will see clients persist `false` on first login and drain + wipe local data on the next launch.
+- Token refresh does not refresh the offline-mode flag. Long-lived sessions stay in their previous mode until the user re-authenticates (password / OTP / OAuth / API key).
+- Existing tests that use `FrappeSDK.forTesting` continue to default to offline. To exercise the online-only path in tests, pass `offlineMode: const OfflineMode(enabled: false, isPersisted: true)`.
+- Downgrade is not supported. `sqflite` does not provide a downgrade hook; users cannot downgrade through the app stores.
 
 # [1.1.0](https://github.com/dhwani-ris/frappe-mobile-sdk/compare/v1.0.0...v1.1.0) (2026-04-17)
 
@@ -78,13 +139,6 @@
 * **auth:** implement social login support with OAuth integration ([e123df7](https://github.com/dhwani-ris/frappe-mobile-sdk/commit/e123df7809f806825bf9554087adec24ba616890))
 * **fields:** add SearchableSelect, TableMultiSelect, Geolocation field widgets and fix form data handling ([06e8a32](https://github.com/dhwani-ris/frappe-mobile-sdk/commit/06e8a327dc0590c9d8d6c0c797104d6540c695a0))
 
-# Changelog
-
-All notable changes to this project are documented in this file.
-
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
-
 ## [1.0.0] - 2026-04-01
 
 ### Added
@@ -99,4 +153,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Workflows** — workflow state and transitions on forms when configured on the DocType.
 - Example app under `example/` and in-repo docs under `doc/`.
 
+[2.0.0]: https://github.com/dhwani-ris/frappe-mobile-sdk/releases/tag/v2.0.0
 [1.0.0]: https://github.com/dhwani-ris/frappe-mobile-sdk/releases/tag/v1.0.0

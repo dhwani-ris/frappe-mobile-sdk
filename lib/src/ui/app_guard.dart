@@ -157,7 +157,8 @@ class _FrappeAppGuardState extends State<FrappeAppGuard> {
 
       if (!mounted) return;
       setState(() => _isChecking = false);
-    } catch (e) {
+    } catch (e, st) {
+      debugPrint('AppGuard: status check failed — $e\n$st');
       // Treat 417 (ValidationException) and 404 as "app not configured"
       if (e is ValidationException ||
           (e is ApiException && (e.statusCode == 417 || e.statusCode == 404))) {

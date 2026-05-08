@@ -17,13 +17,18 @@ class _FakeResolver {
 
 void main() {
   test('replaces local Link values with server_name', () async {
-    final meta = DocTypeMeta(name: 'Sales Order', fields: [
-      f('customer', 'Link', options: 'Customer'),
-      f('warehouse', 'Link', options: 'Warehouse'),
-    ]);
+    final meta = DocTypeMeta(
+      name: 'Sales Order',
+      fields: [
+        f('customer', 'Link', options: 'Customer'),
+        f('warehouse', 'Link', options: 'Warehouse'),
+      ],
+    );
     final payload = <String, Object?>{
-      'customer': 'u-cust-1', 'customer__is_local': 1,
-      'warehouse': 'WH-1', 'warehouse__is_local': 0,
+      'customer': 'u-cust-1',
+      'customer__is_local': 1,
+      'warehouse': 'WH-1',
+      'warehouse__is_local': 0,
     };
     final resolver = _FakeResolver({
       'Customer': {'u-cust-1': 'CUST-101'},
@@ -35,17 +40,22 @@ void main() {
     );
     expect(out['customer'], 'CUST-101');
     expect(out['warehouse'], 'WH-1');
-    expect(out.containsKey('customer__is_local'), isFalse,
-        reason: '__is_local markers dropped from outbound payload');
+    expect(
+      out.containsKey('customer__is_local'),
+      isFalse,
+      reason: '__is_local markers dropped from outbound payload',
+    );
     expect(out.containsKey('warehouse__is_local'), isFalse);
   });
 
   test('unresolved target throws BlockedByUpstream', () async {
-    final meta = DocTypeMeta(name: 'SO', fields: [
-      f('customer', 'Link', options: 'Customer'),
-    ]);
+    final meta = DocTypeMeta(
+      name: 'SO',
+      fields: [f('customer', 'Link', options: 'Customer')],
+    );
     final payload = <String, Object?>{
-      'customer': 'u-new', 'customer__is_local': 1,
+      'customer': 'u-new',
+      'customer__is_local': 1,
     };
     final resolver = _FakeResolver({'Customer': {}});
     await expectLater(
@@ -59,9 +69,10 @@ void main() {
   });
 
   test('nested children — rewrites inside each child row', () async {
-    final parentMeta = DocTypeMeta(name: 'SO', fields: [
-      f('items', 'Table', options: 'SO Item'),
-    ]);
+    final parentMeta = DocTypeMeta(
+      name: 'SO',
+      fields: [f('items', 'Table', options: 'SO Item')],
+    );
     final childMeta = DocTypeMeta(
       name: 'SO Item',
       isTable: true,
@@ -87,9 +98,12 @@ void main() {
   });
 
   test('Dynamic Link — rewrites using sibling-resolved doctype', () async {
-    final meta = DocTypeMeta(name: 'Comment', fields: [
-      f('reference_name', 'Dynamic Link', options: 'reference_doctype'),
-    ]);
+    final meta = DocTypeMeta(
+      name: 'Comment',
+      fields: [
+        f('reference_name', 'Dynamic Link', options: 'reference_doctype'),
+      ],
+    );
     final payload = <String, Object?>{
       'reference_doctype': 'Customer',
       'reference_name': 'u-cust-1',
@@ -107,9 +121,10 @@ void main() {
   });
 
   test('non-local Link values pass through untouched', () async {
-    final meta = DocTypeMeta(name: 'SO', fields: [
-      f('customer', 'Link', options: 'Customer'),
-    ]);
+    final meta = DocTypeMeta(
+      name: 'SO',
+      fields: [f('customer', 'Link', options: 'Customer')],
+    );
     final payload = <String, Object?>{
       'customer': 'CUST-EXISTING',
       'customer__is_local': 0,
@@ -117,7 +132,7 @@ void main() {
     final out = await UuidRewriter.rewrite(
       meta: meta,
       payload: payload,
-      resolveServerName: (_, __) async =>
+      resolveServerName: (_, _) async =>
           fail('resolver should not be called for non-local'),
     );
     expect(out['customer'], 'CUST-EXISTING');

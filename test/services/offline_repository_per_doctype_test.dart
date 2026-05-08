@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:frappe_mobile_sdk/src/database/app_database.dart';
+import 'package:frappe_mobile_sdk/src/database/schema/parent_schema.dart';
 import 'package:frappe_mobile_sdk/src/models/doc_field.dart';
 import 'package:frappe_mobile_sdk/src/models/doc_type_meta.dart';
 import 'package:frappe_mobile_sdk/src/services/offline_repository.dart';
@@ -27,60 +28,60 @@ void main() {
       titleField: 'customer_name',
       fields: [f('customer_name', 'Data'), f('code', 'Data')],
     );
-    // Persist meta JSON so OfflineRepository can lazy-build the schema.
-    await appDb.doctypeMetaDao
-        .upsertMetaJson('Customer', jsonEncode(meta.toJson()));
+    await appDb.doctypeMetaDao.upsertMetaJson(
+      'Customer',
+      jsonEncode(meta.toJson()),
+    );
+    // Pre-create the per-doctype table for Customer so applyServerDocument
+    // can write into it. (Production: closure-pull would do this after
+    // login.)
+    for (final s in buildParentSchemaDDL(meta, tableName: 'docs__customer')) {
+      await appDb.rawDatabase.execute(s);
+    }
   });
 
   tearDown(() async {
     await appDb.rawDatabase.close();
   });
 
-  test(
-    'saveServerDocument writes to legacy `documents` AND `docs__customer`',
-    () async {
-      await repo.saveServerDocument(
-        doctype: 'Customer',
-        serverId: 'CUST-001',
-        data: {
-          'name': 'CUST-001',
-          'customer_name': 'Acme Corp',
-          'code': 'AC',
-          'modified': '2026-01-01 00:00:00',
-        },
-      );
+  test('applyServerDocument writes to docs__customer', () async {
+    await repo.applyServerDocument(
+      doctype: 'Customer',
+      serverName: 'CUST-001',
+      data: {
+        'name': 'CUST-001',
+        'customer_name': 'Acme Corp',
+        'code': 'AC',
+        'modified': '2026-01-01 00:00:00',
+      },
+    );
 
-      // Legacy store has the row.
-      final legacyDocs = await appDb.documentDao.findByDoctype('Customer');
-      expect(legacyDocs.length, 1);
-
-      // Per-doctype table exists and has the row.
-      final perDoctype =
-          await appDb.rawDatabase.query('docs__customer', limit: 10);
-      expect(perDoctype.length, 1);
-      expect(perDoctype.first['server_name'], 'CUST-001');
-      expect(perDoctype.first['customer_name'], 'Acme Corp');
-      expect(perDoctype.first['code'], 'AC');
-      expect(perDoctype.first['sync_status'], 'synced');
-    },
-  );
+    final perDoctype = await appDb.rawDatabase.query(
+      'docs__customer',
+      limit: 10,
+    );
+    expect(perDoctype.length, 1);
+    expect(perDoctype.first['server_name'], 'CUST-001');
+    expect(perDoctype.first['customer_name'], 'Acme Corp');
+    expect(perDoctype.first['code'], 'AC');
+    expect(perDoctype.first['sync_status'], 'synced');
+  });
 
   test(
-    'second saveServerDocument with same name UPSERTs (no duplicate)',
+    'second applyServerDocument with same name UPSERTs (no duplicate)',
     () async {
-      await repo.saveServerDocument(
+      await repo.applyServerDocument(
         doctype: 'Customer',
-        serverId: 'CUST-001',
+        serverName: 'CUST-001',
         data: {
           'name': 'CUST-001',
           'customer_name': 'Acme Corp',
           'modified': '2026-01-01 00:00:00',
         },
       );
-      // Update with new customer_name.
-      await repo.saveServerDocument(
+      await repo.applyServerDocument(
         doctype: 'Customer',
-        serverId: 'CUST-001',
+        serverName: 'CUST-001',
         data: {
           'name': 'CUST-001',
           'customer_name': 'Acme Corp Updated',
@@ -96,16 +97,15 @@ void main() {
   );
 
   test(
-    'no meta persisted → per-doctype write skipped, legacy still works',
+    'no meta persisted → applyServerDocument is a no-op (no table created)',
     () async {
-      await repo.saveServerDocument(
+      // No meta and no pre-built table for "NoMeta" — applyServerDocument
+      // should silently skip rather than throw.
+      await repo.applyServerDocument(
         doctype: 'NoMeta',
-        serverId: 'NO-1',
+        serverName: 'NO-1',
         data: {'name': 'NO-1', 'foo': 'bar'},
       );
-      // Legacy works.
-      expect((await appDb.documentDao.findByDoctype('NoMeta')).length, 1);
-      // Per-doctype table NOT created (no meta available).
       final tables = await appDb.rawDatabase.rawQuery(
         "SELECT name FROM sqlite_master WHERE type='table' AND name='docs__nometa'",
       );
@@ -113,58 +113,63 @@ void main() {
     },
   );
 
-  test(
-    'two different doctypes get two separate tables',
-    () async {
-      final supplierMeta = DocTypeMeta(
-        name: 'Supplier',
-        fields: [f('supplier_name', 'Data')],
-      );
-      await appDb.doctypeMetaDao.upsertMetaJson(
-        'Supplier',
-        jsonEncode(supplierMeta.toJson()),
-      );
+  test('two different doctypes get two separate tables', () async {
+    final supplierMeta = DocTypeMeta(
+      name: 'Supplier',
+      fields: [f('supplier_name', 'Data')],
+    );
+    await appDb.doctypeMetaDao.upsertMetaJson(
+      'Supplier',
+      jsonEncode(supplierMeta.toJson()),
+    );
+    for (final s in buildParentSchemaDDL(
+      supplierMeta,
+      tableName: 'docs__supplier',
+    )) {
+      await appDb.rawDatabase.execute(s);
+    }
 
-      await repo.saveServerDocument(
-        doctype: 'Customer',
-        serverId: 'C1',
-        data: {'name': 'C1', 'customer_name': 'A'},
-      );
-      await repo.saveServerDocument(
-        doctype: 'Supplier',
-        serverId: 'S1',
-        data: {'name': 'S1', 'supplier_name': 'B'},
-      );
+    await repo.applyServerDocument(
+      doctype: 'Customer',
+      serverName: 'C1',
+      data: {'name': 'C1', 'customer_name': 'A'},
+    );
+    await repo.applyServerDocument(
+      doctype: 'Supplier',
+      serverName: 'S1',
+      data: {'name': 'S1', 'supplier_name': 'B'},
+    );
 
-      expect((await appDb.rawDatabase.query('docs__customer')).length, 1);
-      expect((await appDb.rawDatabase.query('docs__supplier')).length, 1);
-    },
-  );
+    expect((await appDb.rawDatabase.query('docs__customer')).length, 1);
+    expect((await appDb.rawDatabase.query('docs__supplier')).length, 1);
+  });
 
   group('ensureSchemaForClosure', () {
-    test('creates parent tables for every closure parent (even 0-row ones)',
-        () async {
-      final categoryMeta = DocTypeMeta(
-        name: 'Category',
-        fields: [f('category_name', 'Data')],
-      );
-      final tagMeta = DocTypeMeta(
-        name: 'Tag',
-        fields: [f('tag_name', 'Data')],
-      );
-      // Note: no `saveServerDocument` calls for these — table must still be
-      // created so Link pickers + UnifiedResolver have something to read.
-      await repo.ensureSchemaForClosure(
-        metas: {'Category': categoryMeta, 'Tag': tagMeta},
-        childDoctypes: const {},
-      );
-      final tables = await appDb.rawDatabase.rawQuery(
-        "SELECT name FROM sqlite_master WHERE type='table' "
-        "AND name IN ('docs__category','docs__tag') ORDER BY name",
-      );
-      expect(tables.map((r) => r['name']).toList(),
-          ['docs__category', 'docs__tag']);
-    });
+    test(
+      'creates parent tables for every closure parent (even 0-row ones)',
+      () async {
+        final categoryMeta = DocTypeMeta(
+          name: 'Category',
+          fields: [f('category_name', 'Data')],
+        );
+        final tagMeta = DocTypeMeta(
+          name: 'Tag',
+          fields: [f('tag_name', 'Data')],
+        );
+        await repo.ensureSchemaForClosure(
+          metas: {'Category': categoryMeta, 'Tag': tagMeta},
+          childDoctypes: const {},
+        );
+        final tables = await appDb.rawDatabase.rawQuery(
+          "SELECT name FROM sqlite_master WHERE type='table' "
+          "AND name IN ('docs__category','docs__tag') ORDER BY name",
+        );
+        expect(tables.map((r) => r['name']).toList(), [
+          'docs__category',
+          'docs__tag',
+        ]);
+      },
+    );
 
     test('creates child tables for closure children', () async {
       final itemMeta = DocTypeMeta(
@@ -184,7 +189,7 @@ void main() {
     });
 
     test(
-      'saveServerDocument with child rows populates registered child table',
+      'applyServerDocument with child rows populates registered child table',
       () async {
         final orderMeta = DocTypeMeta(
           name: 'Order',
@@ -207,16 +212,13 @@ void main() {
           jsonEncode(itemMeta.toJson()),
         );
         await repo.ensureSchemaForClosure(
-          metas: {
-            'Order': orderMeta,
-            'Order Item': itemMeta,
-          },
+          metas: {'Order': orderMeta, 'Order Item': itemMeta},
           childDoctypes: const {'Order Item'},
         );
 
-        await repo.saveServerDocument(
+        await repo.applyServerDocument(
           doctype: 'Order',
-          serverId: 'ORD-1',
+          serverName: 'ORD-1',
           data: {
             'name': 'ORD-1',
             'modified': '2026-01-01 00:00:00',

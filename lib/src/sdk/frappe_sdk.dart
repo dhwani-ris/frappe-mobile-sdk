@@ -7,11 +7,10 @@ import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart';
 
 import '../api/client.dart';
+import '../concurrency/concurrency_pool.dart';
 import '../database/app_database.dart';
 import '../database/daos/doctype_meta_dao.dart';
 import '../database/daos/sdk_meta_dao.dart';
-import '../database/migrations/v1_to_v2.dart';
-import '../models/doc_type_meta.dart';
 import '../models/offline_mode.dart';
 import '../models/offline_mode_notifier.dart';
 import '../models/session_user.dart';
@@ -21,22 +20,16 @@ import '../services/local_writer.dart';
 import '../services/meta_service.dart';
 import '../services/permission_service.dart';
 import '../services/session_user_service.dart';
+import '../services/sync_controller.dart';
+import '../services/sync_engine_builder.dart';
 import '../services/sync_service.dart';
 import '../services/offline_repository.dart';
 import '../services/offline_transition_service.dart';
 import '../services/link_option_service.dart';
 import '../services/translation_service.dart';
-
-/// Thrown by [FrappeSDK.runV1ToV2MigrationIfNeeded] when the device has no
-/// connectivity and the offline-first data migration cannot proceed. The
-/// consumer app should display [MigrationBlockedScreen] (or its own
-/// equivalent) and retry the call once connectivity is restored.
-class MigrationNeedsNetworkException implements Exception {
-  @override
-  String toString() =>
-      'v1→v2 data migration requires network connectivity. '
-      'Show MigrationBlockedScreen and retry when online.';
-}
+import '../sync/pull_engine.dart';
+import '../sync/push_engine.dart';
+import '../sync/sync_state_notifier.dart';
 
 /// Main SDK initialization class for easy setup
 class FrappeSDK {
@@ -56,7 +49,38 @@ class FrappeSDK {
   UnifiedResolver? _resolver;
   SessionUserService? _sessionUserService;
 
+  // Push/pull engines + controller wired by [SyncEngineBuilder]. They
+  // share `_syncStateNotifier` so the single observable surface for sync
+  // activity flows through one notifier. The pools and notifier are kept
+  // here so future consumers (e.g. a `sdk.syncState` stream getter or
+  // runtime resize) can access them; the analyzer's unused-field warning
+  // is suppressed until those public getters land.
+  // ignore: unused_field
+  ConcurrencyPool? _pushPool;
+  // ignore: unused_field
+  ConcurrencyPool? _pullPool;
+  PushEngine? _pushEngine;
+  // ignore: unused_field
+  PullEngine? _pullEngine;
+  SyncController? _syncController;
+  // ignore: unused_field
+  SyncStateNotifier? _syncStateNotifier;
+
   bool _initialized = false;
+
+  /// One-shot lock for [initialize]. Set to a non-null Completer for the
+  /// duration of an in-flight `initialize()` call so concurrent callers
+  /// await the same future instead of racing through the body and each
+  /// constructing parallel sets of services. Cleared when the body
+  /// finishes (success or failure); on failure callers can retry.
+  Completer<void>? _initInFlight;
+
+  /// Set when [OfflineTransitionService.runDrainAndWipe] is fired
+  /// in the background from [initialize] / [login]. [_runUpgradeClosurePull]
+  /// awaits this before doing any per-doctype-table writes so a concurrent
+  /// `wipeOfflineDocumentTables()` cannot drop a table mid-pull. Cleared
+  /// once the drain settles.
+  Future<void>? _pendingDrain;
 
   /// Cached synchronous online state — updated lazily via [_defaultIsOnline].
   /// Conservative default (false) means the resolver starts in offline-only
@@ -182,7 +206,22 @@ class FrappeSDK {
   /// - if successful, runs an initial metadata + data sync for mobile doctypes
   Future<void> initialize([bool autoRestoreAndSync = false]) async {
     if (_initialized) return;
+    final inFlight = _initInFlight;
+    if (inFlight != null) return inFlight.future;
+    final completer = Completer<void>();
+    _initInFlight = completer;
+    try {
+      await _doInitialize(autoRestoreAndSync);
+      completer.complete();
+    } catch (e, st) {
+      completer.completeError(e, st);
+      rethrow;
+    } finally {
+      _initInFlight = null;
+    }
+  }
 
+  Future<void> _doInitialize(bool autoRestoreAndSync) async {
     _database = await AppDatabase.getInstance(appName: databaseAppName);
     _authService = AuthService();
     _authService!.initialize(baseUrl, database: _database);
@@ -214,12 +253,45 @@ class FrappeSDK {
     );
     _permissionService = PermissionService(_client!, _database!);
     _translationService = TranslationService(_client!);
+    // Build the sync engine pack (PushEngine + PullEngine + SyncController +
+    // shared SyncStateNotifier + two ConcurrencyPools). PushEngine becomes
+    // the production push driver. SyncService below holds a closure that
+    // delegates pushSync() to PushEngine.runOnce().
+    final pack = await SyncEngineBuilder.build(
+      database: _database!,
+      client: _client!,
+      metaResolver: metaFn,
+      runPullFn: _runPullForController,
+      applyServerDoc: (doctype, doc) async {
+        final serverName = doc['name'] as String? ?? '';
+        await _repository!.applyServerDocument(
+          doctype: doctype,
+          serverName: serverName,
+          data: doc,
+        );
+      },
+      runPullForDoctypes: _runPullForDoctypesViaController,
+      // mobile_control is a hard SDK dependency (server-side Frappe app
+      // providing JWT auth + mobile_uuid injection + dedup-on-INSERT).
+      // Enabling L2 here lets IdempotencyStrategy short-circuit duplicate
+      // INSERTs after a ghost-success retry instead of falling back to L3
+      // (extra GET-by-mobile_uuid before each retry).
+      serverHasDedupHook: true,
+    );
+    _syncStateNotifier = pack.notifier;
+    _pushPool = pack.pushPool;
+    _pullPool = pack.pullPool;
+    _pushEngine = pack.pushEngine;
+    _pullEngine = pack.pullEngine;
+    _syncController = pack.controller;
+
     _syncService = SyncService(
       _client!,
       _repository!,
       _database!,
       getMobileUuid: () => _authService!.getOrCreateMobileUuid(),
       offlineModeNotifier: _modeNotifier!,
+      pushRunner: () => _pushEngine!.runOnce(),
     );
     // Build UnifiedResolver — single read path for all offline queries.
     // Probe connectivity once here; downstream callers (resolver,
@@ -268,6 +340,10 @@ class FrappeSDK {
         _database!,
         getMobileUuid: () => _authService!.getOrCreateMobileUuid(),
         offlineMode: const OfflineMode(enabled: true, isPersisted: true),
+        // The drain SyncService delegates to the same PushEngine instance
+        // the SDK owns; the drain runs PushEngine.runOnce() to drain the
+        // outbox before the local-state wipe.
+        pushRunner: () => _pushEngine!.runOnce(),
       ),
       residueCounter: _residueCount,
     );
@@ -292,7 +368,15 @@ class FrappeSDK {
         if (persistedMode.isPersisted &&
             !persistedMode.enabled &&
             await _hasResidualOfflineState()) {
-          unawaited(_offlineTransitionService!.runDrainAndWipe());
+          // Track the drain future so [_runUpgradeClosurePull] can await
+          // it before writing to per-doctype tables — preventing a wipe
+          // from racing with a closure pull mid-write. Cannot await here
+          // because [TransitionDrainFailed] parks waiting for retry() /
+          // forceExit() from the UI, which isn't mounted yet.
+          _pendingDrain = _offlineTransitionService!
+              .runDrainAndWipe()
+              .whenComplete(() => _pendingDrain = null);
+          unawaited(_pendingDrain!);
         }
         await _initialMetaAndDataSync();
       }
@@ -315,48 +399,6 @@ class FrappeSDK {
         await _hasResidualOfflineState()) {
       await _offlineTransitionService!.runDrainAndWipe();
     }
-  }
-
-  /// Runs the v1 → v2 offline-first data migration if it has not yet been
-  /// applied (`sdk_meta.schema_version < 2`).
-  ///
-  /// Returns `true` if the migration ran, `false` if it was already applied.
-  /// Throws [MigrationNeedsNetworkException] when the device is offline; the
-  /// caller is expected to display [MigrationBlockedScreen] until connectivity
-  /// returns and then retry.
-  ///
-  /// **WARNING — do not call until the new offline-first read/write engines
-  /// (P3 + P4) are wired.** This migration renames the legacy `documents`
-  /// table to `documents__archived_v1`. The current
-  /// [OfflineRepository] writes to `documents` via the legacy `DocumentDao`,
-  /// so any read/write through it will fail once the rename has happened.
-  /// Until P3 rewires `OfflineRepository` to the per-doctype tables, leave
-  /// this method uncalled. The SDK does NOT auto-invoke it from
-  /// [initialize].
-  ///
-  /// [isOnline] and [metaFetcher] are injection seams used by tests. In
-  /// production both default to real implementations (connectivity_plus and
-  /// the wired [MetaService]).
-  Future<bool> runV1ToV2MigrationIfNeeded({
-    Future<bool> Function()? isOnline,
-    Future<DocTypeMeta> Function(String doctype)? metaFetcher,
-  }) async {
-    if (!_initialized) await initialize();
-    final raw = _database!.rawDatabase;
-    final currentVersion = await _readSchemaVersion(raw);
-    if (currentVersion >= 2) return false;
-
-    final online = await (isOnline ?? _defaultIsOnline)();
-    if (!online) {
-      throw MigrationNeedsNetworkException();
-    }
-
-    final migration = V1ToV2Migration(
-      db: raw,
-      metaFetcher:
-          metaFetcher ?? (doctype) async => _metaService!.getMeta(doctype),
-    );
-    return migration.run();
   }
 
   Future<bool> _defaultIsOnline() async {
@@ -428,14 +470,6 @@ class FrappeSDK {
   @visibleForTesting
   Future<OfflineMode> resolveBootModeForTesting(OfflineMode persisted) =>
       _resolveBootMode(persisted);
-
-  Future<int> _readSchemaVersion(dynamic db) async {
-    final rows = await db.rawQuery(
-      'SELECT schema_version FROM sdk_meta WHERE id=1 LIMIT 1',
-    );
-    if (rows.isEmpty) return 2;
-    return (rows.first['schema_version'] as int?) ?? 0;
-  }
 
   /// Login with username and password (stateless, returns user info)
   Future<Map<String, dynamic>> login(String username, String password) async {
@@ -693,6 +727,13 @@ class FrappeSDK {
     return _database!;
   }
 
+  /// Imperative sync surface backing the sync error UI: `pendingErrors`,
+  /// `retry(outboxId)`, `retryAll`, `resolveConflict`. Returns `null`
+  /// when the SDK was bootstrapped without an outbox-backed sync engine
+  /// (e.g. some test seams) so call sites can render a static banner
+  /// without retry affordances.
+  SyncController? get syncController => _syncController;
+
   /// Check if authenticated
   bool get isAuthenticated => _authService?.isAuthenticated ?? false;
 
@@ -949,6 +990,23 @@ class FrappeSDK {
   /// upgrade after the offline_enabled flag flips false → true).
   Future<void> _runUpgradeClosurePull() async {
     if (_metaService == null || _syncService == null) return;
+    // Block on any pending offline→online drain — its wipe phase drops
+    // every `docs__*` table, which would clobber rows this pull is
+    // about to insert. In the normal trigger path the offline-mode
+    // gate in [_initialMetaAndDataSync] short-circuits before we ever
+    // get here, so this await is a defensive belt-and-braces.
+    final drain = _pendingDrain;
+    if (drain != null) {
+      try {
+        await drain;
+      } catch (e, st) {
+        // Drain failure is surfaced via the transition stream; we just
+        // need to know it has settled before writing to per-doctype tables.
+        // Log so the failure mode is visible at the boot path too.
+        // ignore: avoid_print
+        print('FrappeSDK: pending drain awaited with error — $e\n$st');
+      }
+    }
     try {
       final entryPoints = await _metaService!.getMobileFormDoctypeNames();
       final closure = await _metaService!.closure(entryPoints);
@@ -986,6 +1044,29 @@ class FrappeSDK {
       print('FrappeSDK: closure pull failed — $e\n$st');
     }
     _syncCompleteController?.add(null);
+  }
+
+  /// Adapter for `SyncController.runPull`. Delegates to the existing
+  /// closure-pull driver and returns an empty deferred set — SIG-2
+  /// deferred re-pull tracking is not active in this iteration; the
+  /// closure pull uses `SyncService.pullSyncMany` internally which does
+  /// not surface deferred doctypes.
+  Future<Set<String>> _runPullForController() async {
+    await _runUpgradeClosurePull();
+    return const <String>{};
+  }
+
+  /// Adapter for `SyncController.runPullForDoctypes`. Routes a targeted
+  /// re-pull through `SyncService.pullSyncMany`. Hooked up here for
+  /// completeness; the SIG-2 deferred-doctype trigger is not active yet,
+  /// so this is rarely called in production until that pathway is
+  /// re-enabled.
+  Future<void> _runPullForDoctypesViaController(Set<String> doctypes) async {
+    if (doctypes.isEmpty) return;
+    await _syncService?.pullSyncMany(
+      doctypes: doctypes.toList(),
+      concurrency: 4,
+    );
   }
 
   @visibleForTesting

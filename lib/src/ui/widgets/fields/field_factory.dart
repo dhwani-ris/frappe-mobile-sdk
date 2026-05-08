@@ -76,6 +76,7 @@ class FieldFactory {
     Map<String, dynamic>? parentFormData,
     LinkFilterBuilder? Function(String doctype, String fieldname)?
     getLinkFilterBuilder,
+    ValueChanged<bool>? onIsLocalChanged,
   }) {
     if (field.hidden) {
       return null;
@@ -200,6 +201,7 @@ class FieldFactory {
           parentFormData: parentFormData ?? const {},
           getLinkFilterBuilder: getLinkFilterBuilder,
           style: fieldStyle,
+          onIsLocalChanged: onIsLocalChanged,
         );
 
       case 'Table':

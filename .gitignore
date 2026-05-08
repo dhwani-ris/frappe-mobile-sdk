@@ -89,3 +89,5 @@ test/.test_coverage.dart
 
 # FVM Version Cache
 .fvm/
+
+/docs

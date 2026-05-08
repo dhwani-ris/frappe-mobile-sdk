@@ -131,7 +131,6 @@ void main() {
       doctype: 'Customer',
       mobileUuid: 'u',
       operation: OutboxOperation.insert,
-      payload: '{}',
     );
     final fetcher = PullPageFetcher(
       listHttp: (doctype, params) async {

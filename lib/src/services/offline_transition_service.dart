@@ -78,7 +78,14 @@ class OfflineTransitionService {
   /// Runs drain → wipe → completed. If drain fails, parks in
   /// [TransitionDrainFailed] and awaits [retry] or [forceExit].
   /// Returns once [TransitionCompleted] is reached.
-  Future<void> runDrainAndWipe() async {
+  ///
+  /// [progressInterval] is the cadence at which residue is re-counted
+  /// while [SyncService.pushSync] runs, so the UI's Draining state
+  /// shows a live `drainedRecords` count. Defaults to 500ms; tests
+  /// override to 0 (manual ticks) for determinism.
+  Future<void> runDrainAndWipe({
+    Duration progressInterval = const Duration(milliseconds: 500),
+  }) async {
     _forceExited = false;
     while (true) {
       final initialResidue = await _residueCounter();
@@ -87,11 +94,48 @@ class OfflineTransitionService {
       );
 
       String? lastError;
+      Timer? progressTimer;
+      var lastDrained = 0;
+      var probeInFlight = false;
       try {
         final sync = await _drainSyncFactory();
+        // Periodic progress probe so the UI's drained-count actually
+        // moves during the drain. pushSync() is a single async call
+        // with no built-in progress events, so we re-run the residue
+        // counter on a timer and emit when it advances. Best-effort:
+        // any probe failure (closed stream, transient DB lock) is
+        // swallowed — the drain itself is still authoritative.
+        progressTimer = Timer.periodic(progressInterval, (_) async {
+          if (probeInFlight || _ctrl.isClosed) return;
+          probeInFlight = true;
+          try {
+            final remaining = await _residueCounter();
+            final drained = initialResidue - remaining;
+            if (drained > lastDrained) {
+              lastDrained = drained;
+              _emit(
+                TransitionDraining(
+                  totalRecords: initialResidue,
+                  drainedRecords: drained,
+                ),
+              );
+            }
+          } catch (e, st) {
+            // Probe is best-effort — the drain itself is authoritative.
+            // Log so a misconfigured residueCounter doesn't fail silently.
+            // ignore: avoid_print
+            print('OfflineTransitionService: progress probe failed — $e\n$st');
+          } finally {
+            probeInFlight = false;
+          }
+        });
         await sync.pushSync();
-      } catch (e) {
+      } catch (e, st) {
+        // ignore: avoid_print
+        print('OfflineTransitionService: pushSync drain failed — $e\n$st');
         lastError = e.toString();
+      } finally {
+        progressTimer?.cancel();
       }
 
       final remainingResidue = await _residueCounter();

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:collection';
 
+import 'package:flutter/foundation.dart';
 import 'package:sqflite/sqflite.dart';
 
 typedef WriteTask<T> = Future<T> Function(Transaction txn);
@@ -54,30 +55,46 @@ class WriteQueue {
     Future<void>(() async {
       try {
         while (_queue.isNotEmpty) {
-          await db.transaction((txn) async {
-            var count = 0;
-            while (_queue.isNotEmpty && count < batchRows) {
-              final p = _queue.removeFirst();
-              final sp = 'wq_${++_savepointCounter}';
-              try {
-                await txn.execute('SAVEPOINT $sp');
-                final r = await p.task(txn);
-                await txn.execute('RELEASE SAVEPOINT $sp');
-                p.completer.complete(r);
-              } catch (e, st) {
-                // Roll back this task's partial writes; sibling tasks
-                // inside the same outer transaction are unaffected.
+          try {
+            await db.transaction((txn) async {
+              var count = 0;
+              while (_queue.isNotEmpty && count < batchRows) {
+                final p = _queue.removeFirst();
+                final sp = 'wq_${++_savepointCounter}';
                 try {
-                  await txn.execute('ROLLBACK TO SAVEPOINT $sp');
+                  await txn.execute('SAVEPOINT $sp');
+                  final r = await p.task(txn);
                   await txn.execute('RELEASE SAVEPOINT $sp');
-                } catch (_) {
-                  // Savepoint may not exist if the SAVEPOINT itself failed.
+                  p.completer.complete(r);
+                } catch (e, st) {
+                  // Roll back this task's partial writes; sibling tasks
+                  // inside the same outer transaction are unaffected.
+                  try {
+                    await txn.execute('ROLLBACK TO SAVEPOINT $sp');
+                    await txn.execute('RELEASE SAVEPOINT $sp');
+                  } catch (rollbackErr, rollbackSt) {
+                    // Savepoint may not exist if the SAVEPOINT itself failed.
+                    debugPrint(
+                      'WriteQueue: ROLLBACK TO SAVEPOINT $sp failed — $rollbackErr\n$rollbackSt',
+                    );
+                  }
+                  p.completer.completeError(e, st);
                 }
-                p.completer.completeError(e, st);
+                count++;
               }
-              count++;
+            });
+          } catch (e, st) {
+            // Outer `db.transaction` itself failed (e.g. database closed,
+            // disk full, lock timeout). Items already removed inside the
+            // inner loop were completed via the per-task savepoint
+            // try/catch. Items still queued would otherwise hang forever
+            // on `submit()` — drain them with the same error so callers
+            // observe the failure and can recover or surface it.
+            debugPrint('WriteQueue: outer transaction failed — $e\n$st');
+            while (_queue.isNotEmpty) {
+              _queue.removeFirst().completer.completeError(e, st);
             }
-          });
+          }
         }
       } finally {
         _running = false;

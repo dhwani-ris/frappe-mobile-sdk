@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:crypto/crypto.dart';
+import 'package:flutter/foundation.dart';
 import 'package:sqflite/sqflite.dart';
 
 import '../api/client.dart';
@@ -194,7 +195,8 @@ class UnifiedResolver {
       }
       try {
         return await client!.doctype.count(doctype);
-      } catch (_) {
+      } catch (e, st) {
+        debugPrint('UnifiedResolver.count($doctype) failed — $e\n$st');
         return 0;
       }
     }
@@ -288,11 +290,14 @@ class UnifiedResolver {
           'limit_start': page * pageSize,
           'limit_page_length': pageSize,
         });
-      } catch (_) {
+      } catch (e, st) {
         // Background refresh is best-effort. Failures are observed by
         // the consumer through SyncStateNotifier (PullEngine emits its
         // own per-doctype error state) and don't affect the foreground
         // read that already returned.
+        debugPrint(
+          'UnifiedResolver: background refresh failed (key=$key) — $e\n$st',
+        );
       } finally {
         _inflightBg.remove(key);
       }
