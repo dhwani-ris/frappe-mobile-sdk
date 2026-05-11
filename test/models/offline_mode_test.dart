@@ -16,5 +16,10 @@ void main() {
       expect(a, isNot(equals(c)));
       expect(a.hashCode, equals(b.hashCode));
     });
+
+    test('toString includes both fields', () {
+      const m = OfflineMode(enabled: true, isPersisted: true);
+      expect(m.toString(), 'OfflineMode(enabled: true, isPersisted: true)');
+    });
   });
 }

@@ -74,13 +74,20 @@ class PullEngine {
   /// push was active for them). Caller (SyncController) is expected to
   /// re-run [run] for this subset after the push engine completes — see
   /// SIG-2.
-  Future<Set<String>> run(ClosureResult closure) async {
+  /// [allowedDoctypes] — when non-null, only doctypes in the set are pulled.
+  /// Used by the SDK to exclude permission-denied doctypes without mutating
+  /// the closure graph.
+  Future<Set<String>> run(
+    ClosureResult closure, {
+    Set<String>? allowedDoctypes,
+  }) async {
     notifier.value = notifier.value.copyWith(isPulling: true);
     final deferred = <String>{};
     try {
       final futures = <Future<void>>[];
       for (final dt in closure.doctypes) {
         if (closure.childDoctypes.contains(dt)) continue;
+        if (allowedDoctypes != null && !allowedDoctypes.contains(dt)) continue;
         futures.add(
           pool.submit<void>(() => _runDoctype(dt, closure, deferred)),
         );
@@ -187,6 +194,8 @@ class PullEngine {
 
         pulledCount += result.rows.length;
         lastPageSize = result.rows.length;
+        final priorModified = scratch.modified;
+        final priorName = scratch.name;
         scratch = result.advancedCursor;
 
         notifier.value = notifier.value.updatePerDoctype(
@@ -204,6 +213,15 @@ class PullEngine {
         // tell us "no more rows" inline; we have to ask. The "fail before
         // confirmation" case (network error on the next request) is what
         // protects the cursor from advancing prematurely.
+
+        // Stall guard: when `modified >= cursor.modified` returns a non-empty
+        // page where every row shares the same modified timestamp as the
+        // cursor, the advanced cursor equals the input cursor and the next
+        // request returns the same page — infinite loop. Break here; PullApply's
+        // UPSERT-by-server_name idempotency keeps the applied rows correct.
+        if (scratch.modified == priorModified && scratch.name == priorName) {
+          break;
+        }
       }
 
       // Cursor is persisted only when the doctype drains fully — partial

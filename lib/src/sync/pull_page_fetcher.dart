@@ -2,10 +2,11 @@ import '../database/field_type_mapping.dart';
 import '../models/doc_type_meta.dart';
 import 'cursor.dart';
 
-typedef ListHttpFn = Future<List<Map<String, dynamic>>> Function(
-  String doctype,
-  Map<String, Object?> params,
-);
+typedef ListHttpFn =
+    Future<List<Map<String, dynamic>>> Function(
+      String doctype,
+      Map<String, Object?> params,
+    );
 
 class PullPageResult {
   final List<Map<String, dynamic>> rows;
@@ -27,14 +28,16 @@ class PullPageResult {
 /// `modified >= cursor.modified` and rely on PullApply's
 /// UPSERT-by-`server_name` idempotency to absorb the seam row(s).
 ///
-/// **Edge case:** when many rows share the same `modified` second (e.g.
-/// a bulk import on the server), the seam re-fetch is bounded by the
-/// number of rows sharing that timestamp, not by 1. Idempotent UPSERT
-/// keeps the result correct, but a doctype with thousands of rows in
-/// one second will redundantly re-fetch them on every page boundary.
-/// Realistic Frappe writes give each row a unique `modified`, so this
-/// is rare in practice; if it bites, the spec's two-request variant
-/// (one per OR branch) can be implemented as a follow-up.
+/// **Stall hazard:** when many rows share the same `modified` second (e.g.
+/// a bulk import on the server), `modified >= cursor.modified` keeps
+/// returning the same page — `advancedCursor` equals the input cursor and
+/// the loop never terminates. [PullEngine] owns a stall guard: it detects
+/// when `advancedCursor.modified == scratch.modified && advancedCursor.name
+/// == scratch.name` and breaks. Callers that drive this fetcher directly
+/// must apply the same guard. Idempotent UPSERT keeps applied rows correct.
+/// For the `>pageSize` same-second case, rows past the first page are
+/// missed until the cursor moves forward; the spec's two-request variant
+/// (one per OR branch) can close that gap as a follow-up.
 class PullPageFetcher {
   final ListHttpFn listHttp;
 

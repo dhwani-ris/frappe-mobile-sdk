@@ -2,6 +2,118 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:frappe_mobile_sdk/src/models/document.dart';
 
 void main() {
+  group('Document.fromJson / toJson', () {
+    test('round-trips a full document', () {
+      final json = {
+        'localId': 'uuid-abc',
+        'doctype': 'Customer',
+        'serverId': 'CUST-001',
+        'data': {'customer_name': 'ACME'},
+        'status': 'clean',
+        'modified': 1700000000000,
+      };
+      final doc = Document.fromJson(json);
+      expect(doc.localId, 'uuid-abc');
+      expect(doc.doctype, 'Customer');
+      expect(doc.serverId, 'CUST-001');
+      expect(doc.status, 'clean');
+      expect(doc.modified, 1700000000000);
+      expect(doc.toJson(), json);
+    });
+
+    test('fromJson defaults status to "clean" when absent', () {
+      final doc = Document.fromJson({
+        'localId': 'u1',
+        'doctype': 'X',
+        'serverId': null,
+        'data': <String, dynamic>{},
+        'modified': 0,
+      });
+      expect(doc.status, 'clean');
+    });
+  });
+
+  group('Document.create', () {
+    test('creates a dirty document with the given localId and doctype', () {
+      final before = DateTime.now().millisecondsSinceEpoch;
+      final doc = Document.create(
+        doctype: 'Lead',
+        data: {'lead_name': 'Test'},
+        localId: 'new-uuid',
+      );
+      final after = DateTime.now().millisecondsSinceEpoch;
+      expect(doc.localId, 'new-uuid');
+      expect(doc.doctype, 'Lead');
+      expect(doc.status, 'dirty');
+      expect(doc.serverId, isNull);
+      expect(doc.modified, greaterThanOrEqualTo(before));
+      expect(doc.modified, lessThanOrEqualTo(after));
+    });
+  });
+
+  group('Document.fromServer', () {
+    test('creates a clean document with serverId', () {
+      final doc = Document.fromServer(
+        doctype: 'Customer',
+        serverId: 'CUST-99',
+        data: {'customer_name': 'Test'},
+        localId: 'uuid-server',
+      );
+      expect(doc.serverId, 'CUST-99');
+      expect(doc.status, 'clean');
+    });
+  });
+
+  group('Document state mutations', () {
+    final base = Document(
+      localId: 'u1',
+      doctype: 'Customer',
+      serverId: 'CUST-1',
+      data: {'x': 1},
+      status: 'clean',
+      modified: 0,
+    );
+
+    test('markDirty returns new dirty document', () {
+      final d = base.markDirty();
+      expect(d.status, 'dirty');
+      expect(d.localId, 'u1');
+      expect(d.serverId, 'CUST-1');
+    });
+
+    test('markClean returns new clean document', () {
+      final dirty = base.markDirty();
+      final clean = dirty.markClean();
+      expect(clean.status, 'clean');
+    });
+
+    test('markDeleted returns new deleted document', () {
+      final d = base.markDeleted();
+      expect(d.status, 'deleted');
+    });
+
+    test('updateData merges new fields and marks dirty', () {
+      final updated = base.updateData({'y': 2});
+      expect(updated.data['x'], 1);
+      expect(updated.data['y'], 2);
+      expect(updated.status, 'dirty');
+    });
+
+    test('updateData on deleted document stays deleted', () {
+      final deleted = base.markDeleted();
+      final updated = deleted.updateData({'z': 3});
+      expect(updated.status, 'deleted');
+    });
+
+    test('copyWith overrides only specified fields', () {
+      final copy = base.copyWith(status: 'dirty', serverId: 'CUST-2');
+      expect(copy.status, 'dirty');
+      expect(copy.serverId, 'CUST-2');
+      expect(copy.localId, 'u1');
+      expect(copy.doctype, 'Customer');
+    });
+  });
+
   group('Document.fromResolverRow', () {
     test(
       'offline-shape row uses mobile_uuid as localId, server_name as serverId',

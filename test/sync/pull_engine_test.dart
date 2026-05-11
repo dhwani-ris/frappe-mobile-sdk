@@ -576,6 +576,132 @@ void main() {
   );
 
   test(
+    'allowedDoctypes skips unlisted doctypes without deferring them',
+    () async {
+      final fetched = <String>[];
+      final fetcher = PullPageFetcher(
+        listHttp: (doctype, params) async {
+          fetched.add(doctype);
+          return const <Map<String, dynamic>>[];
+        },
+      );
+      const closure = ClosureResult(
+        doctypes: ['Customer', 'Order'],
+        graph: {
+          'Customer': DepGraph(
+            doctype: 'Customer',
+            tier: 0,
+            outgoing: [],
+            incoming: [],
+          ),
+          'Order': DepGraph(
+            doctype: 'Order',
+            tier: 0,
+            outgoing: [],
+            incoming: [],
+          ),
+        },
+        childDoctypes: {},
+        warnings: [],
+      );
+      final engine = PullEngine(
+        db: db,
+        metaDao: metaDao,
+        outboxDao: OutboxDao(db),
+        pool: ConcurrencyPool(maxConcurrent: 2),
+        fetcher: fetcher,
+        pageSize: 500,
+        notifier: SyncStateNotifier(),
+        metaResolver: (dt) async =>
+            DocTypeMeta(name: dt, fields: [f('customer_name', 'Data')]),
+      );
+      final deferred = await engine.run(closure, allowedDoctypes: {'Customer'});
+      expect(
+        fetched,
+        ['Customer'],
+        reason: 'Order not in allowedDoctypes — fetcher never called for it',
+      );
+      expect(
+        deferred,
+        isEmpty,
+        reason: 'allowedDoctypes-filtered doctype is not deferred (SIG-2)',
+      );
+    },
+  );
+
+  test(
+    'stall guard: terminates and persists cursor when all page rows share same modified',
+    () async {
+      // Simulates a doctype where every row has the same `modified` timestamp
+      // (e.g. bulk-imported reference data). Without the stall guard,
+      // `modified >= cursor.modified` returns the same page forever.
+      var calls = 0;
+      final fetcher = PullPageFetcher(
+        listHttp: (doctype, params) async {
+          calls++;
+          // Return the same 3 rows on every call — cursor never advances.
+          // The stall guard must break the loop after the second fetch.
+          return [
+            {
+              'name': 'C-1',
+              'modified': '2026-01-01 00:00:00',
+              'customer_name': 'Alpha',
+            },
+            {
+              'name': 'C-2',
+              'modified': '2026-01-01 00:00:00',
+              'customer_name': 'Beta',
+            },
+            {
+              'name': 'C-3',
+              'modified': '2026-01-01 00:00:00',
+              'customer_name': 'Gamma',
+            },
+          ];
+        },
+      );
+      final closure = const ClosureResult(
+        doctypes: ['Customer'],
+        graph: {
+          'Customer': DepGraph(
+            doctype: 'Customer',
+            tier: 0,
+            outgoing: [],
+            incoming: [],
+          ),
+        },
+        childDoctypes: {},
+        warnings: [],
+      );
+      final engine = PullEngine(
+        db: db,
+        metaDao: metaDao,
+        outboxDao: OutboxDao(db),
+        pool: ConcurrencyPool(maxConcurrent: 2),
+        fetcher: fetcher,
+        pageSize: 500,
+        notifier: SyncStateNotifier(),
+        metaResolver: (dt) async =>
+            DocTypeMeta(name: dt, fields: [f('customer_name', 'Data')]),
+      );
+      await engine.run(closure);
+
+      // Must terminate (not loop forever).
+      // Exactly 2 fetches: one fresh page + one stall detection.
+      expect(calls, 2, reason: 'stall detected on second fetch — loop exits');
+      // Rows are idempotently applied.
+      final rows = await db.query('docs__customer');
+      expect(rows.length, 3);
+      // Cursor is persisted with complete:true so the next sync cycle
+      // resumes incrementally rather than from scratch.
+      final cursorJson = await metaDao.getLastOkCursor('Customer');
+      expect(cursorJson, isNotNull);
+      final parsed = jsonDecode(cursorJson!) as Map<String, dynamic>;
+      expect(parsed['complete'], isTrue);
+    },
+  );
+
+  test(
     'falls back to normalized table name when doctype_meta has no table_name',
     () async {
       // NULL out table_name → metaDao.getTableName() returns null →

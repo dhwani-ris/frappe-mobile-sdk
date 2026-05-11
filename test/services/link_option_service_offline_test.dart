@@ -86,6 +86,66 @@ void main() {
 
   LinkOptionService makeSvc() => LinkOptionService(resolver, (dt) async => m);
 
+  group('getLinkOptions — 3-tuple filter regression (C1)', () {
+    test('3-tuple [field, op, value] filter reaches resolver', () async {
+      final out = await makeSvc().getLinkOptions(
+        'Customer',
+        filters: [
+          ['age', '>=', 10],
+        ],
+      );
+      expect(
+        out.length,
+        1,
+        reason:
+            '3-tuple filter must reach the resolver; if dropped both rows appear',
+      );
+      expect(out.first.name, 'CUST-1');
+    });
+
+    test('4-tuple [doctype, field, op, value] filter still works', () async {
+      final out = await makeSvc().getLinkOptions(
+        'Customer',
+        filters: [
+          ['Customer', 'age', '>=', 10],
+        ],
+      );
+      expect(out.length, 1);
+      expect(out.first.name, 'CUST-1');
+    });
+
+    test('mix of 3-tuple and 4-tuple filters are both applied', () async {
+      final out = await makeSvc().getLinkOptions(
+        'Customer',
+        filters: [
+          ['age', '>=', 10],
+          ['Customer', 'age', '<=', 5],
+        ],
+      );
+      expect(
+        out,
+        isEmpty,
+        reason:
+            'Both filters must be applied — no row satisfies age>=10 AND age<=5',
+      );
+    });
+
+    test(
+      'malformed filter (length 1) is skipped; valid filter applies',
+      () async {
+        final out = await makeSvc().getLinkOptions(
+          'Customer',
+          filters: [
+            ['junk'],
+            ['age', '>=', 10],
+          ],
+        );
+        expect(out.length, 1);
+        expect(out.first.name, 'CUST-1');
+      },
+    );
+  });
+
   test('routes through resolver, returns LinkOptionEntity per row', () async {
     final svc = makeSvc();
     final out = await svc.getLinkOptionsOffline(doctype: 'Customer');

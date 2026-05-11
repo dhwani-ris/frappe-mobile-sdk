@@ -26,8 +26,8 @@ class SdkMetaDao {
     required bool enabled,
     required int setAtMs,
   }) async {
-    await _db.rawUpdate(
-      'UPDATE sdk_meta SET offline_enabled = ?, offline_enabled_set_at = ? WHERE id = 1',
+    await _db.rawInsert(
+      'INSERT OR REPLACE INTO sdk_meta (id, offline_enabled, offline_enabled_set_at) VALUES (1, ?, ?)',
       [enabled ? 1 : 0, setAtMs],
     );
   }

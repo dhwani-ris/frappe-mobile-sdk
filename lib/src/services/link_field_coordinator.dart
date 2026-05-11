@@ -217,7 +217,7 @@ class LinkFieldCoordinator {
       completer: completer,
     );
     _queue.add(req);
-    _processQueue();
+    unawaited(_processQueue());
 
     future.whenComplete(() {
       _inProgress.remove(ck);
@@ -258,9 +258,6 @@ class LinkFieldCoordinator {
         _inFlight--;
         if (_inFlight == 0 && _queue.isEmpty) {
           _emitProgress(false);
-        }
-        if (_queue.isNotEmpty) {
-          _processQueue();
         }
       }
     }

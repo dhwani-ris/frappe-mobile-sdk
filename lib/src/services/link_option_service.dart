@@ -136,6 +136,11 @@ class LinkOptionService {
   /// Normalize filter doctype to match the queried doctype.
   /// Fixes 417 "Field not permitted" when meta uses singular form (e.g. Village)
   /// but API queries plural (Villages).
+  ///
+  /// Accepts both Frappe filter forms:
+  ///   3-tuple [field, op, value]  — doctype is prepended from [doctype].
+  ///   4-tuple [dt, field, op, value] — dt is replaced with [doctype] if it
+  ///   differs (singular/plural mismatch) or is null/empty.
   static List<List<dynamic>>? _normalizeFiltersForDoctype(
     String doctype,
     List<List<dynamic>>? filters,
@@ -143,13 +148,20 @@ class LinkOptionService {
     if (filters == null || filters.isEmpty) return filters;
     final result = <List<dynamic>>[];
     for (final filter in filters) {
-      if (filter.length < 4) continue;
-      final filterDoctype = filter[0]?.toString();
-      if (filterDoctype == null || filterDoctype.isEmpty) {
-        result.add(List<dynamic>.from(filter));
+      if (filter.length == 3) {
+        result.add([doctype, filter[0], filter[1], filter[2]]);
         continue;
       }
-      if (filterDoctype != doctype) {
+      if (filter.length < 4) {
+        debugPrint(
+          'LinkOptionService: malformed filter (length ${filter.length}), skipping',
+        );
+        continue;
+      }
+      final filterDoctype = filter[0]?.toString();
+      if (filterDoctype == null ||
+          filterDoctype.isEmpty ||
+          filterDoctype != doctype) {
         result.add([doctype, filter[1], filter[2], filter[3]]);
       } else {
         result.add(List<dynamic>.from(filter));
@@ -157,6 +169,12 @@ class LinkOptionService {
     }
     return result.isEmpty ? null : result;
   }
+
+  @visibleForTesting
+  static List<List<dynamic>>? normalizeFiltersForDoctypeForTesting(
+    String doctype,
+    List<List<dynamic>>? filters,
+  ) => _normalizeFiltersForDoctype(doctype, filters);
 
   /// Returns field names that are dependencies in link_filters (eval:doc.xxx).
   /// Handles both `eval:doc.state` and `eval: doc.state` (Frappe standard format).

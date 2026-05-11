@@ -62,9 +62,13 @@ class FrappeSDK {
   PushEngine? _pushEngine;
   // ignore: unused_field
   PullEngine? _pullEngine;
+  Future<bool> Function()? _isOnlineOverrideForTesting;
   SyncController? _syncController;
-  // ignore: unused_field
   SyncStateNotifier? _syncStateNotifier;
+
+  /// Live sync-state notifier. Non-null after [initialize] completes.
+  /// Wire into [SyncStatusBar] to surface pull/push activity in the UI.
+  SyncStateNotifier? get syncStateNotifier => _syncStateNotifier;
 
   bool _initialized = false;
 
@@ -1031,8 +1035,13 @@ class FrappeSDK {
   /// failures are logged and skipped. Used by both [_initialMetaAndDataSync]
   /// (initial returning-user sync) and [_applyOfflineFlag] (mid-session
   /// upgrade after the offline_enabled flag flips false → true).
-  Future<void> _runUpgradeClosurePull() async {
-    if (_metaService == null || _syncService == null) return;
+  /// Returns the set of doctypes deferred by SIG-2 (push was active during
+  /// pull). Callers that care (SyncController) re-pull those doctypes after
+  /// push completes.
+  Future<Set<String>> _runUpgradeClosurePull() async {
+    if (_metaService == null || _syncService == null || _pullEngine == null) {
+      return const <String>{};
+    }
     // Block on any pending offline→online drain — its wipe phase drops
     // every `docs__*` table, which would clobber rows this pull is
     // about to insert. In the normal trigger path the offline-mode
@@ -1051,9 +1060,11 @@ class FrappeSDK {
       }
     }
     try {
+      final onlineCheck = _isOnlineOverrideForTesting ?? _syncService!.isOnline;
+      if (!await onlineCheck()) return const <String>{};
       final entryPoints = await _metaService!.getMobileFormDoctypeNames();
       final closure = await _metaService!.closure(entryPoints);
-      final pullable = <String>[];
+      final pullable = <String>{};
       for (final doctype in closure.doctypes) {
         if (closure.childDoctypes.contains(doctype)) continue;
         if (_permissionService != null &&
@@ -1062,52 +1073,47 @@ class FrappeSDK {
         }
         pullable.add(doctype);
       }
-      if (pullable.isEmpty) {
-        _syncCompleteController?.add(null);
-        return;
-      }
-      // Bounded-parallel batch via SyncService.pullSyncMany — one mutex hold
-      // for the whole closure instead of one-per-doctype, so helper masters
-      // (State, District, Block, Village, …) drain alongside entry points
-      // and Link pickers see populated tables sooner. Per-doctype failures
-      // surface in the result map; the batch keeps going.
-      final results = await _syncService!.pullSyncMany(doctypes: pullable);
-      for (final entry in results.entries) {
-        final err = entry.value.error;
-        if (err != null && err.isNotEmpty) {
-          // ignore: avoid_print
-          print('FrappeSDK: pullSync(${entry.key}) failed — $err');
-        }
-      }
+      if (pullable.isEmpty) return const <String>{};
+      // Hold the SyncMutex for the entire closure pull so concurrent
+      // single-doctype callers (pullSync, pullSyncWaiting) serialise
+      // behind it — same contract as the former pullSyncMany call path.
+      return await _syncService!.protect(
+        () => _pullEngine!.run(closure, allowedDoctypes: pullable),
+      );
     } catch (e, st) {
       // ignore: avoid_print
       print('FrappeSDK: closure pull failed — $e\n$st');
+      return const <String>{};
+    } finally {
+      _syncCompleteController?.add(null);
     }
-    _syncCompleteController?.add(null);
   }
 
-  /// Adapter for `SyncController.runPull`. Delegates to the existing
-  /// closure-pull driver and returns an empty deferred set — SIG-2
-  /// deferred re-pull tracking is not active in this iteration; the
-  /// closure pull uses `SyncService.pullSyncMany` internally which does
-  /// not surface deferred doctypes.
-  Future<Set<String>> _runPullForController() async {
-    await _runUpgradeClosurePull();
-    return const <String>{};
-  }
+  /// Adapter for `SyncController.runPull`. Propagates the SIG-2 deferred set
+  /// from PullEngine so SyncController can re-pull those doctypes after push.
+  Future<Set<String>> _runPullForController() => _runUpgradeClosurePull();
 
   /// Adapter for `SyncController.runPullForDoctypes`. Routes a targeted
-  /// re-pull through `SyncService.pullSyncMany`. Hooked up here for
-  /// completeness; the SIG-2 deferred-doctype trigger is not active yet,
-  /// so this is rarely called in production until that pathway is
-  /// re-enabled.
+  /// re-pull through `SyncService.pullSyncMany` for SIG-2 deferred doctypes
+  /// after push completes.
   Future<void> _runPullForDoctypesViaController(Set<String> doctypes) async {
     if (doctypes.isEmpty) return;
     await _syncService?.pullSyncMany(doctypes: doctypes.toList());
   }
 
   @visibleForTesting
-  Future<void> runUpgradeClosurePullForTesting() => _runUpgradeClosurePull();
+  Future<Set<String>> runUpgradeClosurePullForTesting() =>
+      _runUpgradeClosurePull();
+
+  @visibleForTesting
+  void injectPullEngineForTesting(PullEngine engine) {
+    _pullEngine = engine;
+  }
+
+  @visibleForTesting
+  void overrideIsOnlineForTesting(Future<bool> Function() fn) {
+    _isOnlineOverrideForTesting = fn;
+  }
 
   /// Re-pulls every helper, master, and reference doctype in the closure from
   /// scratch by clearing their pull cursors first. Entry-point mobile-form

@@ -68,8 +68,11 @@ class SyncService {
        _modeNotifier = offlineModeNotifier ?? OfflineModeNotifier(offlineMode),
        _pushRunner = pushRunner;
 
-  /// Check if device is online
+  /// Check if device is online.
+  /// Returns false when offline mode is disabled, regardless of connectivity,
+  /// so callers can use this method without a separate mode guard.
   Future<bool> isOnline() async {
+    if (!offlineMode.enabled) return false;
     final connectivityResult = await Connectivity().checkConnectivity();
     return connectivityResult.contains(ConnectivityResult.mobile) ||
         connectivityResult.contains(ConnectivityResult.wifi) ||
@@ -230,6 +233,12 @@ class SyncService {
       () => _pullOneInternal(doctype: doctype, since: since),
     );
   }
+
+  /// Runs [fn] inside the sync mutex — same lock that [pullSync],
+  /// [pullSyncMany], and [pushSync] use. Call this when an external driver
+  /// (e.g. PullEngine) needs to participate in the serialisation contract
+  /// without going through a SyncService-owned method.
+  Future<T> protect<T>(Future<T> Function() fn) => _syncMutex.protect(fn);
 
   /// Pull updates for many doctypes with bounded parallelism.
   ///

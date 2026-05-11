@@ -45,6 +45,7 @@ class TableMultiSelectFieldBase extends BaseField {
       formData: formData,
       parentFormData: parentFormData,
       getLinkFilterBuilder: getLinkFilterBuilder,
+      labelText: style?.decoration?.labelText,
     );
   }
 }
@@ -61,6 +62,7 @@ class _Loader extends StatefulWidget {
     this.formData = const {},
     this.parentFormData = const {},
     this.getLinkFilterBuilder,
+    this.labelText,
   });
 
   final DocField field;
@@ -73,6 +75,7 @@ class _Loader extends StatefulWidget {
   final Map<String, dynamic> parentFormData;
   final LinkFilterBuilder? Function(String doctype, String fieldname)?
   getLinkFilterBuilder;
+  final String? labelText;
 
   @override
   State<_Loader> createState() => _LoaderState();
@@ -161,6 +164,7 @@ class _LoaderState extends State<_Loader> {
       multiSelect: true,
       enabled: widget.enabled,
       loading: _loading,
+      labelText: widget.labelText,
       onChanged: (values) {
         if (_linkFieldName == null) return;
         final rows = values

@@ -602,6 +602,11 @@ class MetaService {
           unchanged.add(dt);
           continue;
         }
+        // Best-effort read: not wrapped in a transaction, so a concurrent
+        // PullEngine job updating this row's last_ok_cursor could cause SQLite
+        // to re-read the row. SQLite WAL guarantees no torn read, but the
+        // watermark value here may be one write behind. Worst case: unnecessary
+        // meta re-fetch on the next cycle, not data corruption.
         final localMark = await dao.getMetaWatermark(dt);
         if (localMark == newMark) {
           unchanged.add(dt);

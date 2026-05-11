@@ -486,6 +486,7 @@ class _LinkFieldDropdownState extends State<_LinkFieldDropdown> {
       enabled: widget.enabled && !widget.field.readOnly,
       hintText:
           widget.field.placeholder ?? 'Search ${widget.field.displayLabel}...',
+      labelText: widget.style?.decoration?.labelText,
       onChanged: (values) {
         final picked = values.isEmpty ? null : values.first;
         widget.onChanged?.call(picked);

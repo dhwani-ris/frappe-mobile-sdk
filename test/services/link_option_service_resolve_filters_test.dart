@@ -124,6 +124,57 @@ void main() {
     });
   });
 
+  group('_normalizeFiltersForDoctype (C1)', () {
+    test('3-tuple [field, op, value] is promoted to 4-tuple with doctype', () {
+      final result = LinkOptionService.normalizeFiltersForDoctypeForTesting(
+        'Village',
+        [
+          ['state', '=', 'Active'],
+        ],
+      );
+      expect(result, [
+        ['Village', 'state', '=', 'Active'],
+      ]);
+    });
+
+    test('4-tuple with matching doctype is kept as-is', () {
+      final result = LinkOptionService.normalizeFiltersForDoctypeForTesting(
+        'Village',
+        [
+          ['Village', 'state', '=', 'Active'],
+        ],
+      );
+      expect(result, [
+        ['Village', 'state', '=', 'Active'],
+      ]);
+    });
+
+    test(
+      '4-tuple with mismatched doctype is normalised to queried doctype',
+      () {
+        final result = LinkOptionService.normalizeFiltersForDoctypeForTesting(
+          'Village',
+          [
+            ['Villages', 'state', '=', 'Active'],
+          ],
+        );
+        expect(result, [
+          ['Village', 'state', '=', 'Active'],
+        ]);
+      },
+    );
+
+    test('malformed filter (length < 3) returns null (skipped)', () {
+      final result = LinkOptionService.normalizeFiltersForDoctypeForTesting(
+        'Village',
+        [
+          ['junk'],
+        ],
+      );
+      expect(result, isNull);
+    });
+  });
+
   group('TableMultiSelect-shape regression', () {
     test(
       'resolveFilters applies meta linkFilters for Table MultiSelect (rowData-only)',
