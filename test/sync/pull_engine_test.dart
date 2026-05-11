@@ -517,4 +517,118 @@ void main() {
       expect(children[1]['item_code'], 'B');
     },
   );
+
+  test(
+    'resumes from pre-existing cursor (_decodeJsonOrNull with non-empty string)',
+    () async {
+      // Pre-seed a cursor so getLastOkCursor returns a non-empty JSON string →
+      // _decodeJsonOrNull parses it and Cursor.fromJson uses the values.
+      await metaDao.setLastOkCursor(
+        'Customer',
+        '{"modified":"2026-01-01 00:00:00","name":"C-0","complete":false}',
+      );
+      var calls = 0;
+      final fetcher = PullPageFetcher(
+        listHttp: (doctype, params) async {
+          calls++;
+          return calls == 1
+              ? [
+                  {
+                    'name': 'C-1',
+                    'modified': '2026-01-02',
+                    'customer_name': 'Delta',
+                  },
+                ]
+              : const <Map<String, dynamic>>[];
+        },
+      );
+      final closure = const ClosureResult(
+        doctypes: ['Customer'],
+        graph: {
+          'Customer': DepGraph(
+            doctype: 'Customer',
+            tier: 0,
+            outgoing: [],
+            incoming: [],
+          ),
+        },
+        childDoctypes: {},
+        warnings: [],
+      );
+      final engine = PullEngine(
+        db: db,
+        metaDao: metaDao,
+        outboxDao: OutboxDao(db),
+        pool: ConcurrencyPool(maxConcurrent: 2),
+        fetcher: fetcher,
+        pageSize: 500,
+        notifier: SyncStateNotifier(),
+        metaResolver: (dt) async =>
+            DocTypeMeta(name: dt, fields: [f('customer_name', 'Data')]),
+      );
+      await engine.run(closure);
+      final rows = await db.query('docs__customer');
+      expect(rows.length, 1);
+      final cursorJson = await metaDao.getLastOkCursor('Customer');
+      final parsed = jsonDecode(cursorJson!) as Map<String, dynamic>;
+      expect(parsed['complete'], isTrue);
+    },
+  );
+
+  test(
+    'falls back to normalized table name when doctype_meta has no table_name',
+    () async {
+      // NULL out table_name → metaDao.getTableName() returns null →
+      // PullEngine uses normalizeDoctypeTableName('Customer') = 'docs__customer'.
+      await db.update(
+        'doctype_meta',
+        {'table_name': null},
+        where: 'doctype = ?',
+        whereArgs: ['Customer'],
+      );
+      var calls = 0;
+      final fetcher = PullPageFetcher(
+        listHttp: (doctype, params) async {
+          calls++;
+          return calls == 1
+              ? [
+                  {
+                    'name': 'C-1',
+                    'modified': '2026-01-01',
+                    'customer_name': 'Gamma',
+                  },
+                ]
+              : const <Map<String, dynamic>>[];
+        },
+      );
+      final closure = const ClosureResult(
+        doctypes: ['Customer'],
+        graph: {
+          'Customer': DepGraph(
+            doctype: 'Customer',
+            tier: 0,
+            outgoing: [],
+            incoming: [],
+          ),
+        },
+        childDoctypes: {},
+        warnings: [],
+      );
+      final engine = PullEngine(
+        db: db,
+        metaDao: metaDao,
+        outboxDao: OutboxDao(db),
+        pool: ConcurrencyPool(maxConcurrent: 2),
+        fetcher: fetcher,
+        pageSize: 500,
+        notifier: SyncStateNotifier(),
+        metaResolver: (dt) async =>
+            DocTypeMeta(name: dt, fields: [f('customer_name', 'Data')]),
+      );
+      await engine.run(closure);
+      final rows = await db.query('docs__customer');
+      expect(rows.length, 1);
+      expect(rows.first['customer_name'], 'Gamma');
+    },
+  );
 }

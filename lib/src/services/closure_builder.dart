@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 
+import '../concurrency/concurrency_pool.dart';
 import '../models/closure_result.dart';
 import '../models/dep_graph.dart';
 import '../models/doc_type_meta.dart';
@@ -52,29 +53,28 @@ class ClosureBuilder {
         }
       }
 
-      // Fetch this level's metas through a small worker pool. Each
-      // worker grabs the next unvisited doctype in submission order.
+      // Fetch this level's metas through a bounded pool. Submission order
+      // doesn't matter for correctness — failures are surfaced as warnings
+      // and missing entries are skipped in the sequential apply step below.
       final levelItems = byDoctype.values.toList();
       final levelMetas = <String, DocTypeMeta>{};
-      var next = 0;
-      Future<void> worker() async {
-        while (true) {
-          final myIdx = next++;
-          if (myIdx >= levelItems.length) return;
-          final item = levelItems[myIdx];
-          try {
-            levelMetas[item.doctype] = await metaFetcher(item.doctype);
-          } catch (e, st) {
-            debugPrint(
-              'ClosureBuilder.metaFetcher(${item.doctype}) failed — $e\n$st',
-            );
-            warnings.add('Missing meta for "${item.doctype}": $e');
-          }
-        }
-      }
-
-      final workerCount = metaConcurrency.clamp(1, levelItems.length);
-      await Future.wait([for (var i = 0; i < workerCount; i++) worker()]);
+      final pool = ConcurrencyPool(
+        maxConcurrent: metaConcurrency.clamp(1, levelItems.length),
+      );
+      await Future.wait(
+        levelItems.map(
+          (item) => pool.submit(() async {
+            try {
+              levelMetas[item.doctype] = await metaFetcher(item.doctype);
+            } catch (e, st) {
+              debugPrint(
+                'ClosureBuilder.metaFetcher(${item.doctype}) failed — $e\n$st',
+              );
+              warnings.add('Missing meta for "${item.doctype}": $e');
+            }
+          }),
+        ),
+      );
 
       // Apply the level's results sequentially — DepGraph maps and
       // child enqueueing don't tolerate concurrent mutation.

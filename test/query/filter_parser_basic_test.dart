@@ -7,13 +7,16 @@ import 'package:frappe_mobile_sdk/src/query/filter_parser.dart';
 DocField f(String n, String t, {String? options}) =>
     DocField(fieldname: n, fieldtype: t, label: n, options: options);
 
-DocTypeMeta meta() => DocTypeMeta(name: 'Customer', fields: [
-      f('customer_name', 'Data'),
-      f('age', 'Int'),
-      f('is_active', 'Check'),
-      f('balance', 'Float'),
-      f('territory', 'Link', options: 'Territory'),
-    ]);
+DocTypeMeta meta() => DocTypeMeta(
+  name: 'Customer',
+  fields: [
+    f('customer_name', 'Data'),
+    f('age', 'Int'),
+    f('is_active', 'Check'),
+    f('balance', 'Float'),
+    f('territory', 'Link', options: 'Territory'),
+  ],
+);
 
 void main() {
   test('no filters → just LIMIT + OFFSET', () {
@@ -144,6 +147,46 @@ void main() {
         tableName: 'docs__customer',
         filters: const [],
         orderBy: 'ghost_col',
+        page: 0,
+        pageSize: 10,
+      ),
+      throwsA(isA<FilterParseError>()),
+    );
+  });
+
+  test('order_by multi-column comma-separated', () {
+    final pq = FilterParser.toSql(
+      meta: meta(),
+      tableName: 'docs__customer',
+      filters: const [],
+      orderBy: 'modified asc, customer_name DESC',
+      page: 0,
+      pageSize: 10,
+    );
+    expect(pq.sql, contains('ORDER BY modified ASC, customer_name DESC'));
+  });
+
+  test('order_by multi-column rejects unknown column in any segment', () {
+    expect(
+      () => FilterParser.toSql(
+        meta: meta(),
+        tableName: 'docs__customer',
+        filters: const [],
+        orderBy: 'customer_name ASC, ghost_col DESC',
+        page: 0,
+        pageSize: 10,
+      ),
+      throwsA(isA<FilterParseError>()),
+    );
+  });
+
+  test('order_by multi-column rejects bad direction in any segment', () {
+    expect(
+      () => FilterParser.toSql(
+        meta: meta(),
+        tableName: 'docs__customer',
+        filters: const [],
+        orderBy: 'customer_name ASC, modified SIDEWAYS',
         page: 0,
         pageSize: 10,
       ),

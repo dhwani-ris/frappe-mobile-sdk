@@ -2,6 +2,8 @@ import 'dart:convert';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:meta/meta.dart';
 import '../api/client.dart';
+import '../concurrency/concurrency_pool.dart';
+import '../concurrency/device_tier.dart';
 import '../concurrency/sync_mutex.dart';
 import '../database/app_database.dart';
 import '../models/doc_type_meta.dart';
@@ -87,7 +89,9 @@ class SyncService {
   /// callers wanting that signal should subscribe to
   /// `SyncStateNotifier` (exposed via `sdk.sync.state$`).
   Future<SyncResult> pushSync({String? doctype}) async {
-    if (!offlineMode.enabled) return SyncResult.empty();
+    if (!offlineMode.enabled) {
+      return SyncResult.empty(status: SyncStatus.offlineModeDisabled);
+    }
     bool online = false;
     try {
       online = await isOnline();
@@ -99,7 +103,14 @@ class SyncService {
       print('SyncService.pushSync: isOnline() threw — $e\n$st');
     }
     if (!online) {
-      return SyncResult(0, 0, 0, 'No internet connection', errors: []);
+      return SyncResult(
+        0,
+        0,
+        0,
+        'No internet connection',
+        errors: const [],
+        status: SyncStatus.noConnectivity,
+      );
     }
     final runner = _pushRunner;
     if (runner == null) {
@@ -114,7 +125,14 @@ class SyncService {
       return true;
     });
     if (result == null) {
-      return SyncResult(0, 0, 0, 'Sync already in progress', errors: []);
+      return SyncResult(
+        0,
+        0,
+        0,
+        'Sync already in progress',
+        errors: const [],
+        status: SyncStatus.busy,
+      );
     }
     return SyncResult(0, 0, 0, null, errors: const []);
   }
@@ -158,15 +176,31 @@ class SyncService {
 
   /// Pull updates from server. Public entrypoint — guarded by [_syncMutex].
   Future<SyncResult> pullSync({required String doctype, int? since}) async {
-    if (!offlineMode.enabled) return SyncResult.empty();
+    if (!offlineMode.enabled) {
+      return SyncResult.empty(status: SyncStatus.offlineModeDisabled);
+    }
     if (!await isOnline()) {
-      return SyncResult(0, 0, 0, 'No internet connection', errors: []);
+      return SyncResult(
+        0,
+        0,
+        0,
+        'No internet connection',
+        errors: const [],
+        status: SyncStatus.noConnectivity,
+      );
     }
     final result = await _syncMutex.tryProtect(
       () => _pullOneInternal(doctype: doctype, since: since),
     );
     return result ??
-        SyncResult(0, 0, 0, 'Sync already in progress', errors: []);
+        SyncResult(
+          0,
+          0,
+          0,
+          'Sync already in progress',
+          errors: const [],
+          status: SyncStatus.busy,
+        );
   }
 
   /// Pull-with-wait variant — used by background refreshers (Link
@@ -179,9 +213,18 @@ class SyncService {
     required String doctype,
     int? since,
   }) async {
-    if (!offlineMode.enabled) return SyncResult.empty();
+    if (!offlineMode.enabled) {
+      return SyncResult.empty(status: SyncStatus.offlineModeDisabled);
+    }
     if (!await isOnline()) {
-      return SyncResult(0, 0, 0, 'No internet connection', errors: []);
+      return SyncResult(
+        0,
+        0,
+        0,
+        'No internet connection',
+        errors: const [],
+        status: SyncStatus.noConnectivity,
+      );
     }
     return _syncMutex.protect(
       () => _pullOneInternal(doctype: doctype, since: since),
@@ -194,63 +237,82 @@ class SyncService {
   /// pool instead of awaiting them one at a time. The sync mutex is
   /// held once for the entire batch; individual doctype failures do
   /// not abort the rest.
+  ///
+  /// [concurrency] defaults to [DeviceTier.detect] (2/4/8) when omitted,
+  /// matching the size of the SDK's `_pullPool`. Pass an explicit value
+  /// only for tests or to artificially throttle.
   Future<Map<String, SyncResult>> pullSyncMany({
     required List<String> doctypes,
-    int concurrency = 4,
+    int? concurrency,
   }) async {
     if (doctypes.isEmpty) return const {};
     if (!offlineMode.enabled) {
-      return {for (final dt in doctypes) dt: SyncResult.empty()};
+      return {
+        for (final dt in doctypes)
+          dt: SyncResult.empty(status: SyncStatus.offlineModeDisabled),
+      };
     }
     if (!await isOnline()) {
       return {
         for (final dt in doctypes)
-          dt: SyncResult(0, 0, 0, 'No internet connection', errors: []),
+          dt: SyncResult(
+            0,
+            0,
+            0,
+            'No internet connection',
+            errors: const [],
+            status: SyncStatus.noConnectivity,
+          ),
       };
     }
     final results = await _syncMutex.tryProtect(() async {
       final out = <String, SyncResult>{};
-      int next = 0;
-
-      Future<void> worker() async {
-        while (true) {
-          final myIdx = next++;
-          if (myIdx >= doctypes.length) return;
-          final dt = doctypes[myIdx];
-          try {
-            out[dt] = await _pullOneInternal(doctype: dt);
-          } catch (e, st) {
-            // ignore: avoid_print
-            print('SyncService.pullSyncMany($dt) failed — $e\n$st');
-            out[dt] = SyncResult(
-              0,
-              0,
-              0,
-              e.toString(),
-              errors: [
-                SyncError(
-                  documentId: '',
-                  doctype: dt,
-                  operation: 'pull',
-                  errorMessage: e.toString(),
-                ),
-              ],
-            );
-          }
-        }
-      }
-
-      final workerCount = concurrency.clamp(
-        1,
-        doctypes.isEmpty ? 1 : doctypes.length,
+      final effectiveConcurrency = concurrency ?? await DeviceTier.detect();
+      final pool = ConcurrencyPool(
+        maxConcurrent: effectiveConcurrency.clamp(
+          1,
+          doctypes.isEmpty ? 1 : doctypes.length,
+        ),
       );
-      await Future.wait([for (var i = 0; i < workerCount; i++) worker()]);
+      await Future.wait(
+        doctypes.map(
+          (dt) => pool.submit<void>(() async {
+            try {
+              out[dt] = await _pullOneInternal(doctype: dt);
+            } catch (e, st) {
+              // ignore: avoid_print
+              print('SyncService.pullSyncMany($dt) failed — $e\n$st');
+              out[dt] = SyncResult(
+                0,
+                0,
+                0,
+                e.toString(),
+                errors: [
+                  SyncError(
+                    documentId: '',
+                    doctype: dt,
+                    operation: 'pull',
+                    errorMessage: e.toString(),
+                  ),
+                ],
+              );
+            }
+          }),
+        ),
+      );
       return out;
     });
     return results ??
         {
           for (final dt in doctypes)
-            dt: SyncResult(0, 0, 0, 'Sync already in progress', errors: []),
+            dt: SyncResult(
+              0,
+              0,
+              0,
+              'Sync already in progress',
+              errors: const [],
+              status: SyncStatus.busy,
+            ),
         };
   }
 
@@ -594,6 +656,30 @@ class SyncService {
   }
 }
 
+/// Why a [SyncResult] is what it is — lets the caller distinguish
+/// "offline mode is off, nothing tried" from "tried, nothing to do" from
+/// "couldn't try because offline / busy". Defaults to [ran] for legacy
+/// callers that constructed `SyncResult(...)` positionally.
+enum SyncStatus {
+  /// Offline mode is disabled at the SDK level; the call short-circuited
+  /// before any work. `success/failed/total` are zero by construction.
+  offlineModeDisabled,
+
+  /// Offline mode is enabled but the device has no connectivity right
+  /// now. `error` is non-null with the connectivity message.
+  noConnectivity,
+
+  /// Another sync was already running and the mutex rejected this call.
+  /// `error` is non-null with "Sync already in progress".
+  busy,
+
+  /// The sync executed. `success/failed/total` carry actual row counts;
+  /// when `failed > 0`, `errors` lists per-row details. Note that a
+  /// successful call with no dirty rows ALSO reports `ran` — `success=0`
+  /// here means "tried, nothing to do".
+  ran,
+}
+
 /// Result of sync operation
 class SyncResult {
   final int success;
@@ -601,6 +687,7 @@ class SyncResult {
   final int total;
   final String? error;
   final List<SyncError> errors;
+  final SyncStatus status;
 
   SyncResult(
     this.success,
@@ -608,11 +695,17 @@ class SyncResult {
     this.total,
     this.error, {
     List<SyncError>? errors,
+    this.status = SyncStatus.ran,
   }) : errors = errors ?? [];
 
-  /// Returns a no-op result used by short-circuited public methods
-  /// when offline mode is disabled.
-  factory SyncResult.empty() => SyncResult(0, 0, 0, null);
+  /// Returns a no-op result. [status] defaults to [SyncStatus.ran] for
+  /// "ran with nothing to do" callsites; pass
+  /// [SyncStatus.offlineModeDisabled] when the SDK is in online-only mode
+  /// and the call short-circuited, [SyncStatus.busy] when another sync
+  /// holds the mutex, etc. Lets callers tell apart "didn't try" from
+  /// "tried, no work".
+  factory SyncResult.empty({SyncStatus status = SyncStatus.ran}) =>
+      SyncResult(0, 0, 0, null, status: status);
 }
 
 /// Individual sync error details

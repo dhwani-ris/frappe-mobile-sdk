@@ -24,6 +24,19 @@ class MetaService {
   final Map<String, DocTypeMeta> _metaCache = {};
   final List<String> _metaCacheOrder = [];
 
+  /// Fires whenever a per-doctype meta-sync inside
+  /// [checkAndSyncDoctypes] fails. Set by [FrappeSDK] once the
+  /// [SyncStateNotifier] is built so failures surface on
+  /// `SyncState.failedMetaSyncs` instead of being lost to `debugPrint`.
+  /// Optional — when null, failures are still logged.
+  void Function(String doctype, Object error)? onMetaSyncFailure;
+
+  /// Fires when a previously-failed doctype's meta is successfully
+  /// re-fetched, so the SDK can clear the doctype from
+  /// `SyncState.failedMetaSyncs`. Optional and paired with
+  /// [onMetaSyncFailure].
+  void Function(String doctype)? onMetaSyncRecovered;
+
   MetaService(this._client, this._database);
 
   void _putInCache(String doctype, DocTypeMeta meta) {
@@ -229,10 +242,14 @@ class MetaService {
         for (final doctype in doctypesToSync) {
           try {
             await fetchAndStoreInDb(doctype);
+            // Successful re-fetch — clear any prior failure from the
+            // observable surface so the counter goes back down.
+            onMetaSyncRecovered?.call(doctype);
           } catch (e, st) {
             debugPrint(
               'MetaService.checkAndSyncDoctypes($doctype) failed — $e\n$st',
             );
+            onMetaSyncFailure?.call(doctype, e);
             continue;
           }
         }

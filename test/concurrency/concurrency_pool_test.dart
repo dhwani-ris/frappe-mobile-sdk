@@ -8,12 +8,14 @@ void main() {
     var peak = 0;
     final futures = <Future<void>>[];
     for (var i = 0; i < 10; i++) {
-      futures.add(pool.submit<void>(() async {
-        inFlight++;
-        if (inFlight > peak) peak = inFlight;
-        await Future<void>.delayed(const Duration(milliseconds: 20));
-        inFlight--;
-      }));
+      futures.add(
+        pool.submit<void>(() async {
+          inFlight++;
+          if (inFlight > peak) peak = inFlight;
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+          inFlight--;
+        }),
+      );
     }
     await Future.wait(futures);
     expect(peak, lessThanOrEqualTo(2));
@@ -40,12 +42,14 @@ void main() {
     var peak = 0;
     final futures = <Future<void>>[];
     for (var i = 0; i < 10; i++) {
-      futures.add(pool.submit<void>(() async {
-        inFlight++;
-        if (inFlight > peak) peak = inFlight;
-        await Future<void>.delayed(const Duration(milliseconds: 10));
-        inFlight--;
-      }));
+      futures.add(
+        pool.submit<void>(() async {
+          inFlight++;
+          if (inFlight > peak) peak = inFlight;
+          await Future<void>.delayed(const Duration(milliseconds: 10));
+          inFlight--;
+        }),
+      );
     }
     await Future.wait(futures);
     expect(peak, lessThanOrEqualTo(4));
@@ -69,6 +73,16 @@ void main() {
     await Future.wait(futs);
     expect(seen, [1, 2, 3]);
   });
+
+  test(
+    'maxConcurrent getter reflects initial cap and updates after resize',
+    () {
+      final pool = ConcurrencyPool(maxConcurrent: 3);
+      expect(pool.maxConcurrent, 3);
+      pool.resize(6);
+      expect(pool.maxConcurrent, 6);
+    },
+  );
 
   test('error in one task does not poison the pool', () async {
     final pool = ConcurrencyPool(maxConcurrent: 2);

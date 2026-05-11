@@ -22,6 +22,35 @@ void main() {
     await controller.close();
   });
 
+  test(
+    'dedupes duplicate states — same-as-current emits do not propagate',
+    () async {
+      final controller = StreamController<bool>();
+      final w = ConnectivityWatcher.fromStream(
+        initial: false,
+        stream: controller.stream,
+      );
+      final seen = <bool>[];
+      final sub = w.onChange.listen(seen.add);
+      // Initial state is false; pushing false again must NOT emit.
+      controller.add(false);
+      controller.add(false);
+      await Future<void>.delayed(Duration.zero);
+      expect(seen, isEmpty);
+      // Real edge → emits.
+      controller.add(true);
+      await Future<void>.delayed(Duration.zero);
+      expect(seen, [true]);
+      // Same-as-current duplicates after the edge.
+      controller.add(true);
+      controller.add(true);
+      await Future<void>.delayed(Duration.zero);
+      expect(seen, [true]);
+      await sub.cancel();
+      await controller.close();
+    },
+  );
+
   test('addOnRestoreCallback fires on false→true transition', () async {
     final c = StreamController<bool>();
     final w = ConnectivityWatcher.fromStream(initial: false, stream: c.stream);

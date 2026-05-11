@@ -256,17 +256,34 @@ class FilterParser {
     return map;
   }
 
+  /// Accepts a single column (`'modified'`), a column + direction
+  /// (`'modified DESC'`), or a comma-separated list of either
+  /// (`'modified DESC, name ASC'`). Every column is whitelisted against
+  /// [colTypes]; the only legal directions are `ASC` / `DESC`. Returns the
+  /// normalized clause body (caller prefixes `ORDER BY `).
   static String _validateOrderBy(String orderBy, Map<String, String> colTypes) {
-    final parts = orderBy.trim().split(RegExp(r'\s+'));
-    final col = parts[0];
-    if (!colTypes.containsKey(col)) {
-      throw FilterParseError('Unknown ORDER BY column: $col');
+    final segments = orderBy.split(',');
+    final validated = <String>[];
+    for (final segment in segments) {
+      final trimmed = segment.trim();
+      if (trimmed.isEmpty) {
+        throw FilterParseError('Empty ORDER BY segment in: "$orderBy"');
+      }
+      final parts = trimmed.split(RegExp(r'\s+'));
+      if (parts.length > 2) {
+        throw FilterParseError('Malformed ORDER BY segment: "$trimmed"');
+      }
+      final col = parts[0];
+      if (!colTypes.containsKey(col)) {
+        throw FilterParseError('Unknown ORDER BY column: $col');
+      }
+      final dir = parts.length > 1 ? parts[1].toUpperCase() : 'ASC';
+      if (dir != 'ASC' && dir != 'DESC') {
+        throw FilterParseError('ORDER BY direction must be ASC or DESC: $dir');
+      }
+      validated.add('$col $dir');
     }
-    final dir = parts.length > 1 ? parts[1].toUpperCase() : 'ASC';
-    if (dir != 'ASC' && dir != 'DESC') {
-      throw FilterParseError('ORDER BY direction must be ASC or DESC: $dir');
-    }
-    return '$col $dir';
+    return validated.join(', ');
   }
 
   static Object? _normalizeBetweenBound(

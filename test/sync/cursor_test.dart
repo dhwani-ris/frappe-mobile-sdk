@@ -52,6 +52,21 @@ void main() {
     expect(done.name, 'n');
   });
 
+  test('equality: two cursors with same values are equal', () {
+    const a = Cursor(modified: '2026-01-01', name: 'SO-1', complete: true);
+    const b = Cursor(modified: '2026-01-01', name: 'SO-1', complete: true);
+    const c = Cursor(modified: '2026-01-01', name: 'SO-2', complete: true);
+    expect(a, equals(b));
+    expect(a, isNot(equals(c)));
+    expect(Cursor.empty, equals(const Cursor()));
+  });
+
+  test('hashCode: equal cursors have same hashCode', () {
+    const a = Cursor(modified: '2026-01-01', name: 'X', complete: false);
+    const b = Cursor(modified: '2026-01-01', name: 'X', complete: false);
+    expect(a.hashCode, b.hashCode);
+  });
+
   test('round-trip preserves complete=true through JSON', () {
     const c = Cursor(modified: '2024-01-01', name: 'X', complete: true);
     final json = jsonEncode(c.toJson());

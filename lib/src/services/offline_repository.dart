@@ -460,12 +460,15 @@ class OfflineRepository {
       }
     }
 
+    final existingServerName = existing?['server_name'] as String?;
+
     await _database.rawDatabase.transaction((txn) async {
       await _localWriter.writeParentInTxn(
         txn: txn,
         parentDoctype: doctype,
         mobileUuid: mobileUuid,
         data: dataWithUuid,
+        serverName: existingServerName,
         syncOp: op.wireName,
         pushBasePayload: pushBase,
         parentMeta: parentMeta,

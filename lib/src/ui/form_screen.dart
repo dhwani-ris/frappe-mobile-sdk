@@ -127,7 +127,6 @@ class FormScreen extends StatefulWidget {
 
 class _FormScreenState extends State<FormScreen> with WidgetsBindingObserver {
   bool _isSaving = false;
-  bool _isSyncing = false;
   String? _errorMessage;
   void Function()? _triggerSubmit;
 
@@ -144,7 +143,19 @@ class _FormScreenState extends State<FormScreen> with WidgetsBindingObserver {
 
   /// Baseline form data for dirty check. When current form data differs, show Save.
   Map<String, dynamic>? _baselineFormData;
-  bool _isFormDirty = false;
+
+  /// Drives the AppBar Save button visibility. Held in a [ValueNotifier]
+  /// (not in `setState`) because `_onFormDataChanged` fires on every
+  /// keystroke — using `setState` rebuilds the entire FormBuilder tree
+  /// per keystroke, which is a non-trivial cost on long forms. The
+  /// notifier scopes the rebuild to a single [ValueListenableBuilder] in
+  /// the AppBar `actions` list.
+  final ValueNotifier<bool> _isFormDirty = ValueNotifier<bool>(false);
+
+  /// Drives the AppBar push-to-server spinner. Held in a [ValueNotifier]
+  /// for the same reason as [_isFormDirty]: a long-running push must not
+  /// keep the whole form rebuilding while the spinner spins.
+  final ValueNotifier<bool> _isSyncing = ValueNotifier<bool>(false);
 
   Map<String, dynamic> get _currentDocData =>
       _workflowUpdatedDocData ??
@@ -191,9 +202,7 @@ class _FormScreenState extends State<FormScreen> with WidgetsBindingObserver {
   void _onFormDataChanged(Map<String, dynamic> currentData) {
     final baseline = _baselineFormData ?? _currentDocData;
     final dirty = !_formDataEquals(currentData, baseline, widget.meta);
-    if (mounted && dirty != _isFormDirty) {
-      setState(() => _isFormDirty = dirty);
-    }
+    if (mounted) _isFormDirty.value = dirty;
   }
 
   @override
@@ -209,6 +218,8 @@ class _FormScreenState extends State<FormScreen> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _isFormDirty.dispose();
+    _isSyncing.dispose();
     super.dispose();
   }
 
@@ -232,7 +243,7 @@ class _FormScreenState extends State<FormScreen> with WidgetsBindingObserver {
           ? WorkflowService(widget.api!)
           : null;
       _baselineFormData = Map<String, dynamic>.from(_currentDocData);
-      _isFormDirty = false;
+      _isFormDirty.value = false;
       _loadWorkflowTransitions();
       _loadSyncErrors();
     }
@@ -278,7 +289,7 @@ class _FormScreenState extends State<FormScreen> with WidgetsBindingObserver {
   Future<void> _handlePushRecord() async {
     final svc = widget.syncService;
     if (svc == null) return;
-    setState(() => _isSyncing = true);
+    _isSyncing.value = true;
     try {
       await svc.pushSync(doctype: widget.meta.name);
     } catch (e, st) {
@@ -294,7 +305,7 @@ class _FormScreenState extends State<FormScreen> with WidgetsBindingObserver {
       }
       return;
     } finally {
-      if (mounted) setState(() => _isSyncing = false);
+      if (mounted) _isSyncing.value = false;
     }
     await _loadSyncErrors();
     if (!mounted) return;
@@ -353,8 +364,8 @@ class _FormScreenState extends State<FormScreen> with WidgetsBindingObserver {
         setState(() {
           _workflowUpdatedDocData = updated;
           _baselineFormData = Map<String, dynamic>.from(updated);
-          _isFormDirty = false;
         });
+        _isFormDirty.value = false;
         await _loadWorkflowTransitions();
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -686,8 +697,8 @@ class _FormScreenState extends State<FormScreen> with WidgetsBindingObserver {
         if (mounted) {
           setState(() {
             _baselineFormData = savedData!;
-            _isFormDirty = false;
           });
+          _isFormDirty.value = false;
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
               content: Text('Saved successfully'),
@@ -728,8 +739,8 @@ class _FormScreenState extends State<FormScreen> with WidgetsBindingObserver {
               ..addAll(payload);
         setState(() {
           _baselineFormData = savedData;
-          _isFormDirty = false;
         });
+        _isFormDirty.value = false;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Document saved successfully'),
@@ -831,7 +842,13 @@ class _FormScreenState extends State<FormScreen> with WidgetsBindingObserver {
         widget.document != null &&
         !_isSubmitted;
 
-    final showSave = allowSave && (_isFormDirty || widget.document == null);
+    // `_isFormDirty` and `_isSyncing` are ValueNotifiers, not setState
+    // fields — so the heavy FormBuilder tree below does NOT rebuild on
+    // every keystroke or while the push spinner is spinning. Only the
+    // ValueListenableBuilder closures here re-run. Remaining setState
+    // sites in this file (workflow loading, sync-error rows banner,
+    // saving spinner) still cause full rebuilds and are tracked as
+    // follow-up isolation work.
 
     final effectiveReadOnly = _isSaving || widget.readOnly || _isSubmitted;
 
@@ -844,34 +861,45 @@ class _FormScreenState extends State<FormScreen> with WidgetsBindingObserver {
               : (widget.meta.label ?? widget.meta.name),
         ),
         actions: [
-          if (showSave)
-            TextButton.icon(
-              key: const Key('form_save_button'),
-              style: widget.screenStyle?.saveButtonStyle,
-              onPressed: _isSaving ? null : () => _triggerSubmit?.call(),
-              icon: _isSaving
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.save),
-              label: const Text('Save'),
-            ),
+          ValueListenableBuilder<bool>(
+            valueListenable: _isFormDirty,
+            builder: (context, dirty, _) {
+              final showSave = allowSave && (dirty || widget.document == null);
+              if (!showSave) return const SizedBox.shrink();
+              return TextButton.icon(
+                key: const Key('form_save_button'),
+                style: widget.screenStyle?.saveButtonStyle,
+                onPressed: _isSaving ? null : () => _triggerSubmit?.call(),
+                icon: _isSaving
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.save),
+                label: const Text('Save'),
+              );
+            },
+          ),
           if (widget.repository.offlineMode.enabled &&
               widget.syncService != null &&
               !widget.readOnly)
-            IconButton(
-              key: const Key('form_push_button'),
-              icon: _isSyncing
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.cloud_upload),
-              onPressed: _isSyncing || _isSaving ? null : _handlePushRecord,
-              tooltip: 'Push to server',
+            ValueListenableBuilder<bool>(
+              valueListenable: _isSyncing,
+              builder: (context, syncing, _) {
+                return IconButton(
+                  key: const Key('form_push_button'),
+                  icon: syncing
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.cloud_upload),
+                  onPressed: syncing || _isSaving ? null : _handlePushRecord,
+                  tooltip: 'Push to server',
+                );
+              },
             ),
           if (allowDelete)
             IconButton(

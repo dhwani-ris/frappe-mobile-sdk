@@ -3,11 +3,11 @@
 
 import 'dart:async';
 
-import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart';
 
 import '../api/client.dart';
 import '../concurrency/concurrency_pool.dart';
+import '../concurrency/connectivity_watcher.dart';
 import '../database/app_database.dart';
 import '../database/daos/doctype_meta_dao.dart';
 import '../database/daos/sdk_meta_dao.dart';
@@ -82,11 +82,24 @@ class FrappeSDK {
   /// once the drain settles.
   Future<void>? _pendingDrain;
 
-  /// Cached synchronous online state — updated lazily via [_defaultIsOnline].
-  /// Conservative default (false) means the resolver starts in offline-only
-  /// mode and switches to background-refresh mode once the first connectivity
-  /// check resolves.
+  /// Cached synchronous online state — seeded from
+  /// [ConnectivityWatcher.production] at init and kept fresh by the
+  /// connectivity subscription so mid-session network flips reach the
+  /// resolver without a manual probe. Conservative default (false) means
+  /// the resolver starts in offline-only mode and switches to
+  /// background-refresh mode once the first connectivity check resolves.
   bool _cachedOnline = false;
+
+  /// Watcher + subscription that keep [_cachedOnline] in sync with the
+  /// platform connectivity stream. Both are set up in [initialize] and
+  /// torn down in [dispose].
+  ConnectivityWatcher? _connectivityWatcher;
+  StreamSubscription<bool>? _connectivitySub;
+
+  /// Install-stable `mobile_uuid` read once from secure storage at init
+  /// and reused by every push / link-option lambda. Avoids the secure-
+  /// storage round-trip per outbox dispatch.
+  String? _mobileUuid;
 
   /// Shared mutable holder for [OfflineMode]. Constructed once per session
   /// in [initialize] / [forTesting] and threaded into [OfflineRepository],
@@ -230,6 +243,11 @@ class FrappeSDK {
     // meta/sync/link-options calls always carry the Bearer token / API key.
     _client = _authService!.client;
 
+    // Read the install-stable mobile_uuid ONCE up front so the per-push
+    // and per-link-options lambdas below can return it without hitting
+    // secure storage again on every dispatch (L1).
+    _mobileUuid = await _authService!.getOrCreateMobileUuid();
+
     // Resolve session-bound offline mode BEFORE constructing services so
     // every service receives the correct mode through its constructor.
     final persistedMode = await SdkMetaDao(
@@ -285,19 +303,36 @@ class FrappeSDK {
     _pullEngine = pack.pullEngine;
     _syncController = pack.controller;
 
+    // Surface MetaService.checkAndSyncDoctypes failures on the observable
+    // SyncState instead of stranding them in `debugPrint` — UI can now
+    // expose a "meta failures: N" indicator and list affected doctypes.
+    _metaService!.onMetaSyncFailure = (doctype, error) {
+      _syncStateNotifier?.recordMetaSyncFailure(doctype, error.toString());
+    };
+    _metaService!.onMetaSyncRecovered = (doctype) {
+      _syncStateNotifier?.clearMetaSyncFailure(doctype);
+    };
+
     _syncService = SyncService(
       _client!,
       _repository!,
       _database!,
-      getMobileUuid: () => _authService!.getOrCreateMobileUuid(),
+      getMobileUuid: _resolveMobileUuid,
       offlineModeNotifier: _modeNotifier!,
       pushRunner: () => _pushEngine!.runOnce(),
     );
     // Build UnifiedResolver — single read path for all offline queries.
-    // Probe connectivity once here; downstream callers (resolver,
-    // _initialMetaAndDataSync) read `_cachedOnline` instead of probing
-    // again, keeping launch to a single platform-channel round-trip.
-    _cachedOnline = await _defaultIsOnline();
+    // Probe connectivity once here AND subscribe to the platform
+    // connectivity stream so mid-session network flips refresh
+    // `_cachedOnline` immediately. Downstream callers (resolver,
+    // `_initialMetaAndDataSync`) read `_cachedOnline` instead of probing
+    // again, keeping the hot path to a single field read.
+    final watcher = await ConnectivityWatcher.production();
+    _connectivityWatcher = watcher;
+    _cachedOnline = watcher.isOnline;
+    _connectivitySub = watcher.onChange.listen((online) {
+      _cachedOnline = online;
+    });
     final syncSvc = _syncService!;
     final resolver = UnifiedResolver(
       db: rawDb,
@@ -338,7 +373,7 @@ class FrappeSDK {
         _client!,
         _repository!,
         _database!,
-        getMobileUuid: () => _authService!.getOrCreateMobileUuid(),
+        getMobileUuid: _resolveMobileUuid,
         offlineMode: const OfflineMode(enabled: true, isPersisted: true),
         // The drain SyncService delegates to the same PushEngine instance
         // the SDK owns; the drain runs PushEngine.runOnce() to drain the
@@ -399,13 +434,6 @@ class FrappeSDK {
         await _hasResidualOfflineState()) {
       await _offlineTransitionService!.runDrainAndWipe();
     }
-  }
-
-  Future<bool> _defaultIsOnline() async {
-    final result = await Connectivity().checkConnectivity();
-    return result.contains(ConnectivityResult.mobile) ||
-        result.contains(ConnectivityResult.wifi) ||
-        result.contains(ConnectivityResult.ethernet);
   }
 
   /// Resolves the session-bound offline mode from the persisted record.
@@ -744,10 +772,25 @@ class FrappeSDK {
   ({String email, String fullName})? get currentUser =>
       _authService?.currentUserInfo;
 
-  /// Stable UUID for this device/install. Use when creating docs from mobile so server can set mobile_uuid.
+  /// Stable UUID for this device/install. Use when creating docs from
+  /// mobile so server can set mobile_uuid. Memoised — secure storage is
+  /// read at most once per SDK instance (initial read happens during
+  /// [_doInitialize]).
   Future<String> getMobileUuid() async {
     if (!_initialized) await initialize();
-    return await _authService!.getOrCreateMobileUuid();
+    return _resolveMobileUuid();
+  }
+
+  /// Internal helper used by every per-push / per-link-options lambda.
+  /// Returns the cached uuid synchronously when available, falling back
+  /// to a live secure-storage read if init hasn't populated the cache yet
+  /// (e.g. in test seams that bypass [_doInitialize]).
+  Future<String> _resolveMobileUuid() async {
+    final cached = _mobileUuid;
+    if (cached != null && cached.isNotEmpty) return cached;
+    final fresh = await _authService!.getOrCreateMobileUuid();
+    _mobileUuid = fresh;
+    return fresh;
   }
 
   /// Prefetch metadata for mobile form doctypes into DB only (no in-memory cache).
@@ -1028,10 +1071,7 @@ class FrappeSDK {
       // (State, District, Block, Village, …) drain alongside entry points
       // and Link pickers see populated tables sooner. Per-doctype failures
       // surface in the result map; the batch keeps going.
-      final results = await _syncService!.pullSyncMany(
-        doctypes: pullable,
-        concurrency: 4,
-      );
+      final results = await _syncService!.pullSyncMany(doctypes: pullable);
       for (final entry in results.entries) {
         final err = entry.value.error;
         if (err != null && err.isNotEmpty) {
@@ -1063,10 +1103,7 @@ class FrappeSDK {
   /// re-enabled.
   Future<void> _runPullForDoctypesViaController(Set<String> doctypes) async {
     if (doctypes.isEmpty) return;
-    await _syncService?.pullSyncMany(
-      doctypes: doctypes.toList(),
-      concurrency: 4,
-    );
+    await _syncService?.pullSyncMany(doctypes: doctypes.toList());
   }
 
   @visibleForTesting
@@ -1117,10 +1154,7 @@ class FrappeSDK {
           );
         }
       }
-      final results = await _syncService!.pullSyncMany(
-        doctypes: pullable,
-        concurrency: 4,
-      );
+      final results = await _syncService!.pullSyncMany(doctypes: pullable);
       for (final entry in results.entries) {
         final err = entry.value.error;
         if (err != null && err.isNotEmpty) {
@@ -1148,14 +1182,64 @@ class FrappeSDK {
   ///   the same `Exception` they already raise when `!_initialized`
   ///   (e.g. `sessionUserService` getter at lines 367–371).
   /// - Idempotent — safe to call multiple times.
+  /// - [AppDatabase] is a per-app process singleton (via
+  ///   [AppDatabase.getInstance]); we drop our reference but never call
+  ///   `close()` on it because the next [initialize] would re-use the
+  ///   same underlying database handle.
   Future<void> dispose() async {
+    // Tear down owned services that hold StreamControllers / subscriptions
+    // first, so their listeners stop firing into nulled refs below.
+    await _connectivitySub?.cancel();
+    await _connectivityWatcher?.dispose();
     await _sessionUserService?.dispose();
-    _sessionUserService = null;
     await _offlineTransitionService?.dispose();
+    await _syncStateNotifier?.close();
+    await _syncCompleteController?.close();
+
+    // Wait for an in-flight upgrade-closure pull to settle so its tasks
+    // don't outlive the SDK and call through nulled refs. Per the no-empty-
+    // catch rule, surface unexpected failures rather than swallowing them.
+    final pending = _pendingDrain;
+    if (pending != null) {
+      try {
+        await pending;
+      } catch (e, st) {
+        debugPrint(
+          'FrappeSDK.dispose: pendingDrain still failing at teardown — '
+          '$e\n$st',
+        );
+      }
+    }
+
+    // Null every per-instance ref so the GC can reclaim the dependency
+    // graph (services, engines, pools, queries). AppDatabase is a process
+    // singleton; we drop the ref but the handle stays open for the next
+    // initialize().
+    _client = null;
+    _database = null;
+    _authService = null;
+    _metaService = null;
+    _repository = null;
+    _permissionService = null;
+    _translationService = null;
+    _syncService = null;
+    _resolver = null;
+    _linkOptionService = null;
+    _syncController = null;
+    _pushEngine = null;
+    _pullEngine = null;
+    _pushPool = null;
+    _pullPool = null;
+    _syncStateNotifier = null;
+    _sessionUserService = null;
     _offlineTransitionService = null;
     _modeNotifier = null;
-    await _syncCompleteController?.close();
     _syncCompleteController = null;
+    _pendingDrain = null;
+    _connectivitySub = null;
+    _connectivityWatcher = null;
+    _mobileUuid = null;
+
     _initialized = false;
   }
 }

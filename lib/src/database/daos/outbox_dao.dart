@@ -30,8 +30,7 @@ class OutboxDao {
     });
   }
 
-  /// Records a save against the outbox per the collapse matrix in
-  /// `docs/superpowers/specs/2026-05-07-legacy-documents-retirement-design.md`.
+  /// Records a save against the outbox.
   ///
   /// Only collapses against rows in `pending`, `failed`, `blocked`,
   /// `conflict` (the "collapsable" buckets). `in_flight` and `done` are

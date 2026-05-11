@@ -33,6 +33,11 @@ void main() {
     expect(result.failed, 0);
     expect(result.total, 0);
     expect(result.error, isNull);
+    expect(
+      result.status,
+      SyncStatus.offlineModeDisabled,
+      reason: 'L2: empty result must distinguish disabled vs zero-work',
+    );
     await db.close();
   });
 
@@ -55,6 +60,7 @@ void main() {
     final result = await sync.pullSync(doctype: 'Customer');
     expect(result.success, 0);
     expect(result.total, 0);
+    expect(result.status, SyncStatus.offlineModeDisabled);
     await db.close();
   });
 
@@ -84,10 +90,18 @@ void main() {
         expect(r.success, 0);
         expect(r.failed, 0);
         expect(r.total, 0);
+        expect(r.status, SyncStatus.offlineModeDisabled);
       }
       await db.close();
     },
   );
+
+  test('SyncResult.empty() default status is ran ("tried, nothing to do")', () {
+    final r = SyncResult.empty();
+    expect(r.status, SyncStatus.ran);
+    final r2 = SyncResult.empty(status: SyncStatus.offlineModeDisabled);
+    expect(r2.status, SyncStatus.offlineModeDisabled);
+  });
 
   test('pullSyncMany with empty doctype list returns empty map', () async {
     final db = await AppDatabase.inMemoryDatabase();

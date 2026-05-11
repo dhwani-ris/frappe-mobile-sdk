@@ -120,6 +120,58 @@ void main() {
     expect(out['reference_name'], 'CUST-9');
   });
 
+  test(
+    'Table field without childMeta passes value through untouched',
+    () async {
+      final meta = DocTypeMeta(
+        name: 'Order',
+        fields: [f('items', 'Table', options: 'Order Item')],
+      );
+      final payload = <String, Object?>{
+        'items': [
+          {'item_name': 'X'},
+        ],
+      };
+      // No childMetasByFieldname entry for 'items' → falls through.
+      final out = await UuidRewriter.rewrite(
+        meta: meta,
+        payload: payload,
+        resolveServerName: (_, _) async => fail('should not resolve'),
+      );
+      expect(out['items'], payload['items']);
+    },
+  );
+
+  test('Dynamic Link with null sibling field value throws BlockedByUpstream '
+      'with target "*Dynamic*"', () async {
+    final meta = DocTypeMeta(
+      name: 'Comment',
+      fields: [
+        f('reference_name', 'Dynamic Link', options: 'reference_doctype'),
+      ],
+    );
+    // reference_doctype is absent in the payload → sibling lookup returns null.
+    final payload = <String, Object?>{
+      'reference_name': 'u-some-uuid',
+      'reference_name__is_local': 1,
+      // 'reference_doctype' intentionally omitted
+    };
+    await expectLater(
+      UuidRewriter.rewrite(
+        meta: meta,
+        payload: payload,
+        resolveServerName: (_, _) async => fail('should not resolve'),
+      ),
+      throwsA(
+        isA<BlockedByUpstream>().having(
+          (e) => e.targetDoctype,
+          'targetDoctype',
+          '*Dynamic*',
+        ),
+      ),
+    );
+  });
+
   test('non-local Link values pass through untouched', () async {
     final meta = DocTypeMeta(
       name: 'SO',

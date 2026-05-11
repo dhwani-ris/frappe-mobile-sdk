@@ -53,6 +53,13 @@ class ConnectivityWatcher {
       _onRestoreCallbacks.add(cb);
 
   void _onEvent(bool nextOnline) {
+    // connectivity_plus emits duplicate events on some platforms (e.g.
+    // multiple `wifi` events when the OS samples Wi-Fi state). Drop them
+    // here so subscribers and `_onRestoreCallbacks` only fire on real
+    // edges — the SDK's `_cachedOnline` setter, the SyncStateNotifier,
+    // and pull-engine deferred-doctype draining all multiply expensive
+    // work on every emit.
+    if (nextOnline == _isOnline) return;
     final wasOffline = !_isOnline;
     _isOnline = nextOnline;
     _controller.add(nextOnline);

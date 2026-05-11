@@ -50,42 +50,74 @@ class SyncErrorsScreen extends StatelessWidget {
             ),
         ],
       ),
-      body: ListView(
-        children: byDoctype.entries.map((e) {
-          return ExpansionTile(
-            initiallyExpanded: true,
-            title: Text('${e.key} (${e.value.length})'),
-            children: e.value.map((r) {
-              return ListTile(
-                title: Text(r.mobileUuid),
-                subtitle: Text(
-                  '${r.errorCode?.name ?? ""} · ${r.errorMessage ?? ""}',
-                ),
-                trailing: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    OutlinedButton(
-                      onPressed:
-                          retryAllRunning ? null : () => onRetry(r.id),
-                      child: const Text('Retry'),
-                    ),
-                    const SizedBox(width: 4),
-                    IconButton(
-                      icon: const Icon(Icons.info_outline),
-                      tooltip: 'View error',
-                      onPressed: () => onViewError(r),
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.open_in_new),
-                      tooltip: 'Open',
-                      onPressed: () => onOpen(r),
-                    ),
-                  ],
-                ),
-              );
-            }).toList(),
-          );
-        }).toList(),
+      body: rows.isEmpty
+          ? _buildEmptyState(context)
+          : ListView(
+              children: byDoctype.entries.map((e) {
+                return ExpansionTile(
+                  initiallyExpanded: true,
+                  title: Text('${e.key} (${e.value.length})'),
+                  children: e.value.map((r) {
+                    return ListTile(
+                      title: Text(r.mobileUuid),
+                      subtitle: Text(
+                        '${r.errorCode?.name ?? ""} · ${r.errorMessage ?? ""}',
+                      ),
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          OutlinedButton(
+                            onPressed: retryAllRunning
+                                ? null
+                                : () => onRetry(r.id),
+                            child: const Text('Retry'),
+                          ),
+                          const SizedBox(width: 4),
+                          IconButton(
+                            icon: const Icon(Icons.info_outline),
+                            tooltip: 'View error',
+                            onPressed: () => onViewError(r),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.open_in_new),
+                            tooltip: 'Open',
+                            onPressed: () => onOpen(r),
+                          ),
+                        ],
+                      ),
+                    );
+                  }).toList(),
+                );
+              }).toList(),
+            ),
+    );
+  }
+
+  Widget _buildEmptyState(BuildContext context) {
+    final theme = Theme.of(context);
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.check_circle_outline,
+              size: 64,
+              color: theme.colorScheme.primary,
+            ),
+            const SizedBox(height: 16),
+            Text('No sync errors', style: theme.textTheme.titleMedium),
+            const SizedBox(height: 8),
+            Text(
+              'All queued changes have synced successfully.',
+              textAlign: TextAlign.center,
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

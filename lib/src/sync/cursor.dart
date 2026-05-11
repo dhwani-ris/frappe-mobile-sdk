@@ -45,4 +45,15 @@ class Cursor {
       complete: json['complete'] == true,
     );
   }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is Cursor &&
+          modified == other.modified &&
+          name == other.name &&
+          complete == other.complete;
+
+  @override
+  int get hashCode => Object.hash(modified, name, complete);
 }

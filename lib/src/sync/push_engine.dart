@@ -14,6 +14,7 @@ import '../models/doc_type_meta.dart';
 import '../models/meta_resolver.dart';
 import '../models/outbox_row.dart';
 import 'attachment_pipeline.dart';
+import 'child_table_info.dart';
 import 'idempotency_strategy.dart';
 import 'payload_assembler.dart';
 import 'push_error.dart';
@@ -543,8 +544,7 @@ class PushEngine {
       if (f.fieldtype == 'Table' || f.fieldtype == 'Table MultiSelect') {
         if (f.options == null || f.fieldname == null) continue;
         final childMeta = await childMetaResolver(f.options!);
-        final tableName = normalizeDoctypeTableName(f.options!);
-        map[f.fieldname!] = _ChildInfoImpl(f.options!, childMeta, tableName);
+        map[f.fieldname!] = ChildTableInfo(f.options!, childMeta);
       }
     }
     return map;
@@ -657,14 +657,4 @@ class PushEngine {
       out.add(v);
     }
   }
-}
-
-class _ChildInfoImpl implements ChildInfo {
-  @override
-  final String doctype;
-  @override
-  final DocTypeMeta meta;
-  @override
-  final String tableName;
-  _ChildInfoImpl(this.doctype, this.meta, this.tableName);
 }

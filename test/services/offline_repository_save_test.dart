@@ -304,6 +304,55 @@ void main() {
     },
   );
 
+  test(
+    'saveDocument on synced doc preserves server_name and routes as UPDATE',
+    () async {
+      // Create + simulate successful push.
+      final uuid = await repo.saveDocument(
+        doctype: 'Customer',
+        data: {'customer_name': 'Acme'},
+      );
+      await appDb.rawDatabase.update(
+        normalizeDoctypeTableName('Customer'),
+        {'sync_status': 'synced', 'server_name': 'CUST-001'},
+        where: 'mobile_uuid = ?',
+        whereArgs: [uuid],
+      );
+      await appDb.rawDatabase.delete('outbox');
+
+      // Offline edit of the now-synced doc.
+      await repo.saveDocument(
+        doctype: 'Customer',
+        data: {'mobile_uuid': uuid, 'customer_name': 'Acme Edited'},
+      );
+
+      final row = (await appDb.rawDatabase.query(
+        normalizeDoctypeTableName('Customer'),
+        where: 'mobile_uuid = ?',
+        whereArgs: [uuid],
+      )).first;
+
+      expect(
+        row['server_name'],
+        'CUST-001',
+        reason: 'server_name must survive an offline edit',
+      );
+      expect(
+        row['sync_status'],
+        'dirty',
+        reason: 'doc is locally modified and not yet pushed',
+      );
+      expect(row['sync_op'], 'UPDATE');
+
+      final outbox = await appDb.rawDatabase.query('outbox');
+      expect(
+        outbox.single['operation'],
+        'UPDATE',
+        reason: 'push engine must route as UPDATE, not INSERT',
+      );
+    },
+  );
+
   test('getDirtyDocuments returns empty in online mode', () async {
     // Save offline first so docs__ has rows...
     await repo.saveDocument(

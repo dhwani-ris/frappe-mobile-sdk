@@ -22,4 +22,20 @@ void main() {
       6,
     );
   });
+
+  test(
+    'detect() with override returns the override without reading platform',
+    () async {
+      expect(await DeviceTier.detect(override: 3), 3);
+    },
+  );
+
+  test(
+    'detect() without override returns a positive concurrency level',
+    () async {
+      // Platform.numberOfProcessors is available in the Dart VM test runner.
+      final result = await DeviceTier.detect();
+      expect(result, greaterThan(0));
+    },
+  );
 }

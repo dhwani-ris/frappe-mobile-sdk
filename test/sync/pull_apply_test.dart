@@ -50,6 +50,60 @@ void main() {
 
   tearDown(() async => db.close());
 
+  test('child Link fields receive __is_local=0 on pull', () async {
+    // Uses a child meta with a Link field to exercise the
+    // `childRow['${cn}__is_local'] = 0` branch inside applyPageInTxn.
+    final childWithLink = DocTypeMeta(
+      name: 'SO Line',
+      isTable: true,
+      fields: [
+        f('product', 'Link', options: 'Product'),
+        f('qty', 'Int'),
+      ],
+    );
+    for (final s in buildChildSchemaDDL(
+      childWithLink,
+      tableName: 'docs__so_line',
+    )) {
+      await db.execute(s);
+    }
+    final parentWithLink = DocTypeMeta(
+      name: 'SO With Link',
+      fields: [f('lines', 'Table', options: 'SO Line')],
+    );
+    for (final s in buildParentSchemaDDL(
+      parentWithLink,
+      tableName: 'docs__so_with_link',
+    )) {
+      await db.execute(s);
+    }
+    await PullApply.applyPage(
+      db: db,
+      parentMeta: parentWithLink,
+      parentTable: 'docs__so_with_link',
+      childMetasByFieldname: {
+        'lines': PullApplyChildInfo('SO Line', childWithLink),
+      },
+      rows: [
+        {
+          'name': 'SOL-1',
+          'modified': '2026-01-01',
+          'lines': [
+            {'product': 'PROD-001', 'qty': 5},
+          ],
+        },
+      ],
+    );
+    final c = await db.query('docs__so_line');
+    expect(c.length, 1);
+    expect(c.first['product'], 'PROD-001');
+    expect(
+      c.first['product__is_local'],
+      0,
+      reason: 'pulled Link fields must be marked as server values',
+    );
+  });
+
   test('UPSERT inserts new row with generated mobile_uuid', () async {
     await PullApply.applyPage(
       db: db,
@@ -128,6 +182,124 @@ void main() {
       reason: 'local dirty payload preserved',
     );
   });
+
+  // AC3 / C3: empirical pin for the child-wipe gate. When the parent's
+  // local sync_status is in (dirty|failed|conflict|blocked), the pull MUST
+  // NOT touch child rows — children inherit the parent's status and so
+  // share its "locally edited, do not overwrite" treatment.
+  test(
+    'dirty parent shields child rows from pull-apply wipe (C3 regression)',
+    () async {
+      // Local state: parent dirty, two locally-edited children.
+      await db.insert('docs__sales_order', {
+        'mobile_uuid': 'u1',
+        'server_name': 'SO-1',
+        'sync_status': 'dirty',
+        'local_modified': 1,
+        'modified': '2026-01-01 00:00:00',
+        'customer': 'LOCAL_EDIT',
+      });
+      await db.insert('docs__sales_order_item', {
+        'mobile_uuid': 'c-local-1',
+        'parent_uuid': 'u1',
+        'parent_doctype': 'Sales Order',
+        'parentfield': 'items',
+        'idx': 0,
+        'item_code': 'LOCAL-A',
+        'qty': 7,
+      });
+      await db.insert('docs__sales_order_item', {
+        'mobile_uuid': 'c-local-2',
+        'parent_uuid': 'u1',
+        'parent_doctype': 'Sales Order',
+        'parentfield': 'items',
+        'idx': 1,
+        'item_code': 'LOCAL-B',
+        'qty': 8,
+      });
+
+      // Server is ahead and disagrees on every cell.
+      await PullApply.applyPage(
+        db: db,
+        parentMeta: parentMeta,
+        parentTable: 'docs__sales_order',
+        childMetasByFieldname: {
+          'items': PullApplyChildInfo('Sales Order Item', childMeta),
+        },
+        rows: [
+          {
+            'name': 'SO-1',
+            'modified': '2026-02-01 00:00:00',
+            'customer': 'SERVER_NEW',
+            'items': [
+              {'item_code': 'SERVER-X', 'qty': 99},
+              {'item_code': 'SERVER-Y', 'qty': 88},
+              {'item_code': 'SERVER-Z', 'qty': 77},
+            ],
+          },
+        ],
+      );
+
+      // Parent flips to conflict; local payload preserved.
+      final p = await db.query('docs__sales_order');
+      expect(p.first['sync_status'], 'conflict');
+      expect(p.first['customer'], 'LOCAL_EDIT');
+
+      // Children are untouched — same uuids, same item_codes, same count.
+      final c = await db.query('docs__sales_order_item', orderBy: 'idx ASC');
+      expect(c.length, 2);
+      expect(c[0]['mobile_uuid'], 'c-local-1');
+      expect(c[0]['item_code'], 'LOCAL-A');
+      expect(c[0]['qty'], 7);
+      expect(c[1]['mobile_uuid'], 'c-local-2');
+      expect(c[1]['item_code'], 'LOCAL-B');
+      expect(c[1]['qty'], 8);
+    },
+  );
+
+  // Symmetric variant: same protection must hold for failed / blocked
+  // statuses. Parameterized inline so adding a new locally-dirty status
+  // value to `_locallyDirtyStatuses` is one line here.
+  for (final status in const ['failed', 'conflict', 'blocked']) {
+    test('$status parent also shields children from pull wipe', () async {
+      await db.insert('docs__sales_order', {
+        'mobile_uuid': 'u1',
+        'server_name': 'SO-1',
+        'sync_status': status,
+        'local_modified': 1,
+        'modified': '2026-01-01 00:00:00',
+      });
+      await db.insert('docs__sales_order_item', {
+        'mobile_uuid': 'c-local-1',
+        'parent_uuid': 'u1',
+        'parent_doctype': 'Sales Order',
+        'parentfield': 'items',
+        'idx': 0,
+        'item_code': 'LOCAL',
+        'qty': 1,
+      });
+      await PullApply.applyPage(
+        db: db,
+        parentMeta: parentMeta,
+        parentTable: 'docs__sales_order',
+        childMetasByFieldname: {
+          'items': PullApplyChildInfo('Sales Order Item', childMeta),
+        },
+        rows: [
+          {
+            'name': 'SO-1',
+            'modified': '2026-03-01 00:00:00',
+            'items': [
+              {'item_code': 'SERVER', 'qty': 100},
+            ],
+          },
+        ],
+      );
+      final c = await db.query('docs__sales_order_item');
+      expect(c.length, 1, reason: 'children survived pull when parent=$status');
+      expect(c.first['item_code'], 'LOCAL');
+    });
+  }
 
   test('children fully replaced on re-pull', () async {
     await db.insert('docs__sales_order', {

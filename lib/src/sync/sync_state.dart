@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart' show mapEquals;
+
 import 'cursor.dart';
 
 /// Per-doctype pull progress snapshot. All fields immutable.
@@ -21,6 +23,31 @@ class DoctypeSyncState {
     this.startedAt,
     this.completedAt,
   });
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is DoctypeSyncState &&
+          pulledCount == other.pulledCount &&
+          lastPageSize == other.lastPageSize &&
+          hasMore == other.hasMore &&
+          deferred == other.deferred &&
+          lastOkCursor == other.lastOkCursor &&
+          note == other.note &&
+          startedAt == other.startedAt &&
+          completedAt == other.completedAt;
+
+  @override
+  int get hashCode => Object.hash(
+    pulledCount,
+    lastPageSize,
+    hasMore,
+    deferred,
+    lastOkCursor,
+    note,
+    startedAt,
+    completedAt,
+  );
 }
 
 /// Counts of outbox/attachment rows by state. Used by status widgets and
@@ -43,6 +70,21 @@ class QueueSummary {
   });
 
   static const empty = QueueSummary();
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is QueueSummary &&
+          pending == other.pending &&
+          inFlight == other.inFlight &&
+          failed == other.failed &&
+          conflict == other.conflict &&
+          blocked == other.blocked &&
+          attachments == other.attachments;
+
+  @override
+  int get hashCode =>
+      Object.hash(pending, inFlight, failed, conflict, blocked, attachments);
 }
 
 /// Last-error summary surfaced to the UI (a single most-recent error;
@@ -57,6 +99,17 @@ class SyncErrorSummary {
     required this.message,
     required this.at,
   });
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SyncErrorSummary &&
+          code == other.code &&
+          message == other.message &&
+          at == other.at;
+
+  @override
+  int get hashCode => Object.hash(code, message, at);
 }
 
 /// Composable sync-state snapshot. The flags overlap freely (pull + push
@@ -74,6 +127,15 @@ class SyncState {
   final SyncErrorSummary? lastError;
   final DateTime? lastSyncAt;
 
+  /// Per-doctype meta-sync failures (`MetaService.checkAndSyncDoctypes`).
+  /// Map key is the failing doctype; value is the stringified error.
+  /// Entries are added by [SyncStateNotifier.recordMetaSyncFailure] and
+  /// cleared by [SyncStateNotifier.clearMetaSyncFailure] (typically on
+  /// the next successful meta fetch). `length` gives the requested
+  /// "counter" surface; `keys` lets the UI enumerate which doctypes are
+  /// affected.
+  final Map<String, String> failedMetaSyncs;
+
   const SyncState({
     required this.isOnline,
     required this.isInitialSync,
@@ -85,6 +147,7 @@ class SyncState {
     required this.queue,
     this.lastError,
     this.lastSyncAt,
+    this.failedMetaSyncs = const <String, String>{},
   });
 
   static const SyncState initial = SyncState(
@@ -109,6 +172,7 @@ class SyncState {
     QueueSummary? queue,
     SyncErrorSummary? lastError,
     DateTime? lastSyncAt,
+    Map<String, String>? failedMetaSyncs,
   }) {
     return SyncState(
       isOnline: isOnline ?? this.isOnline,
@@ -121,6 +185,7 @@ class SyncState {
       queue: queue ?? this.queue,
       lastError: lastError ?? this.lastError,
       lastSyncAt: lastSyncAt ?? this.lastSyncAt,
+      failedMetaSyncs: failedMetaSyncs ?? this.failedMetaSyncs,
     );
   }
 
@@ -129,4 +194,38 @@ class SyncState {
     next[doctype] = s;
     return copyWith(perDoctype: next);
   }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SyncState &&
+          isOnline == other.isOnline &&
+          isInitialSync == other.isInitialSync &&
+          isPulling == other.isPulling &&
+          isPushing == other.isPushing &&
+          isUploading == other.isUploading &&
+          isPaused == other.isPaused &&
+          mapEquals(perDoctype, other.perDoctype) &&
+          queue == other.queue &&
+          lastError == other.lastError &&
+          lastSyncAt == other.lastSyncAt &&
+          mapEquals(failedMetaSyncs, other.failedMetaSyncs);
+
+  @override
+  int get hashCode => Object.hash(
+    isOnline,
+    isInitialSync,
+    isPulling,
+    isPushing,
+    isUploading,
+    isPaused,
+    // Map identity is unstable; key-only hash is a stable approximation
+    // — `a == b` (via `mapEquals`) implies the key sets match, so the
+    // hashCode contract holds.
+    Object.hashAllUnordered(perDoctype.keys),
+    queue,
+    lastError,
+    lastSyncAt,
+    Object.hashAllUnordered(failedMetaSyncs.keys),
+  );
 }

@@ -40,8 +40,7 @@ class SyncEnginePack {
 }
 
 /// One-shot wiring helper. Pure-construction; no side effects beyond the
-/// objects it returns. See
-/// `docs/superpowers/specs/2026-05-07-pushengine-wiring-design.md`.
+/// objects it returns.
 class SyncEngineBuilder {
   static Future<SyncEnginePack> build({
     required AppDatabase database,

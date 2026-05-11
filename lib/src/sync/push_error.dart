@@ -72,18 +72,30 @@ class LinkExistsError extends PushError {
 /// upload failed terminally. Engine flips the outbox row to `blocked`.
 /// Retries when upstream becomes available (e.g., after the parent's
 /// own INSERT lands).
+///
+/// [reason] is an optional human-readable detail (e.g. the underlying HTTP
+/// error from a failed attachment upload) — surfaced in [message] so it
+/// reaches `SyncErrorsScreen` without the user having to dig into the
+/// `pending_attachments` table.
 class BlockedByUpstream extends PushError {
   final String field;
   final String targetDoctype;
   final String targetUuid;
+  final String? reason;
   BlockedByUpstream({
     required this.field,
     required this.targetDoctype,
     required this.targetUuid,
+    this.reason,
   });
   @override
-  String get message =>
-      'BlockedByUpstream field=$field target=$targetDoctype/$targetUuid';
+  String get message {
+    final base =
+        'BlockedByUpstream field=$field target=$targetDoctype/$targetUuid';
+    if (reason == null || reason!.isEmpty) return base;
+    return '$base — $reason';
+  }
+
   @override
   ErrorCode toErrorCode() => ErrorCode.UNKNOWN;
 }

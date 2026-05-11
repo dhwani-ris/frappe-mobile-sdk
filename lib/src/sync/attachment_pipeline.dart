@@ -111,11 +111,18 @@ class AttachmentPipeline {
         }
       }
     }
-    await dao.markFailed(p.id, errorMessage: '$lastError');
+    final reason = lastError?.toString() ?? 'unknown error';
+    await dao.markFailed(p.id, errorMessage: reason);
+    // Surface the underlying upload error via BlockedByUpstream.reason so
+    // PushEngine writes it into the outbox row's `error_message` — that's
+    // what `SyncErrorsScreen` shows. Without this the user sees a generic
+    // "blocked by upstream File/<id>" entry and has to query
+    // `pending_attachments` directly to find out what actually failed.
     throw BlockedByUpstream(
       field: p.parentFieldname,
       targetDoctype: 'File',
       targetUuid: '${p.id}',
+      reason: reason,
     );
   }
 

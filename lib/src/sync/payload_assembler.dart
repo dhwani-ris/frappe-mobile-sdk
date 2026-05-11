@@ -2,15 +2,14 @@ import 'package:sqflite/sqflite.dart';
 
 import '../models/doc_type_meta.dart';
 import '../models/outbox_row.dart';
+import 'child_table_info.dart';
 import 'push_error.dart';
 import 'uuid_rewriter.dart';
 
-/// Per-child-doctype info passed to [PayloadAssembler.assemble].
-abstract class ChildInfo {
-  String get doctype;
-  DocTypeMeta get meta;
-  String get tableName;
-}
+/// Back-compat alias for [ChildTableInfo]. Retained so push-side code
+/// keeps reading `ChildInfo` without churn while the three older copies
+/// of the struct collapse onto the canonical class.
+typedef ChildInfo = ChildTableInfo;
 
 // Columns dropped before the assembled payload reaches the wire. This
 // is intentionally NARROWER than `PayloadSerializer.serializeForBase` —

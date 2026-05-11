@@ -7,6 +7,7 @@ import '../database/normalize_for_search.dart';
 import '../database/schema/system_columns.dart';
 import '../database/table_name.dart';
 import '../models/doc_type_meta.dart';
+import 'child_table_info.dart';
 
 /// Frappe returns `modified` as `"YYYY-MM-DD HH:MM:SS.ffffff"` with no
 /// timezone suffix. `DateTime.tryParse` interprets such tz-naive strings
@@ -50,12 +51,23 @@ const _systemParentColumnNames = systemParentColumnNames;
 /// System columns the child mirror manages itself. Same rationale.
 const _systemChildColumnNames = systemChildColumnNames;
 
-class PullApplyChildInfo {
-  final String doctype;
-  final DocTypeMeta meta;
+/// Parent `sync_status` values that mean "local has unpushed work". When a
+/// pulled row's local copy is in any of these states, [PullApply] preserves
+/// the local payload (and its child rows -- see the C3 gate at the
+/// child-wipe site below) instead of overwriting with the server snapshot.
+/// Children deliberately have no `sync_status` column of their own; they
+/// inherit the parent's state via this gate.
+const _locallyDirtyStatuses = <String>[
+  'dirty',
+  'failed',
+  'conflict',
+  'blocked',
+];
 
-  PullApplyChildInfo(this.doctype, this.meta);
-}
+/// Back-compat alias for [ChildTableInfo]. Retained so existing call
+/// sites (`offline_repository.dart`, `pull_engine.dart`, the test suite)
+/// keep compiling after the M1/D2 consolidation.
+typedef PullApplyChildInfo = ChildTableInfo;
 
 /// Applies a fetched page of rows transactionally. Spec §5.1.
 ///
@@ -127,12 +139,7 @@ class PullApply {
         continue;
       }
       if (existing.isNotEmpty &&
-          const [
-            'dirty',
-            'failed',
-            'conflict',
-            'blocked',
-          ].contains(existing.first['sync_status'])) {
+          _locallyDirtyStatuses.contains(existing.first['sync_status'])) {
         // Spec §5.1 requires "server has advanced" before flagging a
         // conflict. Cursor filtering normally guarantees this, but
         // defending here prevents spurious conflicts on initial sync,
@@ -207,6 +214,13 @@ class PullApply {
         );
       }
 
+      // C3 gate: the child wipe below is only reached when the parent's
+      // local `sync_status` is NOT in `_locallyDirtyStatuses` -- the early
+      // `continue` above filters dirty/failed/conflict/blocked parents
+      // before we get here. Children inherit the parent's status (see
+      // `child_schema.dart`), so a dirty parent shields its child rows from
+      // the pull's destructive replace. Do not introduce a code path that
+      // reaches this loop with a locally-dirty parent.
       for (final entry in childMetasByFieldname.entries) {
         final fieldname = entry.key;
         final childInfo = entry.value;

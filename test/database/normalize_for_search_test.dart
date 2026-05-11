@@ -30,5 +30,15 @@ void main() {
     test('mixed script', () {
       expect(normalizeForSearch('Café नमस्ते'), 'cafe नमस्ते');
     });
+
+    test('strips ZWJ (U+200D) so ligature/half-form variants match', () {
+      // Same Devanagari "kṣa" written with and without an explicit ZWJ
+      // between half-forms. After normalization they must compare equal.
+      const withZwj = 'क्‍ष';
+      const withoutZwj = 'क्ष';
+      expect(normalizeForSearch(withZwj), normalizeForSearch(withoutZwj));
+      // The normalized form must not contain U+200D anywhere.
+      expect(normalizeForSearch(withZwj).contains('‍'), isFalse);
+    });
   });
 }

@@ -8,6 +8,7 @@ import '../database/sqlite_utils.dart';
 import '../database/table_name.dart';
 import '../models/doc_type_meta.dart';
 import '../models/meta_resolver.dart';
+import '../sync/child_table_info.dart';
 
 /// Writes a form-save payload to the per-doctype `docs__<doctype>` parent
 /// table and `docs__<child_doctype>` child tables in a single transaction.
@@ -129,7 +130,7 @@ class LocalWriter {
     if (!await sqliteTableExists(txn, parentTable)) return;
     final nowMs = DateTime.now().toUtc().millisecondsSinceEpoch;
 
-    final childInfos = <String, _ChildInfo>{};
+    final childInfos = <String, ChildTableInfo>{};
     for (final f in parentMeta.fields) {
       final ft = f.fieldtype;
       final fn = f.fieldname;
@@ -151,7 +152,7 @@ class LocalWriter {
             continue;
           }
         }
-        childInfos[fn] = _ChildInfo(opt, cm);
+        childInfos[fn] = ChildTableInfo(opt, cm);
       }
     }
 
@@ -160,7 +161,9 @@ class LocalWriter {
     final parentRow = <String, Object?>{
       'mobile_uuid': mobileUuid,
       'server_name': serverName,
-      'sync_status': serverName != null ? 'synced' : 'dirty',
+      'sync_status': syncOp != null
+          ? 'dirty'
+          : (serverName != null ? 'synced' : 'dirty'),
       'sync_op': ?syncOp,
       'docstatus': _coerceInt(data['docstatus']) ?? 0,
       'modified': data['modified']?.toString(),
@@ -304,10 +307,4 @@ class LocalWriter {
     if (s.isEmpty) return null;
     return int.tryParse(s);
   }
-}
-
-class _ChildInfo {
-  final String doctype;
-  final DocTypeMeta meta;
-  _ChildInfo(this.doctype, this.meta);
 }
