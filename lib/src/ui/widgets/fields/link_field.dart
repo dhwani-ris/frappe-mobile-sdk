@@ -183,8 +183,6 @@ class _LinkFieldDropdown extends StatefulWidget {
 }
 
 class _LinkFieldDropdownState extends State<_LinkFieldDropdown> {
-  static const String _kBlankValue = '__blank__';
-
   List<LinkOptionEntity> _options = [];
   bool _isLoading = true;
   bool _waitingForDependent = false;
@@ -394,7 +392,7 @@ class _LinkFieldDropdownState extends State<_LinkFieldDropdown> {
       return FormBuilderDropdown<String>(
         key: ValueKey('${widget.field.fieldname}_loading'),
         name: widget.field.fieldname ?? '',
-        initialValue: hasValue ? loadingValue : _kBlankValue,
+        initialValue: hasValue ? loadingValue : null,
         enabled: false,
         decoration:
             widget.style?.decoration ??
@@ -408,20 +406,21 @@ class _LinkFieldDropdownState extends State<_LinkFieldDropdown> {
               ),
             ),
         items: [
-          DropdownMenuItem<String>(
-            value: _kBlankValue,
-            child: Row(
-              children: [
-                const SizedBox(
-                  width: 20,
-                  height: 20,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                ),
-                const SizedBox(width: 8),
-                Text('Loading...', style: TextStyle(color: Colors.grey[600])),
-              ],
+          if (!hasValue)
+            DropdownMenuItem<String>(
+              value: null,
+              child: Row(
+                children: [
+                  const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                  const SizedBox(width: 8),
+                  Text('Loading...', style: TextStyle(color: Colors.grey[600])),
+                ],
+              ),
             ),
-          ),
           if (hasValue)
             DropdownMenuItem<String>(
               value: loadingValue,
@@ -439,7 +438,7 @@ class _LinkFieldDropdownState extends State<_LinkFieldDropdown> {
       return FormBuilderDropdown<String>(
         key: ValueKey('${widget.field.fieldname}_empty_$isWaiting'),
         name: widget.field.fieldname ?? '',
-        initialValue: _kBlankValue,
+        initialValue: null,
         enabled: !isWaiting && (widget.enabled && !widget.field.readOnly),
         decoration:
             widget.style?.decoration ??
@@ -456,13 +455,11 @@ class _LinkFieldDropdownState extends State<_LinkFieldDropdown> {
             ),
         items: [
           DropdownMenuItem<String>(
-            value: _kBlankValue,
+            value: null,
             child: Text(hint, style: TextStyle(color: Colors.grey[600])),
           ),
         ],
-        onChanged: isWaiting
-            ? null
-            : (v) => widget.onChanged?.call(v == _kBlankValue ? null : v),
+        onChanged: isWaiting ? null : (v) => widget.onChanged?.call(v),
       );
     }
 
