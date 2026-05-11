@@ -540,9 +540,6 @@ class _HomeScreenState extends State<HomeScreen> {
                   }
                 }
 
-                // Get documents from local database (after sync attempt)
-                final docs = await _repository!.getDocumentsByDoctype(doctype);
-
                 if (mounted) {
                   final ctx = context;
                   ScaffoldMessenger.of(ctx).hideCurrentSnackBar();
@@ -560,7 +557,6 @@ class _HomeScreenState extends State<HomeScreen> {
                         api: _authService?.client,
                         getMobileUuid: () =>
                             _authService!.getOrCreateMobileUuid(),
-                        initialDocuments: docs,
                         userRoles: _authService?.roles,
                         permissionService: _permissionService,
                         translate: _translationService != null
