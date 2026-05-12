@@ -607,12 +607,15 @@ class OfflineRepository {
   }) async {
     final meta = await _loadMeta(doctype);
     if (meta == null) {
-      // ignore: avoid_print
-      print(
+      // Meta absent means the DocType schema was never synced — we cannot
+      // write to a table whose columns we don't know. Throw so every caller
+      // correctly classifies this as a failure (sync error counter, UI
+      // error message) rather than silently skipping the apply and marking
+      // the outbox row as done.
+      throw StateError(
         'OfflineRepository.applyServerDocument: meta missing for $doctype; '
-        'pull skipped for $serverName',
+        'cannot apply server snapshot for $serverName',
       );
-      return;
     }
     final tableName = normalizeDoctypeTableName(doctype);
     await _ensurePerDoctypeTable(doctype, tableName, meta);

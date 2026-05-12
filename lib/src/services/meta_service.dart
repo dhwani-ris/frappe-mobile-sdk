@@ -257,6 +257,7 @@ class MetaService {
     } catch (e, st) {
       // Don't block app launch on errors here, but surface them.
       debugPrint('MetaService.checkAndSyncDoctypes failed — $e\n$st');
+      onMetaSyncFailure?.call('checkAndSyncDoctypes', e);
       return;
     }
   }

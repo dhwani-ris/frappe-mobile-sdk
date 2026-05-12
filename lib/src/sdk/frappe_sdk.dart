@@ -617,10 +617,12 @@ class FrappeSDK {
         'Cannot logout: SDK not initialized. Call initialize() first.',
       );
     }
-    // AuthService.logout(clearDatabase: true) calls AppDatabase.clearAllData,
-    // which drops every non-SQLite-internal table and re-runs `_onCreate` to
-    // rebuild the base schema. Auth tokens are deleted regardless of the flag.
-    await _authService!.logout(clearDatabase: clearDatabase);
+    // Protect clearAllData() from racing an in-flight push or pull —
+    // protect() queues this behind any held SyncMutex so no push writes hit
+    // a table that gets dropped mid-write.
+    await _syncService!.protect(() async {
+      await _authService!.logout(clearDatabase: clearDatabase);
+    });
     if (clearDatabase) {
       // In-memory mirrors of the now-dropped DB state. Without these, the
       // next session would short-circuit table-existence checks against a
@@ -1199,12 +1201,11 @@ class FrappeSDK {
     await _connectivityWatcher?.dispose();
     await _sessionUserService?.dispose();
     await _offlineTransitionService?.dispose();
-    await _syncStateNotifier?.close();
-    await _syncCompleteController?.close();
 
-    // Wait for an in-flight upgrade-closure pull to settle so its tasks
-    // don't outlive the SDK and call through nulled refs. Per the no-empty-
-    // catch rule, surface unexpected failures rather than swallowing them.
+    // ① Drain in-flight pull BEFORE closing the notifier it writes to.
+    // _pendingDrain may hold a PullEngine.run() still calling
+    // notifier.value = … on every page. Closing the notifier first causes
+    // every remaining write to throw StateError on the closed StreamController.
     final pending = _pendingDrain;
     if (pending != null) {
       try {
@@ -1216,6 +1217,10 @@ class FrappeSDK {
         );
       }
     }
+
+    // ② Now safe to close — no pull worker is still writing to these.
+    await _syncStateNotifier?.close();
+    await _syncCompleteController?.close();
 
     // Null every per-instance ref so the GC can reclaim the dependency
     // graph (services, engines, pools, queries). AppDatabase is a process

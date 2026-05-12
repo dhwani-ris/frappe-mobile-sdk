@@ -24,6 +24,11 @@ typedef BulkProbeRequester =
 /// On the first call after login, [detect] issues a tiny request with one
 /// doctype and caches the outcome for the session. If absent,
 /// [MetaService.refreshWatermarks] falls back to per-doctype GETs.
+///
+/// **Best-effort contract:** endpoint absence is not an error. [detect] catches
+/// all exceptions and marks the probe unavailable — callers must handle
+/// `available: false` and must not assume [fetchWatermarks] will succeed.
+/// [fetchWatermarks] is only safe to call after confirming `available: true`.
 class BulkWatermarkProbe {
   final String appMethodName;
   final BulkProbeRequester requester;

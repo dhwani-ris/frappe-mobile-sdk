@@ -22,4 +22,11 @@ class QueryResult<T> {
     required this.returnedCount,
     required this.originBreakdown,
   });
+
+  static const empty = QueryResult<Map<String, dynamic>>(
+    rows: [],
+    hasMore: false,
+    returnedCount: 0,
+    originBreakdown: {},
+  );
 }

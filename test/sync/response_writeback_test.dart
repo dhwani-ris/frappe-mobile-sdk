@@ -130,6 +130,28 @@ void main() {
   );
 
   test(
+    'DELETE early-exit: hard-deletes parent, children, and outbox row',
+    () async {
+      final deleteRowId = await outbox.insertPending(
+        doctype: 'Sales Order',
+        mobileUuid: 'u-so',
+        operation: OutboxOperation.delete,
+      );
+      final deleteRow = (await outbox.findById(deleteRowId))!;
+      await ResponseWriteback.apply(
+        db: db,
+        row: deleteRow,
+        parentTable: 'docs__sales_order',
+        childTablesByFieldname: const {'items': 'docs__so_item'},
+        response: const <String, dynamic>{},
+      );
+      expect(await db.query('docs__sales_order'), isEmpty);
+      expect(await db.query('docs__so_item'), isEmpty);
+      expect(await outbox.findById(deleteRowId), isNull);
+    },
+  );
+
+  test(
     'throws ServerRejection when response has neither name nor docname',
     () async {
       final outboxRow = (await outbox.findByState(OutboxState.pending)).first;

@@ -96,22 +96,23 @@ void main() {
     },
   );
 
-  test(
-    'no meta persisted → applyServerDocument is a no-op (no table created)',
-    () async {
-      // No meta and no pre-built table for "NoMeta" — applyServerDocument
-      // should silently skip rather than throw.
-      await repo.applyServerDocument(
+  test('no meta persisted → applyServerDocument throws StateError', () async {
+    // Meta absent means the DocType schema was never synced. The method must
+    // throw so callers (pull loop, conflict resolver) classify it as a
+    // failure rather than silently marking the outbox row as done.
+    await expectLater(
+      () => repo.applyServerDocument(
         doctype: 'NoMeta',
         serverName: 'NO-1',
         data: {'name': 'NO-1', 'foo': 'bar'},
-      );
-      final tables = await appDb.rawDatabase.rawQuery(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='docs__nometa'",
-      );
-      expect(tables, isEmpty);
-    },
-  );
+      ),
+      throwsA(isA<StateError>()),
+    );
+    final tables = await appDb.rawDatabase.rawQuery(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='docs__nometa'",
+    );
+    expect(tables, isEmpty);
+  });
 
   test('two different doctypes get two separate tables', () async {
     final supplierMeta = DocTypeMeta(

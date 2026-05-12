@@ -3,7 +3,12 @@
 
 import 'package:flutter/foundation.dart';
 
-/// Evaluates Frappe depends_on expressions
+/// Evaluates Frappe `depends_on` / `mandatory_depends_on` expressions.
+///
+/// **Trust boundary:** expressions evaluated here come from server-side
+/// DocType meta configured by Frappe admins, not from end-user input. This
+/// evaluator is NOT sandboxed — do not pass user-supplied strings to
+/// [evaluate].
 class DependsOnEvaluator {
   /// Evaluate depends_on expression
   /// Supports: eval:doc.field == value, eval:doc.field != value, etc.

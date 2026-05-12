@@ -85,6 +85,7 @@ class OfflineTransitionService {
   /// override to 0 (manual ticks) for determinism.
   Future<void> runDrainAndWipe({
     Duration progressInterval = const Duration(milliseconds: 500),
+    Duration drainTimeout = const Duration(minutes: 5),
   }) async {
     _forceExited = false;
     while (true) {
@@ -129,7 +130,11 @@ class OfflineTransitionService {
             probeInFlight = false;
           }
         });
-        await sync.pushSync();
+        await sync.pushSync().timeout(
+          drainTimeout,
+          onTimeout: () =>
+              throw TimeoutException('Drain timed out after $drainTimeout'),
+        );
       } catch (e, st) {
         // ignore: avoid_print
         print('OfflineTransitionService: pushSync drain failed — $e\n$st');

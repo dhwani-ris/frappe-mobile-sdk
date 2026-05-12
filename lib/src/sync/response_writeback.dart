@@ -45,6 +45,25 @@ class ResponseWriteback {
     required Map<String, String> childTablesByFieldname,
     required Map<String, dynamic> response,
   }) async {
+    // DELETE: server sends no body. Hard-delete the local mirror and outbox
+    // row — the tombstone is no longer needed once the server confirms.
+    if (row.operation == OutboxOperation.delete) {
+      await txn.delete(
+        parentTable,
+        where: 'mobile_uuid = ?',
+        whereArgs: [row.mobileUuid],
+      );
+      for (final tableName in childTablesByFieldname.values) {
+        await txn.delete(
+          tableName,
+          where: 'parent_uuid = ?',
+          whereArgs: [row.mobileUuid],
+        );
+      }
+      await txn.delete('outbox', where: 'id = ?', whereArgs: [row.id]);
+      return;
+    }
+
     // Frappe usually returns the server-assigned id as `name`. Some
     // endpoints (custom controllers, file upload, older versions) return
     // it as `docname` instead — accept either. If neither is present the
