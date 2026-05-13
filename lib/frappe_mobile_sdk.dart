@@ -21,6 +21,7 @@ export 'src/models/link_filter_result.dart';
 export 'src/database/app_database.dart';
 export 'src/database/entities/doctype_meta_entity.dart';
 export 'src/database/entities/document_entity.dart';
+export 'src/database/entities/link_option_entity.dart';
 export 'src/database/daos/doctype_meta_dao.dart';
 export 'src/database/daos/document_dao.dart';
 
