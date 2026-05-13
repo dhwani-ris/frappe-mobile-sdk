@@ -249,6 +249,9 @@ class LinkOptionService {
   /// 1. If [hook] is provided and `field.fieldname` is non-null, invoke it.
   ///    - Non-null result → use `result.filters` (empty list normalizes to null).
   ///    - Null result → fall through to meta.
+  ///    - **Throws are caught and treated as null** — host hook failures must
+  ///      never propagate into the SDK's UI layer (would freeze the dropdown
+  ///      in its loading state). Logged via [debugPrint] for diagnostics.
   /// 2. Parse meta `linkFilters` via [parseLinkFilters] against a merged
   ///    `parentFormData ∪ rowData` view (rowData wins on key collision).
   ///    Mirrors Frappe Desk: child-row Link filters can reference parent
@@ -263,7 +266,16 @@ class LinkOptionService {
   }) {
     final fieldName = field.fieldname;
     if (hook != null && fieldName != null) {
-      final result = hook(field, fieldName, rowData, parentFormData);
+      LinkFilterResult? result;
+      try {
+        result = hook(field, fieldName, rowData, parentFormData);
+      } catch (e, st) {
+        debugPrint(
+          'LinkOptionService.resolveFilters: LinkFilterBuilder threw for '
+          '${field.options}/$fieldName — falling back to meta. $e\n$st',
+        );
+        result = null;
+      }
       if (result != null) {
         final filters = result.filters;
         if (filters == null || filters.isEmpty) return null;
@@ -271,6 +283,35 @@ class LinkOptionService {
       }
     }
     return parseLinkFilters(field.linkFilters, {...parentFormData, ...rowData});
+  }
+
+  /// Safely invokes a host-provided [getLinkFilterBuilder] factory.
+  ///
+  /// Host apps register builders via a factory keyed on
+  /// `(targetDoctype, fieldname)`. That factory itself runs host code (map
+  /// lookups, switch dispatch, etc.) and can throw — a thrown factory must
+  /// not propagate into the SDK's UI layer the same way a thrown builder
+  /// must not (see [resolveFilters]). All five SDK call sites should route
+  /// through this helper instead of calling `getLinkFilterBuilder?.call(...)`
+  /// directly so the safety guarantee lives in one place.
+  ///
+  /// Returns `null` when the factory is null, returns null, or throws.
+  static LinkFilterBuilder? safeHook(
+    LinkFilterBuilder? Function(String doctype, String fieldname)?
+    getLinkFilterBuilder,
+    String doctype,
+    String fieldname,
+  ) {
+    if (getLinkFilterBuilder == null) return null;
+    try {
+      return getLinkFilterBuilder(doctype, fieldname);
+    } catch (e, st) {
+      debugPrint(
+        'LinkOptionService.safeHook: getLinkFilterBuilder threw for '
+        '$doctype/$fieldname — falling back to meta. $e\n$st',
+      );
+      return null;
+    }
   }
 
   /// Offline-first link options with optional text search.

@@ -26,9 +26,16 @@ class LinkFilterResult {
 ///   inside a child row.
 ///
 /// Return `null` to fall back to meta `linkFilters`.
-typedef LinkFilterBuilder = LinkFilterResult? Function(
-  DocField field,
-  String fieldName,
-  Map<String, dynamic> rowData,
-  Map<String, dynamic> parentFormData,
-);
+///
+/// **Throws are caught by the SDK and treated as `null`** — a builder that
+/// throws (null deref on `rowData[...]`, bad cast, `Map[key]!` miss, etc.)
+/// will not propagate into the UI; the SDK logs via `debugPrint` and falls
+/// back to meta `linkFilters` as if `null` had been returned. The same
+/// guarantee applies to the host-provided factory that returns this builder.
+typedef LinkFilterBuilder =
+    LinkFilterResult? Function(
+      DocField field,
+      String fieldName,
+      Map<String, dynamic> rowData,
+      Map<String, dynamic> parentFormData,
+    );

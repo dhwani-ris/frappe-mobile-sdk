@@ -110,7 +110,8 @@ class _LoaderState extends State<_Loader> {
               parentFormData: widget.parentFormData.isNotEmpty
                   ? widget.parentFormData
                   : widget.formData,
-              hook: widget.getLinkFilterBuilder?.call(
+              hook: LinkOptionService.safeHook(
+                widget.getLinkFilterBuilder,
                 f.options ?? '',
                 f.fieldname ?? '',
               ),

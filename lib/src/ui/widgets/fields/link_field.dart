@@ -322,7 +322,8 @@ class _LinkFieldDropdownState extends State<_LinkFieldDropdown> {
       field: docField,
       rowData: widget.formData,
       parentFormData: widget.parentFormData,
-      hook: widget.getLinkFilterBuilder?.call(
+      hook: LinkOptionService.safeHook(
+        widget.getLinkFilterBuilder,
         docField.options ?? '',
         docField.fieldname ?? '',
       ),

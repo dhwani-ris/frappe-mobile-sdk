@@ -123,6 +123,53 @@ void main() {
       ]);
     });
 
+    test('hook throws → falls back to meta linkFilters (no rethrow)', () {
+      final out = LinkOptionService.resolveFilters(
+        field: field,
+        rowData: const {'village': 'V1'},
+        parentFormData: const {},
+        hook: (f, name, row, parent) => throw StateError('host hook blew up'),
+      );
+      expect(out, [
+        ['Learner', 'village', '=', 'V1'],
+      ]);
+    });
+
+    test('hook throws with no meta linkFilters → null (does not rethrow)', () {
+      final plainField = DocField(
+        fieldname: 'learner',
+        fieldtype: 'Link',
+        options: 'Learner',
+      );
+      final out = LinkOptionService.resolveFilters(
+        field: plainField,
+        rowData: const {},
+        parentFormData: const {},
+        hook: (f, name, row, parent) => throw TypeError(),
+      );
+      expect(out, isNull);
+    });
+
+    test('hook throws on null deref (realistic host bug) → meta fallback', () {
+      // Mirrors a common host mistake: bang-deref of a missing parent key.
+      final out = LinkOptionService.resolveFilters(
+        field: field,
+        rowData: const {'village': 'V1'},
+        parentFormData: const {},
+        hook: (f, name, row, parent) {
+          final missing = parent['nope']! as String; // throws at runtime
+          return LinkFilterResult(
+            filters: [
+              ['Learner', 'x', '=', missing],
+            ],
+          );
+        },
+      );
+      expect(out, [
+        ['Learner', 'village', '=', 'V1'],
+      ]);
+    });
+
     test(
       'meta linkFilters referencing parent field resolves from parentFormData',
       () {
@@ -225,6 +272,75 @@ void main() {
         ],
       );
       expect(result, isNull);
+    });
+  });
+
+  group('safeHook', () {
+    test('null factory → null builder', () {
+      final builder = LinkOptionService.safeHook(null, 'Learner', 'learner');
+      expect(builder, isNull);
+    });
+
+    test('factory returns null → null builder', () {
+      final builder = LinkOptionService.safeHook(
+        (doctype, fieldname) => null,
+        'Learner',
+        'learner',
+      );
+      expect(builder, isNull);
+    });
+
+    test('factory returns a builder → that builder is returned', () {
+      LinkFilterResult? hook(
+        DocField f,
+        String name,
+        Map<String, dynamic> row,
+        Map<String, dynamic> parent,
+      ) => const LinkFilterResult(
+        filters: [
+          ['Learner', 'state', '=', 'Active'],
+        ],
+      );
+      final builder = LinkOptionService.safeHook(
+        (doctype, fieldname) => hook,
+        'Learner',
+        'learner',
+      );
+      expect(builder, same(hook));
+    });
+
+    test('factory throws → null builder (does not rethrow)', () {
+      final builder = LinkOptionService.safeHook(
+        (doctype, fieldname) => throw StateError('factory blew up'),
+        'Learner',
+        'learner',
+      );
+      expect(builder, isNull);
+    });
+
+    test('end-to-end: throwing factory → meta fallback via resolveFilters', () {
+      // The 5 SDK call sites route the factory through safeHook so a thrown
+      // factory must degrade to meta linkFilters, not abort the field.
+      final out = LinkOptionService.resolveFilters(
+        field: DocField(
+          fieldname: 'learner',
+          fieldtype: 'Link',
+          options: 'Learner',
+          linkFilters: jsonEncode([
+            ['Learner', 'village', '=', 'eval: doc.village'],
+          ]),
+        ),
+        rowData: const {'village': 'V1'},
+        parentFormData: const {},
+        hook: LinkOptionService.safeHook(
+          (doctype, fieldname) => throw StateError('factory blew up'),
+          'Learner',
+          'learner',
+        ),
+      );
+      expect(out, [
+        ['Learner', 'village', '=', 'V1'],
+      ]);
     });
   });
 

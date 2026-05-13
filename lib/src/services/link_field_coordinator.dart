@@ -284,7 +284,8 @@ class LinkFieldCoordinator {
       field: field,
       rowData: formData,
       parentFormData: parentFormData,
-      hook: getLinkFilterBuilder?.call(
+      hook: LinkOptionService.safeHook(
+        getLinkFilterBuilder,
         field.options ?? '',
         field.fieldname ?? '',
       ),
@@ -327,7 +328,8 @@ class LinkFieldCoordinator {
           field: field,
           rowData: _formData,
           parentFormData: parentFormData,
-          hook: getLinkFilterBuilder?.call(
+          hook: LinkOptionService.safeHook(
+            getLinkFilterBuilder,
             field.options ?? '',
             field.fieldname ?? '',
           ),
@@ -344,7 +346,8 @@ class LinkFieldCoordinator {
         field: field,
         rowData: _formData,
         parentFormData: parentFormData,
-        hook: getLinkFilterBuilder?.call(
+        hook: LinkOptionService.safeHook(
+          getLinkFilterBuilder,
           field.options ?? '',
           field.fieldname ?? '',
         ),
