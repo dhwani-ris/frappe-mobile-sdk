@@ -23,7 +23,7 @@ class LinkFieldCoordinator {
   final LinkOptionService linkOptionService;
   final Map<String, dynamic> parentFormData;
   final LinkFilterBuilder? Function(String doctype, String fieldname)?
-      getLinkFilterBuilder;
+  getLinkFilterBuilder;
   final Map<String, dynamic> _formData = {};
   final StreamController<LinkLoadProgress> _progressController =
       StreamController<LinkLoadProgress>.broadcast();
@@ -275,7 +275,8 @@ class LinkFieldCoordinator {
       field: field,
       rowData: formData,
       parentFormData: parentFormData,
-      hook: getLinkFilterBuilder?.call(
+      hook: LinkOptionService.safeHook(
+        getLinkFilterBuilder,
         field.options ?? '',
         field.fieldname ?? '',
       ),
@@ -318,7 +319,8 @@ class LinkFieldCoordinator {
           field: field,
           rowData: _formData,
           parentFormData: parentFormData,
-          hook: getLinkFilterBuilder?.call(
+          hook: LinkOptionService.safeHook(
+            getLinkFilterBuilder,
             field.options ?? '',
             field.fieldname ?? '',
           ),
@@ -335,7 +337,8 @@ class LinkFieldCoordinator {
         field: field,
         rowData: _formData,
         parentFormData: parentFormData,
-        hook: getLinkFilterBuilder?.call(
+        hook: LinkOptionService.safeHook(
+          getLinkFilterBuilder,
           field.options ?? '',
           field.fieldname ?? '',
         ),

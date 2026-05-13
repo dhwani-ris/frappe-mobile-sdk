@@ -16,7 +16,7 @@ class LinkField extends BaseField {
   final Map<String, dynamic>? formData;
   final Map<String, dynamic> parentFormData;
   final LinkFilterBuilder? Function(String doctype, String fieldname)?
-      getLinkFilterBuilder;
+  getLinkFilterBuilder;
 
   const LinkField({
     super.key,
@@ -149,7 +149,7 @@ class _LinkFieldDropdown extends StatefulWidget {
   final Map<String, dynamic> formData;
   final Map<String, dynamic> parentFormData;
   final LinkFilterBuilder? Function(String doctype, String fieldname)?
-      getLinkFilterBuilder;
+  getLinkFilterBuilder;
   final FieldStyle? style;
 
   const _LinkFieldDropdown({
@@ -276,7 +276,8 @@ class _LinkFieldDropdownState extends State<_LinkFieldDropdown> {
       field: docField,
       rowData: widget.formData,
       parentFormData: widget.parentFormData,
-      hook: widget.getLinkFilterBuilder?.call(
+      hook: LinkOptionService.safeHook(
+        widget.getLinkFilterBuilder,
         docField.options ?? '',
         docField.fieldname ?? '',
       ),
@@ -410,9 +411,7 @@ class _LinkFieldDropdownState extends State<_LinkFieldDropdown> {
             child: Text(hint, style: TextStyle(color: Colors.grey[600])),
           ),
         ],
-        onChanged: isWaiting
-            ? null
-            : (v) => widget.onChanged?.call(v),
+        onChanged: isWaiting ? null : (v) => widget.onChanged?.call(v),
       );
     }
 

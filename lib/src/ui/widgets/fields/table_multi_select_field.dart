@@ -17,7 +17,7 @@ class TableMultiSelectFieldBase extends BaseField {
   final Map<String, dynamic> formData;
   final Map<String, dynamic> parentFormData;
   final LinkFilterBuilder? Function(String doctype, String fieldname)?
-      getLinkFilterBuilder;
+  getLinkFilterBuilder;
 
   const TableMultiSelectFieldBase({
     super.key,
@@ -72,7 +72,7 @@ class _Loader extends StatefulWidget {
   final Map<String, dynamic> formData;
   final Map<String, dynamic> parentFormData;
   final LinkFilterBuilder? Function(String doctype, String fieldname)?
-      getLinkFilterBuilder;
+  getLinkFilterBuilder;
 
   @override
   State<_Loader> createState() => _LoaderState();
@@ -107,7 +107,8 @@ class _LoaderState extends State<_Loader> {
               parentFormData: widget.parentFormData.isNotEmpty
                   ? widget.parentFormData
                   : widget.formData,
-              hook: widget.getLinkFilterBuilder?.call(
+              hook: LinkOptionService.safeHook(
+                widget.getLinkFilterBuilder,
                 f.options ?? '',
                 f.fieldname ?? '',
               ),
