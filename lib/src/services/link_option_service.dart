@@ -249,7 +249,12 @@ class LinkOptionService {
   /// 1. If [hook] is provided and `field.fieldname` is non-null, invoke it.
   ///    - Non-null result → use `result.filters` (empty list normalizes to null).
   ///    - Null result → fall through to meta.
-  /// 2. Parse meta `linkFilters` via [parseLinkFilters] against [rowData].
+  /// 2. Parse meta `linkFilters` via [parseLinkFilters] against a merged
+  ///    `parentFormData ∪ rowData` view (rowData wins on key collision).
+  ///    Mirrors Frappe Desk: child-row Link filters can reference parent
+  ///    fields via `eval: doc.X`, just like client scripts that read
+  ///    `frm.doc` from a child-row context. For top-level forms
+  ///    `parentFormData` equals `rowData`, so the merge is a no-op.
   static List<List<dynamic>>? resolveFilters({
     required DocField field,
     required Map<String, dynamic> rowData,
@@ -265,7 +270,7 @@ class LinkOptionService {
         return filters;
       }
     }
-    return parseLinkFilters(field.linkFilters, rowData);
+    return parseLinkFilters(field.linkFilters, {...parentFormData, ...rowData});
   }
 
   /// Offline-first link options with optional text search.

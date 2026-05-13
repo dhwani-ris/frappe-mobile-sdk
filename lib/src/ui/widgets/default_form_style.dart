@@ -7,8 +7,8 @@ import 'form_builder.dart' show FrappeFormStyle;
 /// Default form styling configuration
 class DefaultFormStyle {
   static FrappeFormStyle get standard => FrappeFormStyle(
-    showFieldLabel: false,
-    showFieldDescription: false,
+    showFieldLabel: true,
+    showFieldDescription: true,
     labelStyle: const TextStyle(
       fontSize: 14,
       fontWeight: FontWeight.w500,

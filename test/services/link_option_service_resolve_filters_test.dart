@@ -122,6 +122,59 @@ void main() {
         ['Learner', 'village', '=', 'V1'],
       ]);
     });
+
+    test(
+      'meta linkFilters referencing parent field resolves from parentFormData',
+      () {
+        final out = LinkOptionService.resolveFilters(
+          field: field,
+          rowData: const {},
+          parentFormData: const {'village': 'V1'},
+          hook: null,
+        );
+        expect(out, [
+          ['Learner', 'village', '=', 'V1'],
+        ]);
+      },
+    );
+
+    test('rowData wins over parentFormData on key collision', () {
+      final out = LinkOptionService.resolveFilters(
+        field: field,
+        rowData: const {'village': 'CHILD'},
+        parentFormData: const {'village': 'PARENT'},
+        hook: null,
+      );
+      expect(out, [
+        ['Learner', 'village', '=', 'CHILD'],
+      ]);
+    });
+
+    test(
+      'mixed meta filters: row-only field resolves from rowData, parent-only '
+      'from parentFormData',
+      () {
+        final mixedField = DocField(
+          fieldname: 'block',
+          fieldtype: 'Link',
+          options: 'Block',
+          linkFilters: jsonEncode([
+            ['Block', 'state', '=', 'eval: doc.state'],
+            ['Block', 'district', '=', 'eval: doc.district'],
+          ]),
+        );
+        final out = LinkOptionService.resolveFilters(
+          field: mixedField,
+          rowData: const {'state': 'S1'},
+          parentFormData: const {'district': 'D1'},
+          hook: null,
+        );
+        expect(out, [
+          ['Block', 'state', '=', 'S1'],
+          ['Block', 'district', '=', 'D1'],
+        ]);
+      },
+    );
   });
 
   group('_normalizeFiltersForDoctype (C1)', () {
