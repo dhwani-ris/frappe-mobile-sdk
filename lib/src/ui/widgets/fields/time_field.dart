@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_form_builder/flutter_form_builder.dart';
 import 'package:intl/intl.dart';
 import 'base_field.dart';
+import 'field_helpers.dart';
 
 /// Widget for Time field type
 class TimeField extends BaseField {
@@ -54,12 +55,7 @@ class TimeField extends BaseField {
             suffixIcon: const Icon(Icons.access_time),
           ),
       validator: field.reqd
-          ? (value) {
-              if (value == null) {
-                return '${field.displayLabel} is required';
-              }
-              return null;
-            }
+          ? (value) => requiredValidator(value, field.displayLabel)
           : null,
       onChanged: (val) {
         if (val != null) {

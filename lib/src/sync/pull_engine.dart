@@ -7,7 +7,6 @@ import '../concurrency/concurrency_pool.dart';
 import '../concurrency/write_queue.dart';
 import '../database/daos/doctype_meta_dao.dart';
 import '../database/daos/outbox_dao.dart';
-import '../database/table_name.dart';
 import '../models/closure_result.dart';
 import '../models/dep_graph.dart';
 import '../models/meta_resolver.dart';
@@ -139,9 +138,7 @@ class PullEngine {
       DoctypeSyncState(startedAt: startedAt),
     );
 
-    final parentTable =
-        await metaDao.getTableName(doctype) ??
-        normalizeDoctypeTableName(doctype);
+    final parentTable = await metaDao.tableNameFor(doctype);
 
     // Resolve child metas for every Table / Table MultiSelect outgoing edge.
     final childInfo = <String, PullApplyChildInfo>{};

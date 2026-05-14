@@ -7,6 +7,30 @@ import '../../models/outbox_row.dart';
 /// knew about the doc, so there is nothing to push).
 enum RecordSaveResult { enqueued, cancelledLocally }
 
+/// The four outbox states that can be collapsed into a newer save:
+/// `pending`, `failed`, `blocked`, `conflict`. `in_flight` and `done`
+/// are deliberately excluded (a save during an in-flight push always
+/// inserts a fresh follow-up row).
+final List<String> _collapsableStateWireNames = <String>[
+  OutboxState.pending.wireName,
+  OutboxState.failed.wireName,
+  OutboxState.blocked.wireName,
+  OutboxState.conflict.wireName,
+];
+
+/// SQL WHERE clause that matches outbox rows in any collapsable state
+/// for a given (doctype, mobileUuid). Used by [OutboxDao.recordSave]
+/// (for both the collapse-candidate lookup and the DELETE-cancels-prior
+/// branch) and [OutboxDao.cancelPendingFor]. The four `?` placeholders
+/// after `state IN` are filled from [_collapsableStateWireNames].
+const String _collapsableWhereClause =
+    'doctype = ? AND mobile_uuid = ? AND state IN (?, ?, ?, ?)';
+
+/// Builds the whereArgs list to go with [_collapsableWhereClause]:
+/// `[doctype, mobileUuid, pending, failed, blocked, conflict]`.
+List<Object?> _collapsableWhereArgs(String doctype, String mobileUuid) =>
+    <Object?>[doctype, mobileUuid, ..._collapsableStateWireNames];
+
 class OutboxDao {
   final DatabaseExecutor _db;
 
@@ -42,18 +66,11 @@ class OutboxDao {
     required OutboxOperation operation,
     DateTime? createdAt,
   }) async {
-    final ts = (createdAt ?? DateTime.now().toUtc()).millisecondsSinceEpoch;
+    final stampedAt = createdAt ?? DateTime.now().toUtc();
     final existing = await _db.query(
       'outbox',
-      where: 'doctype = ? AND mobile_uuid = ? AND state IN (?, ?, ?, ?)',
-      whereArgs: [
-        doctype,
-        mobileUuid,
-        OutboxState.pending.wireName,
-        OutboxState.failed.wireName,
-        OutboxState.blocked.wireName,
-        OutboxState.conflict.wireName,
-      ],
+      where: _collapsableWhereClause,
+      whereArgs: _collapsableWhereArgs(doctype, mobileUuid),
       orderBy: 'created_at ASC, id ASC',
     );
 
@@ -64,15 +81,8 @@ class OutboxDao {
       if (hasInsert) {
         await _db.delete(
           'outbox',
-          where: 'doctype = ? AND mobile_uuid = ? AND state IN (?, ?, ?, ?)',
-          whereArgs: [
-            doctype,
-            mobileUuid,
-            OutboxState.pending.wireName,
-            OutboxState.failed.wireName,
-            OutboxState.blocked.wireName,
-            OutboxState.conflict.wireName,
-          ],
+          where: _collapsableWhereClause,
+          whereArgs: _collapsableWhereArgs(doctype, mobileUuid),
         );
         return RecordSaveResult.cancelledLocally;
       }
@@ -85,19 +95,15 @@ class OutboxDao {
           doctype,
           mobileUuid,
           'UPDATE',
-          OutboxState.pending.wireName,
-          OutboxState.failed.wireName,
-          OutboxState.blocked.wireName,
-          OutboxState.conflict.wireName,
+          ..._collapsableStateWireNames,
         ],
       );
-      await _db.insert('outbox', <String, Object?>{
-        'doctype': doctype,
-        'mobile_uuid': mobileUuid,
-        'operation': operation.wireName,
-        'state': OutboxState.pending.wireName,
-        'created_at': ts,
-      });
+      await insertPending(
+        doctype: doctype,
+        mobileUuid: mobileUuid,
+        operation: operation,
+        createdAt: stampedAt,
+      );
       return RecordSaveResult.enqueued;
     }
 
@@ -105,13 +111,12 @@ class OutboxDao {
         operation == OutboxOperation.cancel) {
       // SUBMIT/CANCEL never collapse — they're docstatus transitions
       // distinct from prior INSERT/UPDATE rows.
-      await _db.insert('outbox', <String, Object?>{
-        'doctype': doctype,
-        'mobile_uuid': mobileUuid,
-        'operation': operation.wireName,
-        'state': OutboxState.pending.wireName,
-        'created_at': ts,
-      });
+      await insertPending(
+        doctype: doctype,
+        mobileUuid: mobileUuid,
+        operation: operation,
+        createdAt: stampedAt,
+      );
       return RecordSaveResult.enqueued;
     }
 
@@ -121,16 +126,7 @@ class OutboxDao {
       orElse: () => const <String, Object?>{},
     );
     if (existingInsert.isNotEmpty) {
-      await _db.update(
-        'outbox',
-        <String, Object?>{
-          'state': OutboxState.pending.wireName,
-          'error_code': null,
-          'error_message': null,
-        },
-        where: 'id = ?',
-        whereArgs: [existingInsert['id']],
-      );
+      await resetToPending(existingInsert['id'] as int);
       return RecordSaveResult.enqueued;
     }
     final existingUpdate = existing.firstWhere(
@@ -138,25 +134,15 @@ class OutboxDao {
       orElse: () => const <String, Object?>{},
     );
     if (existingUpdate.isNotEmpty) {
-      await _db.update(
-        'outbox',
-        <String, Object?>{
-          'state': OutboxState.pending.wireName,
-          'error_code': null,
-          'error_message': null,
-        },
-        where: 'id = ?',
-        whereArgs: [existingUpdate['id']],
-      );
+      await resetToPending(existingUpdate['id'] as int);
       return RecordSaveResult.enqueued;
     }
-    await _db.insert('outbox', <String, Object?>{
-      'doctype': doctype,
-      'mobile_uuid': mobileUuid,
-      'operation': operation.wireName,
-      'state': OutboxState.pending.wireName,
-      'created_at': ts,
-    });
+    await insertPending(
+      doctype: doctype,
+      mobileUuid: mobileUuid,
+      operation: operation,
+      createdAt: stampedAt,
+    );
     return RecordSaveResult.enqueued;
   }
 
@@ -169,15 +155,8 @@ class OutboxDao {
   }) async {
     await _db.delete(
       'outbox',
-      where: 'doctype = ? AND mobile_uuid = ? AND state IN (?, ?, ?, ?)',
-      whereArgs: [
-        doctype,
-        mobileUuid,
-        OutboxState.pending.wireName,
-        OutboxState.failed.wireName,
-        OutboxState.blocked.wireName,
-        OutboxState.conflict.wireName,
-      ],
+      where: _collapsableWhereClause,
+      whereArgs: _collapsableWhereArgs(doctype, mobileUuid),
     );
   }
 

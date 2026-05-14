@@ -152,16 +152,24 @@ class SyncController {
     await runPush();
   }
 
+  /// All outbox rows in any "actionable" terminal state — failed,
+  /// conflict, or blocked. These are the buckets surfaced to the user as
+  /// errors and the rows that [retryAll] re-queues. Shared by `retryAll`
+  /// and `pendingErrors` so the set of "error" states stays uniform.
+  Future<List<OutboxRow>> _allActionableRows() async {
+    return [
+      ...await outboxDao.findByState(OutboxState.failed),
+      ...await outboxDao.findByState(OutboxState.conflict),
+      ...await outboxDao.findByState(OutboxState.blocked),
+    ];
+  }
+
   /// Re-queue every error/blocked/conflict row sorted by Spec §7.4
   /// priority, then run a single push drain. [filterDoctypes] limits
   /// the operation to a doctype subset (used by the per-doctype
   /// `Retry` action in SyncErrorsScreen).
   Future<void> retryAll({List<String>? filterDoctypes}) async {
-    final all = [
-      ...await outboxDao.findByState(OutboxState.failed),
-      ...await outboxDao.findByState(OutboxState.conflict),
-      ...await outboxDao.findByState(OutboxState.blocked),
-    ];
+    final all = await _allActionableRows();
     final filtered = filterDoctypes == null
         ? all
         : all.where((r) => filterDoctypes.contains(r.doctype)).toList();
@@ -174,13 +182,7 @@ class SyncController {
 
   /// All rows currently in failed / conflict / blocked. Used by
   /// SyncErrorsScreen and the `Retry all` button's progress display.
-  Future<List<OutboxRow>> pendingErrors() async {
-    final rows = <OutboxRow>[];
-    rows.addAll(await outboxDao.findByState(OutboxState.failed));
-    rows.addAll(await outboxDao.findByState(OutboxState.conflict));
-    rows.addAll(await outboxDao.findByState(OutboxState.blocked));
-    return rows;
-  }
+  Future<List<OutboxRow>> pendingErrors() => _allActionableRows();
 
   /// Resolves a conflicted row.
   /// - [pullAndOverwriteLocal]: fetches the current server snapshot, applies

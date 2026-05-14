@@ -18,6 +18,7 @@ import '../services/sync_service.dart';
 import 'form_screen.dart';
 import 'widgets/form_builder.dart'
     show FrappeFormStyle, OnButtonPressedCallback, FieldChangeHandler;
+import 'widgets/screen_helpers.dart';
 import 'widgets/sync_error_banner.dart' show humanizeOutboxError;
 
 /// Layout variants for [DocumentListScreen].
@@ -376,21 +377,7 @@ class _DocumentListScreenState extends State<DocumentListScreen> {
               ];
             },
           ),
-          if (_isSyncing)
-            const Padding(
-              padding: EdgeInsets.all(16.0),
-              child: SizedBox(
-                width: 20,
-                height: 20,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              ),
-            )
-          else
-            IconButton(
-              icon: const Icon(Icons.refresh),
-              onPressed: _pullDocuments,
-              tooltip: 'Refresh',
-            ),
+          refreshOrSpinnerAction(isBusy: _isSyncing, onRefresh: _pullDocuments),
         ],
       ),
       body: _isLoading
@@ -435,6 +422,10 @@ class _DocumentListScreenState extends State<DocumentListScreen> {
 
   Widget _buildEmptyState() {
     final listStyle = widget.style ?? const DocumentListStyle();
+    // Original structure: `Center(Column(...))` with no surrounding
+    // Padding and a `bodySmall` subtitle — different enough from the
+    // canonical EmptyStateWidget (which adds Padding(24) and uses
+    // `bodyMedium`) that switching would visibly shift spacing.
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,

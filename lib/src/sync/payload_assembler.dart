@@ -1,5 +1,6 @@
 import 'package:sqflite/sqflite.dart';
 
+import '../database/schema/system_columns.dart';
 import '../models/doc_type_meta.dart';
 import '../models/outbox_row.dart';
 import 'child_table_info.dart';
@@ -11,26 +12,15 @@ import 'uuid_rewriter.dart';
 /// of the struct collapse onto the canonical class.
 typedef ChildInfo = ChildTableInfo;
 
-// Columns dropped before the assembled payload reaches the wire. This
-// is intentionally NARROWER than `PayloadSerializer.serializeForBase` —
-// `__is_local` companion columns are kept here so [UuidRewriter] can
-// see which Link values are local UUIDs that need rewriting. UuidRewriter
-// strips `__is_local` itself before returning.
-const _systemColumns = <String>{
-  'mobile_uuid',
-  'server_name',
-  'sync_status',
-  'sync_error',
-  'error_code',
-  'sync_attempts',
-  'last_attempt_at',
-  'sync_op',
-  'push_base_payload',
-  'local_modified',
-  'pulled_at',
-  // `modified` is handled explicitly: included for UPDATE/SUBMIT (Frappe's
-  // check_if_latest), excluded for INSERT.
-};
+// Columns dropped before the assembled payload reaches the wire. Shared
+// with [PayloadSerializer] via [systemSyncMetadataColumnNames] so the two
+// strip-decisions cannot drift apart. Intentionally NARROWER than
+// `PayloadSerializer.serializeForBase` — `__is_local` companion columns
+// are kept here so [UuidRewriter] can see which Link values are local
+// UUIDs that need rewriting. UuidRewriter strips `__is_local` itself
+// before returning. `modified` is handled explicitly: included for
+// UPDATE/SUBMIT (Frappe's check_if_latest), excluded for INSERT.
+const _systemColumns = systemSyncMetadataColumnNames;
 
 class PayloadAssembler {
   /// Reads the authoritative DB snapshot for [row], builds a payload dict

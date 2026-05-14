@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../models/outbox_row.dart';
+import '../widgets/screen_helpers.dart';
 
 /// List of currently-erroring outbox rows, grouped by doctype with
 /// per-row Retry / View error / Open actions and a header `Retry all`
@@ -95,29 +96,15 @@ class SyncErrorsScreen extends StatelessWidget {
 
   Widget _buildEmptyState(BuildContext context) {
     final theme = Theme.of(context);
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              Icons.check_circle_outline,
-              size: 64,
-              color: theme.colorScheme.primary,
-            ),
-            const SizedBox(height: 16),
-            Text('No sync errors', style: theme.textTheme.titleMedium),
-            const SizedBox(height: 8),
-            Text(
-              'All queued changes have synced successfully.',
-              textAlign: TextAlign.center,
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-            ),
-          ],
-        ),
+    return EmptyStateWidget(
+      icon: Icons.check_circle_outline,
+      iconColor: theme.colorScheme.primary,
+      title: 'No sync errors',
+      subtitle: 'All queued changes have synced successfully.',
+      // Original used onSurfaceVariant (theme-adaptive in dark mode);
+      // preserve exactly instead of the helper's grey-600 default.
+      subtitleStyle: theme.textTheme.bodyMedium?.copyWith(
+        color: theme.colorScheme.onSurfaceVariant,
       ),
     );
   }

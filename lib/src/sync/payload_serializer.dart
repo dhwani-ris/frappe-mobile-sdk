@@ -1,3 +1,4 @@
+import '../database/schema/system_columns.dart';
 import '../models/doc_type_meta.dart';
 
 /// Serializes a `docs__<doctype>` row into the canonical user-fields-only
@@ -13,29 +14,13 @@ import '../models/doc_type_meta.dart';
 /// and as the parent-field portion of a Frappe payload, so the merge
 /// base and the eventual push body are byte-comparable.
 class PayloadSerializer {
-  /// Columns excluded from outbound payloads. Mirrors the (private)
-  /// allow-list previously inlined in `PayloadAssembler._systemColumns`,
-  /// extended with the new metadata columns added by the legacy-retirement
-  /// schema bump (`error_code`, `last_attempt_at`, `push_base_payload`).
+  /// Columns excluded from outbound payloads. Sourced from the shared
+  /// [systemSyncMetadataColumnNames] so this strip-decision and the one
+  /// in `PayloadAssembler` cannot drift apart.
   ///
   /// Note: `docstatus` and `modified` are NOT in this set — they are
   /// genuine Frappe doc fields that the server expects on the wire.
-  static const _excludedColumns = <String>{
-    // Identity / link columns — emitted explicitly by the caller.
-    'mobile_uuid',
-    'server_name',
-    // Per-doc sync state.
-    'sync_status',
-    'sync_error',
-    'error_code',
-    'sync_attempts',
-    'last_attempt_at',
-    'sync_op',
-    'push_base_payload',
-    // Local bookkeeping.
-    'local_modified',
-    'pulled_at',
-  };
+  static const _excludedColumns = systemSyncMetadataColumnNames;
 
   static Map<String, Object?> serializeForBase(
     Map<String, Object?> row,

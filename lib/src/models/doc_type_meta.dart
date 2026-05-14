@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 
+import '../utils/frappe_json_utils.dart';
 import 'doc_field.dart';
 
 /// Represents Frappe DocType metadata
@@ -65,21 +66,8 @@ class DocTypeMeta {
       }
     }).toList();
 
-    // Handle isTable - can be int (0/1) or bool
-    bool isTableValue = false;
-    if (json['istable'] != null) {
-      if (json['istable'] is bool) {
-        isTableValue = json['istable'] as bool;
-      } else if (json['istable'] is int) {
-        isTableValue = (json['istable'] as int) == 1;
-      }
-    } else if (json['isTable'] != null) {
-      if (json['isTable'] is bool) {
-        isTableValue = json['isTable'] as bool;
-      } else if (json['isTable'] is int) {
-        isTableValue = (json['isTable'] as int) == 1;
-      }
-    }
+    // Handle isTable - can be int (0/1) or bool. See frappe_json_utils.
+    final isTableValue = parseBool(json['istable'] ?? json['isTable']);
 
     final titleField = json['title_field'] as String?;
     final sortField = json['sort_field'] as String?;
@@ -151,9 +139,7 @@ class DocTypeMeta {
       final permLevel = raw['permlevel'] ?? raw['perm_level'] ?? 0;
       if (permLevel is num && permLevel != 0) continue;
 
-      final flag = raw[action];
-      final allowed = flag == 1 || flag == true;
-      if (!allowed) continue;
+      if (!parseBool(raw[action])) continue;
 
       final role = raw['role']?.toString();
       if (userRoles == null || userRoles.isEmpty) {

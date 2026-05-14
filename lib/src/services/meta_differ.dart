@@ -36,9 +36,9 @@ class MetaDiffer {
       }
     }
 
-    final newTableSuffix = normalizeDoctypeTableName(
-      newMeta.name,
-    ).replaceFirst('docs__', '');
+    final newTableSuffix = stripDocsPrefix(
+      normalizeDoctypeTableName(newMeta.name),
+    );
     for (final name in oldByName.keys) {
       final oldFt = oldByName[name]!.fieldtype;
       if (sqliteColumnTypeFor(oldFt) == null) continue;

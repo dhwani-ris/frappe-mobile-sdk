@@ -65,6 +65,49 @@ class LoginConfig {
     );
   }
 
+  /// Builds [LoginConfig] from a JSON map supporting both snake_case and
+  /// camelCase keys (the local config-file format vs the API JSON format).
+  /// Delegated to from [AppConfig.fromJsonFile] so adding a new field to
+  /// [LoginConfig] only needs one factory edit instead of two.
+  factory LoginConfig.fromJsonFile(Map<String, dynamic> json) {
+    final socialProvidersJson =
+        (json['social_providers'] ?? json['socialProviders'])
+            as List<dynamic>? ??
+        const <dynamic>[];
+    return LoginConfig(
+      enablePasswordLogin:
+          json['enable_password_login'] as bool? ??
+          json['enablePasswordLogin'] as bool? ??
+          true,
+      enableOAuth:
+          json['enable_oauth'] as bool? ??
+          json['enableOAuth'] as bool? ??
+          false,
+      enableSocialLogin:
+          json['enable_social_login'] as bool? ??
+          json['enableSocialLogin'] as bool? ??
+          false,
+      enableMobileLogin:
+          json['enable_mobile_login'] as bool? ??
+          json['enableMobileLogin'] as bool? ??
+          false,
+      oauthClientId:
+          json['oauth_client_id'] as String? ??
+          json['oauthClientId'] as String?,
+      oauthClientSecret:
+          json['oauth_client_secret'] as String? ??
+          json['oauthClientSecret'] as String?,
+      socialProviders: socialProvidersJson
+          .whereType<Map<String, dynamic>>()
+          .map(SocialProviderConfig.fromJson)
+          .toList(),
+      autoDiscoverSocialProviders:
+          json['auto_discover_social_providers'] as bool? ??
+          json['autoDiscoverSocialProviders'] as bool? ??
+          true,
+    );
+  }
+
   Map<String, dynamic> toJson() {
     return {
       'enablePasswordLogin': enablePasswordLogin,
@@ -112,45 +155,9 @@ class AppConfig {
   /// Builds [AppConfig] from a JSON map (supports snake_case and camelCase).
   static AppConfig fromJsonFile(Map<String, dynamic> json) {
     final login = json['login_config'] ?? json['loginConfig'];
-    LoginConfig? loginConfig;
-    if (login is Map<String, dynamic>) {
-      final socialProvidersJson =
-          (login['social_providers'] ?? login['socialProviders'])
-              as List<dynamic>? ??
-          const <dynamic>[];
-      loginConfig = LoginConfig(
-        enablePasswordLogin:
-            login['enable_password_login'] as bool? ??
-            login['enablePasswordLogin'] as bool? ??
-            true,
-        enableOAuth:
-            login['enable_oauth'] as bool? ??
-            login['enableOAuth'] as bool? ??
-            false,
-        enableSocialLogin:
-            login['enable_social_login'] as bool? ??
-            login['enableSocialLogin'] as bool? ??
-            false,
-        enableMobileLogin:
-            login['enable_mobile_login'] as bool? ??
-            login['enableMobileLogin'] as bool? ??
-            false,
-        oauthClientId:
-            login['oauth_client_id'] as String? ??
-            login['oauthClientId'] as String?,
-        oauthClientSecret:
-            login['oauth_client_secret'] as String? ??
-            login['oauthClientSecret'] as String?,
-        socialProviders: socialProvidersJson
-            .whereType<Map<String, dynamic>>()
-            .map(SocialProviderConfig.fromJson)
-            .toList(),
-        autoDiscoverSocialProviders:
-            login['auto_discover_social_providers'] as bool? ??
-            login['autoDiscoverSocialProviders'] as bool? ??
-            true,
-      );
-    }
+    final loginConfig = login is Map<String, dynamic>
+        ? LoginConfig.fromJsonFile(login)
+        : null;
     return AppConfig(
       baseUrl: json['base_url'] as String? ?? json['baseUrl'] as String? ?? '',
       doctypes:

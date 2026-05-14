@@ -4,6 +4,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_form_builder/flutter_form_builder.dart';
 import 'base_field.dart';
+import 'field_helpers.dart';
 
 /// Widget for Password field type
 class PasswordField extends BaseField {
@@ -34,12 +35,7 @@ class PasswordField extends BaseField {
             suffixIcon: const Icon(Icons.lock),
           ),
       validator: field.reqd
-          ? (value) {
-              if (value == null || value.isEmpty) {
-                return '${field.displayLabel} is required';
-              }
-              return null;
-            }
+          ? (value) => requiredValidator(value, field.displayLabel)
           : null,
       onChanged: (val) => onChanged?.call(val),
     );

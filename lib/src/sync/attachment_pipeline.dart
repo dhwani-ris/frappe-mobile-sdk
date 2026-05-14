@@ -17,6 +17,16 @@ typedef AttachmentUploadFn =
 
 typedef FileFromPathFn = File Function(String path);
 
+/// Default retry-backoff schedule used by [AttachmentPipeline] and
+/// [PushEngine]'s `attachmentBackoff` / `networkBackoff` parameters.
+/// 3 attempts at 2s, 5s, 10s. Defined once so a product-side schedule
+/// change doesn't have to update three default-parameter sites.
+const List<Duration> kDefaultSyncBackoff = <Duration>[
+  Duration(seconds: 2),
+  Duration(seconds: 5),
+  Duration(seconds: 10),
+];
+
 class AttachmentUploadResult {
   final String fileName;
   final String fileUrl;
@@ -43,11 +53,7 @@ class AttachmentPipeline {
   AttachmentPipeline({
     required this.dao,
     required this.uploader,
-    this.backoff = const [
-      Duration(seconds: 2),
-      Duration(seconds: 5),
-      Duration(seconds: 10),
-    ],
+    this.backoff = kDefaultSyncBackoff,
     this.fileFromPath = _defaultFileFromPath,
   });
 

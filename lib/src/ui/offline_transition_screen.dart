@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../services/offline_transition_service.dart';
+import 'widgets/screen_helpers.dart';
 
 /// Full-screen UI for the offline → online transition flow.
 ///
@@ -87,25 +88,13 @@ class _Failed extends StatelessWidget {
   const _Failed({required this.state, required this.service});
 
   Future<void> _confirmForceExit(BuildContext context) async {
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Force exit?'),
-        content: Text(
+    final confirm = await showConfirmDialog(
+      context,
+      title: 'Force exit?',
+      content:
           'Discarding ${state.remainingDirty} pending record(s). '
           'This cannot be undone.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Discard'),
-          ),
-        ],
-      ),
+      confirmLabel: 'Discard',
     );
     if (confirm == true) await service.forceExit();
   }

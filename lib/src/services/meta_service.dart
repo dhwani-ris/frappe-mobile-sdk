@@ -53,10 +53,15 @@ class MetaService {
     _metaCacheOrder.add(doctype);
   }
 
-  /// Fetches from server and saves to DB only (no in-memory cache). Use for prefetch.
-  Future<void> fetchAndStoreInDb(String doctype) async {
-    final metaData = await _fetchMetaFromServer(doctype);
-    // Preserve existing serverModifiedAt and isMobileForm if exists
+  /// Upserts the server's meta JSON for [doctype], preserving the existing
+  /// row's `serverModifiedAt`, `isMobileForm`, `groupName`, and `sortOrder`
+  /// values. Shared by [fetchAndStoreInDb] (prefetch path) and [getMeta]'s
+  /// network-refresh branch so the four preserved fields cannot drift
+  /// between the two write paths.
+  Future<void> _upsertMetaJson(
+    String doctype,
+    Map<String, dynamic> metaData,
+  ) async {
     final existing = await _database.doctypeMetaDao.findByDoctype(doctype);
     final entity = DoctypeMetaEntity(
       doctype: doctype,
@@ -67,12 +72,17 @@ class MetaService {
       groupName: existing?.groupName,
       sortOrder: existing?.sortOrder,
     );
-    // Check if exists, update if present, insert if new
     if (existing != null) {
       await _database.doctypeMetaDao.updateDoctypeMeta(entity);
     } else {
       await _database.doctypeMetaDao.insertDoctypeMeta(entity);
     }
+  }
+
+  /// Fetches from server and saves to DB only (no in-memory cache). Use for prefetch.
+  Future<void> fetchAndStoreInDb(String doctype) async {
+    final metaData = await _fetchMetaFromServer(doctype);
+    await _upsertMetaJson(doctype, metaData);
     // Invalidate the in-memory LRU so the next getMeta() reload reads the
     // freshly-persisted row instead of serving the previous cached copy.
     // Without this, schema changes synced via prefetchToDb /
@@ -139,22 +149,7 @@ class MetaService {
 
     final metaData = await _fetchMetaFromServer(doctype);
     final meta = DocTypeMeta.fromJson(metaData);
-    // Preserve existing serverModifiedAt and isMobileForm if exists
-    final existing = await _database.doctypeMetaDao.findByDoctype(doctype);
-    final entity = DoctypeMetaEntity(
-      doctype: doctype,
-      modified: metaData['modified']?.toString(),
-      serverModifiedAt: existing?.serverModifiedAt,
-      isMobileForm: existing?.isMobileForm ?? false,
-      metaJson: jsonEncode(metaData),
-      groupName: existing?.groupName,
-      sortOrder: existing?.sortOrder,
-    );
-    if (existing != null) {
-      await _database.doctypeMetaDao.updateDoctypeMeta(entity);
-    } else {
-      await _database.doctypeMetaDao.insertDoctypeMeta(entity);
-    }
+    await _upsertMetaJson(doctype, metaData);
     _putInCache(doctype, meta);
     return meta;
   }
@@ -303,32 +298,13 @@ class MetaService {
     }
   }
 
-  /// Sync all mobile form doctypes.
-  Future<void> syncAllMobileFormDoctypes() async {
-    try {
-      final mobileFormMetas = await _database.doctypeMetaDao
-          .findMobileFormDoctypes();
-      final mobileFormDoctypes = mobileFormMetas
-          .map((meta) => meta.doctype)
-          .toList();
-
-      if (mobileFormDoctypes.isNotEmpty) {
-        for (final doctype in mobileFormDoctypes) {
-          try {
-            await fetchAndStoreInDb(doctype);
-          } catch (e, st) {
-            debugPrint(
-              'MetaService.syncAllMobileFormDoctypes($doctype) failed — $e\n$st',
-            );
-            continue;
-          }
-        }
-      }
-    } catch (e, st) {
-      debugPrint('MetaService.syncAllMobileFormDoctypes failed — $e\n$st');
-      return;
-    }
-  }
+  /// Alias for [prefetchMobileFormDoctypes]. Retained so the existing
+  /// `FrappeSDK.syncAll()` facade keeps its semantic name; the underlying
+  /// behavior (fetch + DB-store for every mobile form doctype, per-doctype
+  /// debugPrint on failure) is identical because [prefetchToDb] — invoked
+  /// by [prefetchMobileFormDoctypes] — loops `fetchAndStoreInDb` with the
+  /// same per-doctype error guard.
+  Future<void> syncAllMobileFormDoctypes() => prefetchMobileFormDoctypes();
 
   /// Updates mobile form doctypes in database from mobile form names list.
   ///

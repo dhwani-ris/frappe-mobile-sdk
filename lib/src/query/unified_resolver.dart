@@ -8,6 +8,7 @@ import 'package:sqflite/sqflite.dart';
 import '../api/client.dart';
 import '../database/daos/doctype_meta_dao.dart';
 import '../database/table_name.dart';
+import '../models/doc_type_meta.dart';
 import '../models/meta_resolver.dart';
 import '../models/offline_mode.dart';
 import '../models/offline_mode_notifier.dart';
@@ -101,21 +102,23 @@ class UnifiedResolver {
       );
     }
     final meta = await metaResolver(doctype);
-    final tableName =
-        await metaDao.getTableName(doctype) ??
-        normalizeDoctypeTableName(doctype);
+    final tableName = await metaDao.tableNameFor(doctype);
 
     // For child tables, Frappe link_filters reference Frappe's virtual
     // `parent` field (server_name of parent). The local schema stores
     // the parent's mobile_uuid in `parent_uuid` instead. Translate
     // before handing off to FilterParser so the column whitelist check
     // passes and the lookup finds both offline and synced child rows.
-    final effectiveFilters = meta.isTable
-        ? await _translateParentFilters(filters, tableName)
-        : <List>[...filters];
-    final effectiveOrFilters = meta.isTable
-        ? await _translateParentFilters(orFilters, tableName)
-        : <List>[...orFilters];
+    final effectiveFilters = await _maybeTranslateFilters(
+      filters,
+      meta,
+      tableName,
+    );
+    final effectiveOrFilters = await _maybeTranslateFilters(
+      orFilters,
+      meta,
+      tableName,
+    );
 
     // Child tables (isTable=true) have no sync_status column — skip.
     if (!includeFailed && !meta.isTable) {
@@ -165,12 +168,7 @@ class UnifiedResolver {
       breakdown[origin] = (breakdown[origin] ?? 0) + 1;
     }
 
-    return QueryResult<Map<String, Object?>>(
-      rows: rows,
-      hasMore: rows.length == pageSize,
-      returnedCount: rows.length,
-      originBreakdown: breakdown,
-    );
+    return QueryResult.ofRows(rows, pageSize, breakdown);
   }
 
   /// Counts rows for [doctype] in the active mode.
@@ -201,9 +199,7 @@ class UnifiedResolver {
       }
     }
 
-    final tableName =
-        await metaDao.getTableName(doctype) ??
-        normalizeDoctypeTableName(doctype);
+    final tableName = await metaDao.tableNameFor(doctype);
     final whereClause = dirtyOnly
         ? "sync_status IN ('dirty','sync_error','sync_blocked')"
         : "sync_status != 'failed'";
@@ -255,13 +251,10 @@ class UnifiedResolver {
         .whereType<Map<String, dynamic>>()
         .map((r) => Map<String, Object?>.from(r))
         .toList();
-    return QueryResult<Map<String, Object?>>(
-      rows: rows,
-      hasMore: rows.length == pageSize,
-      returnedCount: rows.length,
-      originBreakdown: rows.isEmpty
-          ? const {}
-          : {RowOrigin.server: rows.length},
+    return QueryResult.ofRows(
+      rows,
+      pageSize,
+      rows.isEmpty ? const {} : {RowOrigin.server: rows.length},
     );
   }
 
@@ -307,6 +300,22 @@ class UnifiedResolver {
   /// Translates Frappe's virtual `parent` column references into
   /// `parent_uuid` lookups for child-table queries.
   ///
+  /// Translates [filters] through [_translateParentFilters] for child-table
+  /// doctypes, or returns a shallow copy otherwise. Lifts the two
+  /// ternaries (one for `filters`, one for `orFilters`) out of [resolve]
+  /// so adding a third filter list (e.g. future `sort_by` filters) doesn't
+  /// require copy-pasting the conditional.
+  Future<List<List>> _maybeTranslateFilters(
+    List<List> input,
+    DocTypeMeta meta,
+    String tableName,
+  ) async {
+    if (meta.isTable) {
+      return _translateParentFilters(input, tableName);
+    }
+    return <List>[...input];
+  }
+
   /// Frappe link_filters use `parent` (the server_name of the parent row),
   /// but the local child schema stores the parent's mobile_uuid in
   /// `parent_uuid`. For offline records the Link picker returns mobile_uuid

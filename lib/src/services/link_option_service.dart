@@ -34,6 +34,26 @@ class LinkOptionService {
        _metaResolver = metaResolver,
        _syncCompleteStream = syncComplete$;
 
+  /// Converts Frappe-shaped filter rows to the 3-tuple `[field, op, value]`
+  /// shape that [UnifiedResolver.resolve] consumes. Frappe APIs hand back
+  /// either 4-tuples (`[doctype, field, op, value]`) or already-3-tuples;
+  /// rows of any other length are silently dropped (consistent with the
+  /// pre-refactor inline behavior). The output type is always
+  /// `List<List<dynamic>>` so both callers (`getLinkOptions` and
+  /// `getLinkOptionsOffline`) get the same typed collection.
+  static List<List<dynamic>> _toThreeTuples(List<List>? filters) {
+    final out = <List<dynamic>>[];
+    if (filters == null) return out;
+    for (final f in filters) {
+      if (f.length == 4) {
+        out.add([f[1], f[2], f[3]]);
+      } else if (f.length == 3) {
+        out.add(List<dynamic>.from(f));
+      }
+    }
+    return out;
+  }
+
   /// Test / subclass constructor. Use when all methods are overridden and no
   /// resolver is needed (e.g. recording mocks in widget tests).
   LinkOptionService.withoutResolver()
@@ -55,16 +75,7 @@ class LinkOptionService {
     final titleField = meta.titleField;
 
     // Convert Frappe 4-tuple filters [doctype, field, op, value] → 3-tuples.
-    final threeTuples = <List<dynamic>>[];
-    if (normalizedFilters != null) {
-      for (final f in normalizedFilters) {
-        if (f.length == 4) {
-          threeTuples.add([f[1], f[2], f[3]]);
-        } else if (f.length == 3) {
-          threeTuples.add(List<dynamic>.from(f));
-        }
-      }
-    }
+    final threeTuples = _toThreeTuples(normalizedFilters);
 
     final result = await resolver.resolve(
       doctype: doctype,
@@ -333,16 +344,7 @@ class LinkOptionService {
     final meta = await metaResolver(doctype);
     final titleField = meta.titleField;
 
-    final threeTuples = <List>[];
-    if (filters != null) {
-      for (final f in filters) {
-        if (f.length == 4) {
-          threeTuples.add([f[1], f[2], f[3]]);
-        } else if (f.length == 3) {
-          threeTuples.add(List<dynamic>.from(f));
-        }
-      }
-    }
+    final threeTuples = _toThreeTuples(filters);
     if (query != null && query.isNotEmpty && titleField != null) {
       threeTuples.add([titleField, 'like', '%$query%']);
     }

@@ -1,10 +1,21 @@
 import 'package:sqflite/sqflite.dart';
 import '../entities/doctype_meta_entity.dart';
+import '../table_name.dart';
 
 class DoctypeMetaDao {
   final Database _database;
 
   DoctypeMetaDao(this._database);
+
+  /// Resolves the persisted table_name override for [doctype], falling back
+  /// to [normalizeDoctypeTableName] if no override row exists. Replaces the
+  /// `metaDao.getTableName(doctype) ?? normalizeDoctypeTableName(doctype)`
+  /// idiom previously inlined in `UnifiedResolver`, `PullEngine`, and
+  /// `PushEngine` so a fallback-strategy change (cache, logging, alternate
+  /// naming) is made in exactly one place.
+  Future<String> tableNameFor(String doctype) async {
+    return await getTableName(doctype) ?? normalizeDoctypeTableName(doctype);
+  }
 
   Future<DoctypeMetaEntity?> findByDoctype(String doctype) async {
     final maps = await _database.query(
@@ -114,17 +125,24 @@ class DoctypeMetaDao {
     );
   }
 
-  Future<String?> getTableName(String doctype) async {
+  /// Reads a single text column from `doctype_meta` for the given doctype,
+  /// returning null when the row is absent or the column is null. Shared
+  /// implementation backing every single-column getter on this DAO so
+  /// schema- or query-shape changes only need editing here.
+  Future<String?> _readStringCol(String doctype, String column) async {
     final rows = await _database.query(
       'doctype_meta',
-      columns: ['table_name'],
+      columns: [column],
       where: 'doctype = ?',
       whereArgs: [doctype],
       limit: 1,
     );
     if (rows.isEmpty) return null;
-    return rows.first['table_name'] as String?;
+    return rows.first[column] as String?;
   }
+
+  Future<String?> getTableName(String doctype) =>
+      _readStringCol(doctype, 'table_name');
 
   Future<void> setMetaWatermark(String doctype, String watermark) async {
     await _database.update(
@@ -135,17 +153,8 @@ class DoctypeMetaDao {
     );
   }
 
-  Future<String?> getMetaWatermark(String doctype) async {
-    final rows = await _database.query(
-      'doctype_meta',
-      columns: ['meta_watermark'],
-      where: 'doctype = ?',
-      whereArgs: [doctype],
-      limit: 1,
-    );
-    if (rows.isEmpty) return null;
-    return rows.first['meta_watermark'] as String?;
-  }
+  Future<String?> getMetaWatermark(String doctype) =>
+      _readStringCol(doctype, 'meta_watermark');
 
   Future<void> setDepGraphJson(String doctype, String depGraphJson) async {
     await _database.update(
@@ -156,17 +165,8 @@ class DoctypeMetaDao {
     );
   }
 
-  Future<String?> getDepGraphJson(String doctype) async {
-    final rows = await _database.query(
-      'doctype_meta',
-      columns: ['dep_graph_json'],
-      where: 'doctype = ?',
-      whereArgs: [doctype],
-      limit: 1,
-    );
-    if (rows.isEmpty) return null;
-    return rows.first['dep_graph_json'] as String?;
-  }
+  Future<String?> getDepGraphJson(String doctype) =>
+      _readStringCol(doctype, 'dep_graph_json');
 
   Future<void> setLastOkCursor(String doctype, String cursorJson) async {
     await _database.update(
@@ -189,17 +189,8 @@ class DoctypeMetaDao {
     );
   }
 
-  Future<String?> getLastOkCursor(String doctype) async {
-    final rows = await _database.query(
-      'doctype_meta',
-      columns: ['last_ok_cursor'],
-      where: 'doctype = ?',
-      whereArgs: [doctype],
-      limit: 1,
-    );
-    if (rows.isEmpty) return null;
-    return rows.first['last_ok_cursor'] as String?;
-  }
+  Future<String?> getLastOkCursor(String doctype) =>
+      _readStringCol(doctype, 'last_ok_cursor');
 
   Future<void> markEntryPoint(String doctype, bool isEntryPoint) async {
     await _database.update(
@@ -221,17 +212,8 @@ class DoctypeMetaDao {
 
   /// Lighter accessors for offline-first meta sync — avoid round-tripping
   /// through [DoctypeMetaEntity] when only the JSON blob is needed.
-  Future<String?> getMetaJson(String doctype) async {
-    final rows = await _database.query(
-      'doctype_meta',
-      columns: ['metaJson'],
-      where: 'doctype = ?',
-      whereArgs: [doctype],
-      limit: 1,
-    );
-    if (rows.isEmpty) return null;
-    return rows.first['metaJson'] as String?;
-  }
+  Future<String?> getMetaJson(String doctype) =>
+      _readStringCol(doctype, 'metaJson');
 
   Future<void> upsertMetaJson(String doctype, String metaJson) async {
     final updated = await _database.update(

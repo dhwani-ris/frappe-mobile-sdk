@@ -73,38 +73,36 @@ class FilterParser {
     final whereParts = <String>[];
     final params = <Object?>[];
 
-    for (final f in filters) {
-      if (f.length == 4) {
-        throw const UnsupportedFilterError(
-          'Cross-doctype child-table filters '
-          '[["Doctype","field","op","value"]] are not supported in v1; '
-          'flatten to parent-field filters.',
-        );
-      }
-      if (f.length != 3) {
-        throw FilterParseError(
+    // Canonical messages — both filter and or_filter loops use the same
+    // wording (including the "flatten to parent-field filters" hint that
+    // the or_filter copy used to omit). Keeps caller-facing error text
+    // consistent across the two unsupported-feature paths.
+    const length4 =
+        'Cross-doctype child-table filters '
+        '[["Doctype","field","op","value"]] are not supported in v1; '
+        'flatten to parent-field filters.';
+    _parseAndCollect(
+      filters,
+      colTypes: colTypes,
+      normFields: normFields,
+      sqlParts: whereParts,
+      params: params,
+      malformedMessage: (f) =>
           'Malformed filter: $f (expected [col, op, value])',
-        );
-      }
-      final parsed = _parseOne(f, colTypes, normFields);
-      whereParts.add(parsed.sql);
-      params.addAll(parsed.params);
-    }
+      length4Message: length4,
+    );
 
     final orParts = <String>[];
-    for (final f in orFilters) {
-      if (f.length == 4) {
-        throw const UnsupportedFilterError(
-          'Cross-doctype child-table or_filters not supported in v1.',
-        );
-      }
-      if (f.length != 3) {
-        throw FilterParseError('Malformed or_filter: $f');
-      }
-      final parsed = _parseOne(f, colTypes, normFields);
-      orParts.add(parsed.sql);
-      params.addAll(parsed.params);
-    }
+    _parseAndCollect(
+      orFilters,
+      colTypes: colTypes,
+      normFields: normFields,
+      sqlParts: orParts,
+      params: params,
+      malformedMessage: (f) =>
+          'Malformed or_filter: $f (expected [col, op, value])',
+      length4Message: length4,
+    );
 
     final where = <String>[];
     where.addAll(whereParts);
@@ -131,6 +129,47 @@ class FilterParser {
     return ParsedQuery(sql: sb.toString(), params: params);
   }
 
+  /// Validates each filter row in [inputs] (rejecting 4-tuples with
+  /// [length4Message], non-3-tuples via [malformedMessage]), dispatches
+  /// each to [_parseOne], and appends the resulting SQL fragment to
+  /// [sqlParts] and bind values to [params]. Shared by the `filters` and
+  /// `orFilters` loops so a new tuple shape only requires editing this
+  /// method instead of two parallel loops.
+  static void _parseAndCollect(
+    List<List<dynamic>> inputs, {
+    required Map<String, String> colTypes,
+    required Set<String> normFields,
+    required List<String> sqlParts,
+    required List<Object?> params,
+    required String Function(List<dynamic>) malformedMessage,
+    required String length4Message,
+  }) {
+    for (final f in inputs) {
+      if (f.length == 4) {
+        throw UnsupportedFilterError(length4Message);
+      }
+      if (f.length != 3) {
+        throw FilterParseError(malformedMessage(f));
+      }
+      final parsed = _parseOne(f, colTypes, normFields);
+      sqlParts.add(parsed.sql);
+      params.addAll(parsed.params);
+    }
+  }
+
+  /// Returns the canonical SQL `IFNULL($col, <empty>)` wrapper used to
+  /// coalesce null column values before equality / LIKE comparisons.
+  /// Picks `0` for numeric columns and `''` for text — sourced once so
+  /// a future switch (e.g. to `COALESCE` or collation suffixes) applies
+  /// to every text / numeric comparison site at once.
+  static String _ifnullExpr(String col, bool isNumeric) =>
+      isNumeric ? 'IFNULL($col, 0)' : "IFNULL($col, '')";
+
+  /// Returns the canonical `col >= ? AND col <= ?` SQL fragment used by
+  /// both the `between` and `timespan` operators.
+  static ParsedQuery _rangeQuery(String col, Object? start, Object? end) =>
+      ParsedQuery(sql: '$col >= ? AND $col <= ?', params: [start, end]);
+
   static ParsedQuery _parseOne(
     List f,
     Map<String, String> colTypes,
@@ -153,10 +192,10 @@ class FilterParser {
     switch (op) {
       case '=':
       case '!=':
-        if (isNumeric) {
-          return ParsedQuery(sql: 'IFNULL($col, 0) $op ?', params: [value]);
-        }
-        return ParsedQuery(sql: "IFNULL($col, '') $op ?", params: [value]);
+        return ParsedQuery(
+          sql: '${_ifnullExpr(col, isNumeric)} $op ?',
+          params: [value],
+        );
       case '<':
       case '<=':
       case '>':
@@ -185,7 +224,10 @@ class FilterParser {
             params: [normalizeForSearch(value?.toString())],
           );
         }
-        return ParsedQuery(sql: "IFNULL($col, '') $sqlOp ?", params: [value]);
+        return ParsedQuery(
+          sql: '${_ifnullExpr(col, false)} $sqlOp ?',
+          params: [value],
+        );
       case 'between':
         if (value is! List || value.length != 2) {
           throw const FilterParseError('"between" needs a 2-element list');
@@ -200,25 +242,25 @@ class FilterParser {
           isStart: false,
           type: type,
         );
-        return ParsedQuery(
-          sql: '$col >= ? AND $col <= ?',
-          params: [start, end],
-        );
+        return _rangeQuery(col, start, end);
       case 'timespan':
         if (value == null) {
           throw const FilterParseError('"timespan" requires a keyword value');
         }
         final range = FrappeTimespan.resolve(value.toString());
-        return ParsedQuery(
-          sql: '$col >= ? AND $col <= ?',
-          params: [range.start, range.end],
-        );
+        return _rangeQuery(col, range.start, range.end);
       case 'is':
         if (value == 'set') {
-          return ParsedQuery(sql: "IFNULL($col, '') != ''", params: const []);
+          return ParsedQuery(
+            sql: "${_ifnullExpr(col, false)} != ''",
+            params: const [],
+          );
         }
         if (value == 'not set') {
-          return ParsedQuery(sql: "IFNULL($col, '') = ''", params: const []);
+          return ParsedQuery(
+            sql: "${_ifnullExpr(col, false)} = ''",
+            params: const [],
+          );
         }
         if (value == null) {
           return ParsedQuery(sql: '$col IS NULL', params: const []);

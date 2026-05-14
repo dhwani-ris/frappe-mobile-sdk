@@ -4,6 +4,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_form_builder/flutter_form_builder.dart';
 import 'base_field.dart';
+import 'field_helpers.dart';
 
 /// Widget for Rating field type
 class RatingField extends BaseField {
@@ -44,22 +45,15 @@ class RatingField extends BaseField {
       initialValue: initialRating,
       enabled: enabled && !field.readOnly,
       validator: field.reqd
-          ? (value) {
-              if (value == null) {
-                return '${field.displayLabel} is required';
-              }
-              return null;
-            }
+          ? (value) => requiredValidator(value, field.displayLabel)
           : null,
       builder: (FormFieldState<int> fieldState) {
+        // BaseField.build already renders the external label with
+        // required-asterisk; the inline label that used to live here is
+        // gone for parity with text/numeric/etc field widgets.
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            if (field.label != null)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 8.0),
-                child: Text(field.label!, style: style?.labelStyle),
-              ),
             Row(
               children: List.generate(maxRating, (index) {
                 final rating = index + 1;
@@ -80,14 +74,7 @@ class RatingField extends BaseField {
                 );
               }),
             ),
-            if (fieldState.hasError)
-              Padding(
-                padding: const EdgeInsets.only(top: 4.0),
-                child: Text(
-                  fieldState.errorText!,
-                  style: const TextStyle(color: Colors.red, fontSize: 12),
-                ),
-              ),
+            fieldErrorText(fieldState),
           ],
         );
       },

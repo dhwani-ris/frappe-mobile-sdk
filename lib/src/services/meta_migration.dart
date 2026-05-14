@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:sqflite/sqflite.dart';
 import '../database/normalize_for_search.dart';
+import '../database/schema/system_columns.dart';
 import '../models/meta_diff.dart';
 
 class MetaMigration {
@@ -51,7 +52,7 @@ class MetaMigration {
         final exists = await _columnExists(txn, tableName, '${ln}__is_local');
         if (!exists) {
           await txn.execute(
-            'ALTER TABLE $tableName ADD COLUMN ${ln}__is_local INTEGER',
+            'ALTER TABLE $tableName ADD COLUMN ${linkCompanionColumnDDL(ln)}',
           );
           debugPrint('MetaMigration[$tableName] added ${ln}__is_local');
         }

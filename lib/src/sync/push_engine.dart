@@ -121,16 +121,8 @@ class PushEngine {
     required this.attachmentUploader,
     DependenciesForRowFn? dependencyScanner,
     this.writeQueueResolver,
-    this.attachmentBackoff = const [
-      Duration(seconds: 2),
-      Duration(seconds: 5),
-      Duration(seconds: 10),
-    ],
-    this.networkBackoff = const [
-      Duration(seconds: 2),
-      Duration(seconds: 5),
-      Duration(seconds: 10),
-    ],
+    this.attachmentBackoff = kDefaultSyncBackoff,
+    this.networkBackoff = kDefaultSyncBackoff,
   }) : dependencyScanner = dependencyScanner ?? _defaultDependencyScanner;
 
   /// Drains the outbox once. Call this on user save (debounced), on
@@ -273,9 +265,7 @@ class PushEngine {
     );
 
     final childMetas = await _childMetasFor(meta);
-    final parentTable =
-        await metaDao.getTableName(row.doctype) ??
-        normalizeDoctypeTableName(row.doctype);
+    final parentTable = await metaDao.tableNameFor(row.doctype);
 
     // Read the per-doc snapshot — it's the canonical source of truth for
     // server_name and retry counters. The slim outbox no longer carries
@@ -385,9 +375,7 @@ class PushEngine {
         entry.value.doctype,
       );
     }
-    final parentTable =
-        await metaDao.getTableName(row.doctype) ??
-        normalizeDoctypeTableName(row.doctype);
+    final parentTable = await metaDao.tableNameFor(row.doctype);
     if (writeQueueResolver != null) {
       final wq = _writeQueues.putIfAbsent(
         row.doctype,
@@ -417,9 +405,7 @@ class PushEngine {
     OutboxRow row,
     TimestampMismatchError err,
   ) async {
-    final parentTable =
-        await metaDao.getTableName(row.doctype) ??
-        normalizeDoctypeTableName(row.doctype);
+    final parentTable = await metaDao.tableNameFor(row.doctype);
     final currentRows = await db.query(
       parentTable,
       where: 'mobile_uuid = ?',

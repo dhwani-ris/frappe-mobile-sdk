@@ -3,6 +3,7 @@
 
 import 'dart:io';
 import 'rest_helper.dart';
+import 'utils.dart';
 
 class AttachmentService {
   final RestHelper _restHelper;
@@ -37,9 +38,6 @@ class AttachmentService {
       fields: fields,
     );
 
-    if (response is Map<String, dynamic> && response.containsKey('message')) {
-      return response['message'] as Map<String, dynamic>;
-    }
-    return response as Map<String, dynamic>;
+    return unwrapMessage<Map<String, dynamic>>(response);
   }
 }

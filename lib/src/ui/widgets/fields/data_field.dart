@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_form_builder/flutter_form_builder.dart';
 import 'base_field.dart';
+import 'field_helpers.dart';
 
 /// Widget for Data field type
 class DataField extends BaseField {
@@ -52,11 +53,10 @@ class DataField extends BaseField {
           : null,
       validator: field.reqd
           ? (value) {
-              if (value == null || value.toString().isEmpty) {
-                return '${field.displayLabel} is required';
-              }
+              final required = requiredValidator(value, field.displayLabel);
+              if (required != null) return required;
               // Phone validation - must start with + and country code
-              if (isPhone && value.isNotEmpty) {
+              if (isPhone && value!.isNotEmpty) {
                 final trimmed = value.trim();
                 // Check if it starts with + (required by Frappe)
                 if (!trimmed.startsWith('+')) {

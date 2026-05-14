@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_form_builder/flutter_form_builder.dart';
 import 'base_field.dart';
+import 'field_helpers.dart';
 
 /// Widget for Select field type. Supports single and multi-select (when field.allowMultiple).
 class SelectField extends BaseField {
@@ -90,12 +91,7 @@ class SelectField extends BaseField {
             .map((opt) => FormBuilderFieldOption(value: opt, child: Text(opt)))
             .toList(),
         validator: field.reqd
-            ? (value) {
-                if (value == null || value.isEmpty) {
-                  return '${field.displayLabel} is required';
-                }
-                return null;
-              }
+            ? (value) => requiredValidator(value, field.displayLabel)
             : null,
         onChanged: (val) => onChanged?.call(_listToValue(val)),
       );
@@ -137,12 +133,7 @@ class SelectField extends BaseField {
         return DropdownMenuItem<String>(value: option, child: Text(option));
       }).toList(),
       validator: field.reqd
-          ? (value) {
-              if (value == null || value.toString().isEmpty) {
-                return '${field.displayLabel} is required';
-              }
-              return null;
-            }
+          ? (value) => requiredValidator(value, field.displayLabel)
           : null,
       onChanged: (val) => onChanged?.call(val),
     );

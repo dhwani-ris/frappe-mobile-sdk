@@ -3,7 +3,9 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter_form_builder/flutter_form_builder.dart';
+import '../../../utils/date_helpers.dart';
 import 'base_field.dart';
+import 'field_helpers.dart';
 
 /// Widget for Duration field type (in seconds)
 class DurationField extends BaseField {
@@ -15,17 +17,6 @@ class DurationField extends BaseField {
     super.enabled,
     super.style,
   });
-
-  String _formatDuration(int seconds) {
-    final hours = seconds ~/ 3600;
-    final minutes = (seconds % 3600) ~/ 60;
-    final secs = seconds % 60;
-
-    if (hours > 0) {
-      return '${hours.toString().padLeft(2, '0')}:${minutes.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}';
-    }
-    return '${minutes.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}';
-  }
 
   int? _parseDuration(String? value) {
     if (value == null || value.isEmpty) return null;
@@ -69,7 +60,7 @@ class DurationField extends BaseField {
       key: ValueKey('duration_${field.fieldname}'),
       name: field.fieldname ?? '',
       initialValue: initialSeconds != null
-          ? _formatDuration(initialSeconds)
+          ? formatDurationSeconds(initialSeconds)
           : null,
       enabled: enabled && !field.readOnly,
       keyboardType: TextInputType.number,
@@ -84,9 +75,8 @@ class DurationField extends BaseField {
           ),
       validator: field.reqd
           ? (value) {
-              if (value == null || value.isEmpty) {
-                return '${field.displayLabel} is required';
-              }
+              final required = requiredValidator(value, field.displayLabel);
+              if (required != null) return required;
               if (_parseDuration(value) == null) {
                 return 'Invalid duration format';
               }

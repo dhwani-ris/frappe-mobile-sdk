@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../services/sync_service.dart';
 import '../services/offline_repository.dart';
 import '../models/document.dart';
+import 'widgets/screen_helpers.dart';
 
 /// Screen to display sync status and errors
 class SyncStatusScreen extends StatefulWidget {
@@ -77,11 +78,10 @@ class _SyncStatusScreenState extends State<SyncStatusScreen> {
           _showErrorDialog(result.errors);
         }
       } else if (result.success > 0 && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Successfully synced ${result.success} document(s)'),
-            backgroundColor: Colors.green,
-          ),
+        showStatusSnackBar(
+          context,
+          'Successfully synced ${result.success} document(s)',
+          severity: SnackBarSeverity.success,
         );
       }
     } catch (e, st) {
@@ -92,11 +92,10 @@ class _SyncStatusScreenState extends State<SyncStatusScreen> {
       });
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Sync error: $e'),
-            backgroundColor: Colors.red,
-          ),
+        showStatusSnackBar(
+          context,
+          'Sync error: $e',
+          severity: SnackBarSeverity.error,
         );
       }
     }
@@ -128,11 +127,10 @@ class _SyncStatusScreenState extends State<SyncStatusScreen> {
           _showErrorDialog(result.errors);
         }
       } else if (result.success > 0 && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Successfully synced ${result.success} document(s)'),
-            backgroundColor: Colors.green,
-          ),
+        showStatusSnackBar(
+          context,
+          'Successfully synced ${result.success} document(s)',
+          severity: SnackBarSeverity.success,
         );
       }
     } catch (e, st) {
@@ -143,11 +141,10 @@ class _SyncStatusScreenState extends State<SyncStatusScreen> {
       });
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Sync error: $e'),
-            backgroundColor: Colors.red,
-          ),
+        showStatusSnackBar(
+          context,
+          'Sync error: $e',
+          severity: SnackBarSeverity.error,
         );
       }
     }
@@ -217,21 +214,10 @@ class _SyncStatusScreenState extends State<SyncStatusScreen> {
       appBar: AppBar(
         title: const Text('Sync Status'),
         actions: [
-          if (_isSyncing)
-            const Padding(
-              padding: EdgeInsets.all(16.0),
-              child: SizedBox(
-                width: 20,
-                height: 20,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              ),
-            )
-          else
-            IconButton(
-              icon: const Icon(Icons.refresh),
-              onPressed: _loadDirtyDocuments,
-              tooltip: 'Refresh',
-            ),
+          refreshOrSpinnerAction(
+            isBusy: _isSyncing,
+            onRefresh: _loadDirtyDocuments,
+          ),
         ],
       ),
       body: Column(
@@ -285,6 +271,9 @@ class _SyncStatusScreenState extends State<SyncStatusScreen> {
             child: _isLoading
                 ? const Center(child: CircularProgressIndicator())
                 : _dirtyDocuments.isEmpty
+                // Original used `Center(Column(...))` with no surrounding
+                // Padding and a bold title — EmptyStateWidget's canonical
+                // Padding(24) + titleMedium would visibly shift this.
                 ? Center(
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,

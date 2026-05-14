@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import '../utils/frappe_json_utils.dart' as frappe_json;
+
 /// Represents a Frappe DocField (field definition in metadata)
 class DocField {
   final String? fieldname;
@@ -54,14 +56,9 @@ class DocField {
   });
 
   factory DocField.fromJson(Map<String, dynamic> json) {
-    // Handle Frappe's JSON format - can be int (0/1) or bool
-    bool parseBool(dynamic value, {bool defaultValue = false}) {
-      if (value == null) return defaultValue;
-      if (value is bool) return value;
-      if (value is int) return value == 1;
-      if (value is String) return value == '1' || value.toLowerCase() == 'true';
-      return defaultValue;
-    }
+    // Frappe's JSON encodes booleans inconsistently — see frappe_json_utils.
+    bool parseBool(dynamic v, {bool defaultValue = false}) =>
+        frappe_json.parseBool(v, defaultValue: defaultValue);
 
     int? parseInt(dynamic value) {
       if (value == null) return null;

@@ -1,3 +1,5 @@
+import '../utils/frappe_json_utils.dart';
+
 /// Represents a possible Frappe workflow transition for the current document state.
 /// Returned by [WorkflowService.getTransitions].
 class WorkflowTransition {
@@ -25,13 +27,12 @@ class WorkflowTransition {
   });
 
   factory WorkflowTransition.fromJson(Map<String, dynamic> json) {
-    final allow = json['allow_self_approval'];
     return WorkflowTransition(
       action: json['action'] as String? ?? '',
       nextState: json['next_state'] as String? ?? '',
       state: json['state'] as String? ?? '',
       allowed: json['allowed'] as String?,
-      allowSelfApproval: allow == 1 || allow == true,
+      allowSelfApproval: parseBool(json['allow_self_approval']),
     );
   }
 }

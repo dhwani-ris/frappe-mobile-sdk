@@ -26,11 +26,18 @@ String normalizeDoctypeTableName(String doctype, {String prefix = 'docs__'}) {
       .replaceAll(RegExp(r'_+'), '_')
       .replaceAll(RegExp(r'^_|_$'), '');
   if (body.isEmpty) {
-    throw ArgumentError.value(
-      doctype,
-      'doctype',
-      'normalized to empty string',
-    );
+    throw ArgumentError.value(doctype, 'doctype', 'normalized to empty string');
   }
   return '$prefix$body';
 }
+
+/// Returns the doctype suffix portion of a `docs__<suffix>` table name —
+/// the inverse of the `docs__` prefix added by [normalizeDoctypeTableName].
+/// If [tableName] is not prefixed (passes through other code paths), the
+/// input is returned unchanged.
+///
+/// Single source of truth — `parent_schema.dart` (index naming),
+/// `child_schema.dart` (index naming), and `meta_differ.dart` (diff suffix)
+/// all call this so a prefix change is made in exactly one place.
+String stripDocsPrefix(String tableName) =>
+    tableName.replaceFirst('docs__', '');

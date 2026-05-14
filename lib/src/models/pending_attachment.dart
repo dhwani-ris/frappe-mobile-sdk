@@ -1,12 +1,13 @@
+import '../utils/sql_row_utils.dart';
+
 enum AttachmentState { pending, uploading, done, failed }
 
 extension AttachmentStateHelpers on AttachmentState {
   String get wireName => name;
   static AttachmentState parse(String raw) {
-    for (final s in AttachmentState.values) {
-      if (s.name == raw) return s;
-    }
-    throw ArgumentError.value(raw, 'attachment_state');
+    final value = parseEnumByName(AttachmentState.values, raw);
+    if (value == null) throw ArgumentError.value(raw, 'attachment_state');
+    return value;
   }
 }
 
@@ -65,20 +66,12 @@ class PendingAttachment {
       isPrivate: (row['is_private'] as int? ?? 1) == 1,
       sizeBytes: row['size_bytes'] as int?,
       state: AttachmentStateHelpers.parse(row['state'] as String),
-      retryCount: (row['retry_count'] as int?) ?? 0,
-      lastAttemptAt: row['last_attempt_at'] == null
-          ? null
-          : DateTime.fromMillisecondsSinceEpoch(
-              row['last_attempt_at'] as int,
-              isUtc: true,
-            ),
+      retryCount: retryCountFrom(row),
+      lastAttemptAt: lastAttemptAtFrom(row),
       errorMessage: row['error_message'] as String?,
       serverFileName: row['server_file_name'] as String?,
       serverFileUrl: row['server_file_url'] as String?,
-      createdAt: DateTime.fromMillisecondsSinceEpoch(
-        row['created_at'] as int,
-        isUtc: true,
-      ),
+      createdAt: utcMillisFrom(row, 'created_at'),
     );
   }
 }

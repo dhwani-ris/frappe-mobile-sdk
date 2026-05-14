@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_form_builder/flutter_form_builder.dart';
 import 'base_field.dart';
+import 'field_helpers.dart';
 
 /// Widget for numeric field types (Int, Float, Currency, Percent)
 class NumericField extends BaseField {
@@ -37,12 +38,11 @@ class NumericField extends BaseField {
           ),
       validator: field.reqd
           ? (value) {
-              if (value == null || value.toString().isEmpty) {
-                return '${field.displayLabel} is required';
-              }
+              final required = requiredValidator(value, field.displayLabel);
+              if (required != null) return required;
               final numValue = isInt
-                  ? int.tryParse(value)
-                  : double.tryParse(value);
+                  ? int.tryParse(value!)
+                  : double.tryParse(value!);
               if (numValue == null) {
                 return 'Please enter a valid number';
               }

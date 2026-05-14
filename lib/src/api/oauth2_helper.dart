@@ -4,6 +4,41 @@ import 'dart:math';
 import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 
+/// Builds a Frappe `api/method/<path>` URI from [baseUrl], normalising
+/// the trailing slash so `baseUrl` with or without a trailing `/`
+/// produces the same URI. Single source of truth for OAuth endpoint URL
+/// construction.
+Uri _oauthUri(String baseUrl, String path) {
+  final root = baseUrl.endsWith('/') ? baseUrl : '$baseUrl/';
+  return Uri.parse('${root}api/method/$path');
+}
+
+/// Performs a form-encoded `application/x-www-form-urlencoded` POST to
+/// [uri], throws `Exception('$errorLabel failed: ...')` on non-200, and
+/// returns the decoded JSON map. Shared by [OAuth2Helper.exchangeCodeForToken]
+/// and [OAuth2Helper.refreshToken] which previously had byte-for-byte
+/// identical http.post calls.
+Future<Map<String, dynamic>> _postFormEncoded(
+  Uri uri,
+  Map<String, String> body,
+  String errorLabel,
+) async {
+  final response = await http.post(
+    uri,
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'Accept': 'application/json',
+    },
+    body: body.keys.map((k) => '$k=${Uri.encodeComponent(body[k]!)}').join('&'),
+  );
+  if (response.statusCode != 200) {
+    throw Exception(
+      '$errorLabel failed: ${response.statusCode} ${response.body}',
+    );
+  }
+  return jsonDecode(response.body) as Map<String, dynamic>;
+}
+
 /// PKCE code verifier and challenge pair (RFC 7636).
 class PkcePair {
   final String codeVerifier;
@@ -81,10 +116,7 @@ class OAuth2Helper {
     String codeChallengeMethod = 'S256',
     String responseType = 'code',
   }) {
-    final path = baseUrl.endsWith('/') ? baseUrl : '$baseUrl/';
-    final uri = Uri.parse(
-      '${path}api/method/frappe.integrations.oauth2.authorize',
-    );
+    final uri = _oauthUri(baseUrl, 'frappe.integrations.oauth2.authorize');
     final q = <String, String>{
       'client_id': clientId,
       'redirect_uri': redirectUri,
@@ -111,10 +143,7 @@ class OAuth2Helper {
     String? codeVerifier,
     String? clientSecret,
   }) async {
-    final path = baseUrl.endsWith('/') ? baseUrl : '$baseUrl/';
-    final uri = Uri.parse(
-      '${path}api/method/frappe.integrations.oauth2.get_token',
-    );
+    final uri = _oauthUri(baseUrl, 'frappe.integrations.oauth2.get_token');
     final body = <String, String>{
       'grant_type': 'authorization_code',
       'code': code,
@@ -127,22 +156,7 @@ class OAuth2Helper {
     if (clientSecret != null && clientSecret.isNotEmpty) {
       body['client_secret'] = clientSecret;
     }
-    final response = await http.post(
-      uri,
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'Accept': 'application/json',
-      },
-      body: body.keys
-          .map((k) => '$k=${Uri.encodeComponent(body[k]!)}')
-          .join('&'),
-    );
-    if (response.statusCode != 200) {
-      throw Exception(
-        'OAuth token exchange failed: ${response.statusCode} ${response.body}',
-      );
-    }
-    final json = jsonDecode(response.body) as Map<String, dynamic>;
+    final json = await _postFormEncoded(uri, body, 'OAuth token exchange');
     if (json['error'] != null) {
       throw Exception(
         'OAuth error: ${json['error']} - ${json['error_description'] ?? ''}',
@@ -161,10 +175,7 @@ class OAuth2Helper {
     required String refreshToken,
     String? clientSecret,
   }) async {
-    final path = baseUrl.endsWith('/') ? baseUrl : '$baseUrl/';
-    final uri = Uri.parse(
-      '${path}api/method/frappe.integrations.oauth2.get_token',
-    );
+    final uri = _oauthUri(baseUrl, 'frappe.integrations.oauth2.get_token');
     final body = <String, String>{
       'grant_type': 'refresh_token',
       'refresh_token': refreshToken,
@@ -173,22 +184,7 @@ class OAuth2Helper {
     if (clientSecret != null && clientSecret.isNotEmpty) {
       body['client_secret'] = clientSecret;
     }
-    final response = await http.post(
-      uri,
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'Accept': 'application/json',
-      },
-      body: body.keys
-          .map((k) => '$k=${Uri.encodeComponent(body[k]!)}')
-          .join('&'),
-    );
-    if (response.statusCode != 200) {
-      throw Exception(
-        'OAuth refresh failed: ${response.statusCode} ${response.body}',
-      );
-    }
-    final json = jsonDecode(response.body) as Map<String, dynamic>;
+    final json = await _postFormEncoded(uri, body, 'OAuth refresh');
     return OAuth2TokenResponse.fromJson(json);
   }
 
@@ -197,10 +193,7 @@ class OAuth2Helper {
     required String baseUrl,
     required String accessToken,
   }) async {
-    final path = baseUrl.endsWith('/') ? baseUrl : '$baseUrl/';
-    final uri = Uri.parse(
-      '${path}api/method/frappe.integrations.oauth2.openid_profile',
-    );
+    final uri = _oauthUri(baseUrl, 'frappe.integrations.oauth2.openid_profile');
     final response = await http.get(
       uri,
       headers: {'Authorization': 'Bearer $accessToken'},
@@ -218,10 +211,7 @@ class OAuth2Helper {
     required String baseUrl,
     required String token,
   }) async {
-    final path = baseUrl.endsWith('/') ? baseUrl : '$baseUrl/';
-    final uri = Uri.parse(
-      '${path}api/method/frappe.integrations.oauth2.revoke_token',
-    );
+    final uri = _oauthUri(baseUrl, 'frappe.integrations.oauth2.revoke_token');
     await http.post(
       uri,
       headers: {'Content-Type': 'application/x-www-form-urlencoded'},

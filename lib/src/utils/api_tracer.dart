@@ -8,6 +8,18 @@ import 'package:flutter/foundation.dart';
 class ApiTracer {
   static const String _tag = '[Frappe API]';
 
+  /// Caps a body / Map / List string at 500 chars for log readability.
+  /// Non-collection bodies pass through as `toString()`. Shared by
+  /// [traceRequest] and [traceResponse] so a threshold change applies to
+  /// both at once.
+  static String _preview(dynamic body) {
+    if (body is Map || body is List) {
+      final s = body.toString();
+      return s.length > 500 ? '${s.substring(0, 500)}...' : s;
+    }
+    return body.toString();
+  }
+
   /// Log request (method, url, body). No-op in release.
   static void traceRequest({
     required String method,
@@ -22,12 +34,7 @@ class ApiTracer {
       buffer.writeln('  query: $queryParams');
     }
     if (body != null) {
-      final preview = body is Map || body is List
-          ? body.toString().length > 500
-                ? '${body.toString().substring(0, 500)}...'
-                : body.toString()
-          : body.toString();
-      buffer.writeln('  body: $preview');
+      buffer.writeln('  body: ${_preview(body)}');
     }
     debugPrint(buffer.toString());
   }
@@ -45,12 +52,7 @@ class ApiTracer {
     if (error != null) {
       buffer.writeln('  error: $error');
     } else if (body != null) {
-      final preview = body is Map || body is List
-          ? body.toString().length > 500
-                ? '${body.toString().substring(0, 500)}...'
-                : body.toString()
-          : body.toString();
-      buffer.writeln('  body: $preview');
+      buffer.writeln('  body: ${_preview(body)}');
     }
     debugPrint(buffer.toString());
   }

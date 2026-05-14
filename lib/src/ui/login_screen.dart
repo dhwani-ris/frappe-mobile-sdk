@@ -334,6 +334,10 @@ class _LoginScreenState extends State<LoginScreen> {
       });
       final uri = Uri.parse(authorizeUrl);
       final canLaunch = await canLaunchUrl(uri);
+      // Match _startOAuth: bail if the widget unmounted while we awaited
+      // canLaunchUrl/launchUrl so the subsequent setState doesn't fire on
+      // a deactivated state.
+      if (!mounted) return;
       if (canLaunch) {
         await launchUrl(uri, mode: LaunchMode.externalApplication);
       } else {
@@ -347,6 +351,7 @@ class _LoginScreenState extends State<LoginScreen> {
     } catch (e, st) {
       debugPrint('LoginScreen._startSocialOAuth failed — $e\n$st');
       _cancelOAuthListener();
+      if (!mounted) return;
       setState(() {
         _errorMessage = e.toString().replaceAll('Exception: ', '');
         _isLoading = false;
@@ -385,10 +390,12 @@ class _LoginScreenState extends State<LoginScreen> {
       }
     } catch (e, st) {
       debugPrint('LoginScreen._handleLogin failed — $e\n$st');
-      setState(() {
-        _errorMessage = e.toString().replaceAll('Exception: ', '');
-        _isLoading = false;
-      });
+      if (mounted) {
+        setState(() {
+          _errorMessage = e.toString().replaceAll('Exception: ', '');
+          _isLoading = false;
+        });
+      }
     }
   }
 
@@ -451,10 +458,12 @@ class _LoginScreenState extends State<LoginScreen> {
       }
     } catch (e, st) {
       debugPrint('LoginScreen._handleVerifyOtp failed — $e\n$st');
-      setState(() {
-        _errorMessage = e.toString().replaceAll('Exception: ', '');
-        _isLoading = false;
-      });
+      if (mounted) {
+        setState(() {
+          _errorMessage = e.toString().replaceAll('Exception: ', '');
+          _isLoading = false;
+        });
+      }
     }
   }
 

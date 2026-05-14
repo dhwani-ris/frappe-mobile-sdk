@@ -1,5 +1,7 @@
 // ignore_for_file: constant_identifier_names
 
+import '../utils/sql_row_utils.dart';
+
 enum OutboxOperation { insert, update, submit, cancel, delete }
 
 enum OutboxState { pending, inFlight, done, failed, conflict, blocked }
@@ -17,13 +19,8 @@ enum ErrorCode {
 
 extension ErrorCodeHelpers on ErrorCode {
   String get wireName => name;
-  static ErrorCode? parse(String? raw) {
-    if (raw == null) return null;
-    for (final c in ErrorCode.values) {
-      if (c.name == raw) return c;
-    }
-    return ErrorCode.UNKNOWN;
-  }
+  static ErrorCode? parse(String? raw) =>
+      parseEnumByName(ErrorCode.values, raw, fallback: ErrorCode.UNKNOWN);
 }
 
 extension OutboxOperationHelpers on OutboxOperation {
@@ -120,19 +117,11 @@ class OutboxRow {
       operation: OutboxOperationHelpers.parse(row['operation'] as String),
       payload: row['payload'] as String?,
       state: OutboxStateHelpers.parse(row['state'] as String),
-      retryCount: (row['retry_count'] as int?) ?? 0,
-      lastAttemptAt: row['last_attempt_at'] == null
-          ? null
-          : DateTime.fromMillisecondsSinceEpoch(
-              row['last_attempt_at'] as int,
-              isUtc: true,
-            ),
+      retryCount: retryCountFrom(row),
+      lastAttemptAt: lastAttemptAtFrom(row),
       errorMessage: row['error_message'] as String?,
       errorCode: ErrorCodeHelpers.parse(row['error_code'] as String?),
-      createdAt: DateTime.fromMillisecondsSinceEpoch(
-        row['created_at'] as int,
-        isUtc: true,
-      ),
+      createdAt: utcMillisFrom(row, 'created_at'),
     );
   }
 }

@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_form_builder/flutter_form_builder.dart';
 import 'package:file_picker/file_picker.dart';
 import 'base_field.dart';
+import 'field_helpers.dart';
 
 /// Widget for Attach field type.
 /// When [uploadFile] is set, picks upload to server first and store file_url; otherwise stores local path.
@@ -32,22 +33,17 @@ class AttachField extends BaseField {
       initialValue: filePath,
       enabled: enabled && !field.readOnly,
       validator: field.reqd
-          ? (value) {
-              if (value == null || value.isEmpty) {
-                return '${field.displayLabel} is required';
-              }
-              return null;
-            }
+          ? (value) => requiredValidator(value, field.displayLabel)
           : null,
       builder: (FormFieldState<String> fieldState) {
+        // BaseField.build (the enclosing widget) already renders the
+        // external label with required-asterisk + translation. The inline
+        // Padding(Text(field.label)) that used to live here was a
+        // second copy that skipped the asterisk — removed for visual
+        // consistency with text/numeric/etc field widgets.
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            if (field.label != null)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 8.0),
-                child: Text(field.label!, style: style?.labelStyle),
-              ),
             OutlinedButton.icon(
               onPressed: enabled && !field.readOnly
                   ? () async {
@@ -90,14 +86,7 @@ class AttachField extends BaseField {
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
-            if (fieldState.hasError)
-              Padding(
-                padding: const EdgeInsets.only(top: 4.0),
-                child: Text(
-                  fieldState.errorText!,
-                  style: const TextStyle(color: Colors.red, fontSize: 12),
-                ),
-              ),
+            fieldErrorText(fieldState),
           ],
         );
       },

@@ -1,5 +1,6 @@
 import '../../models/doc_type_meta.dart';
 import '../field_type_mapping.dart';
+import '../table_name.dart';
 import 'system_columns.dart';
 
 /// Column names emitted by the child system block. A meta field that uses
@@ -34,11 +35,11 @@ List<String> buildChildSchemaDDL(
     if (sqlType == null) continue;
     cols.add('$name $sqlType');
     if (isLinkFieldType(type)) {
-      cols.add('${name}__is_local INTEGER');
+      cols.add(linkCompanionColumnDDL(name));
     }
   }
 
-  final suffix = tableName.replaceFirst('docs__', '');
+  final suffix = stripDocsPrefix(tableName);
   return [
     'CREATE TABLE $tableName (\n  ${cols.join(',\n  ')}\n)',
     'CREATE UNIQUE INDEX ix_${suffix}_server_name '

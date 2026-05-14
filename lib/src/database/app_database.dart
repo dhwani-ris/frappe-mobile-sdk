@@ -282,20 +282,33 @@ class AppDatabase {
     }
   }
 
+  /// Selects table names from `sqlite_master` matching [whereClause] (with
+  /// optional bind [args]) and runs `DROP TABLE IF EXISTS "<name>"` for
+  /// each. Shared by [wipeOfflineDocumentTables] (drops `docs__*` mirrors
+  /// only) and [_clearAllDataInternal] (drops everything except SQLite
+  /// internals) so the predicate is the only thing that varies.
+  static Future<void> _dropTablesWhere(
+    DatabaseExecutor txn,
+    String whereClause, [
+    List<Object?>? args,
+  ]) async {
+    final tables = await txn.rawQuery(
+      "SELECT name FROM sqlite_master WHERE type='table' AND $whereClause",
+      args,
+    );
+    for (final r in tables) {
+      final name = r['name'] as String;
+      await txn.execute('DROP TABLE IF EXISTS "$name"');
+    }
+  }
+
   /// Drops every `docs__<doctype>` table and clears `outbox`,
   /// `pending_attachments`, `link_options`. Preserves `doctype_meta`,
   /// `auth_tokens`, `doctype_permission`, `sdk_meta`. Used by the
   /// offline → online transition (Spec §7.5).
   Future<void> wipeOfflineDocumentTables() async {
     await _db.transaction((txn) async {
-      final tables = await txn.rawQuery(
-        "SELECT name FROM sqlite_master WHERE type='table' "
-        "AND name LIKE 'docs\\_\\_%' ESCAPE '\\'",
-      );
-      for (final r in tables) {
-        final name = r['name'] as String;
-        await txn.execute('DROP TABLE IF EXISTS "$name"');
-      }
+      await _dropTablesWhere(txn, r"name LIKE 'docs\_\_%' ESCAPE '\'");
       await txn.delete('outbox');
       await txn.delete('pending_attachments');
       await txn.delete('link_options');
@@ -330,15 +343,7 @@ class AppDatabase {
   /// 'sqlite_%'`: if it's not a SQLite internal, it gets dropped.
   static Future<void> _clearAllDataInternal(Database db) async {
     await db.transaction((txn) async {
-      final tables = await txn.rawQuery(
-        "SELECT name FROM sqlite_master "
-        "WHERE type='table' "
-        "AND name NOT LIKE 'sqlite_%'",
-      );
-      for (final r in tables) {
-        final tableName = r['name'] as String;
-        await txn.execute('DROP TABLE IF EXISTS "$tableName"');
-      }
+      await _dropTablesWhere(txn, "name NOT LIKE 'sqlite_%'");
     });
 
     // Recreate the base schema. _onCreate brings back: doctype_meta

@@ -2,6 +2,28 @@
 // For license information, please see license.txt
 
 import 'dart:convert';
+import 'package:flutter/foundation.dart' show debugPrint;
+
+/// Frappe wraps API responses inconsistently: most `frappe.client.*` and
+/// `frappe.*.method` calls return `{"message": ...}` while REST resource
+/// endpoints return `{"data": ...}`. Service callers that know which
+/// envelope to expect use [unwrapMessage] / [unwrapData] to strip it,
+/// keeping the two strip-decisions in one place. The bare-response
+/// fallback (no envelope) is returned unchanged so non-Frappe / direct-
+/// payload endpoints continue to work.
+T unwrapMessage<T>(dynamic response) {
+  if (response is Map<String, dynamic> && response.containsKey('message')) {
+    return response['message'] as T;
+  }
+  return response as T;
+}
+
+T unwrapData<T>(dynamic response) {
+  if (response is Map<String, dynamic> && response.containsKey('data')) {
+    return response['data'] as T;
+  }
+  return response as T;
+}
 
 Map<String, String> parseSetCookie(String setCookieValue) {
   final cookies = <String, String>{};
@@ -34,7 +56,9 @@ String extractErrorMessage(dynamic body) {
       }
     } catch (e, st) {
       // ignore: avoid_print
-      print('extractErrorMessage: _server_messages parse failed — $e\n$st');
+      debugPrint(
+        'extractErrorMessage: _server_messages parse failed — $e\n$st',
+      );
     }
   }
 
@@ -83,7 +107,7 @@ String? _extractServerMessage(dynamic body) {
       }
     } catch (e, st) {
       // ignore: avoid_print
-      print('_extractServerMessage: jsonDecode failed — $e\n$st');
+      debugPrint('_extractServerMessage: jsonDecode failed — $e\n$st');
     }
   }
   return null;

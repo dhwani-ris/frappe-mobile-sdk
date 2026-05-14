@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_form_builder/flutter_form_builder.dart';
 import 'base_field.dart';
+import 'field_helpers.dart';
 
 /// Widget for Text, Long Text, and Small Text field types
 class TextFieldWidget extends BaseField {
@@ -24,25 +25,13 @@ class TextFieldWidget extends BaseField {
       name: field.fieldname ?? '',
       initialValue: value?.toString() ?? field.defaultValue ?? '',
       enabled: enabled && !field.readOnly,
-      decoration:
-          style?.decoration ??
-          InputDecoration(
-            hintText: field.placeholder,
-            border: const OutlineInputBorder(),
-            filled: field.readOnly,
-            fillColor: field.readOnly ? Colors.grey[200] : null,
-          ),
+      decoration: baseFieldDecoration(field, style: style),
       maxLines: maxLines,
       maxLength: (field.length != null && field.length! > 0)
           ? field.length
           : null,
       validator: field.reqd
-          ? (value) {
-              if (value == null || value.toString().isEmpty) {
-                return '${field.displayLabel} is required';
-              }
-              return null;
-            }
+          ? (value) => requiredValidator(value, field.displayLabel)
           : null,
       onChanged: (val) => onChanged?.call(val),
     );

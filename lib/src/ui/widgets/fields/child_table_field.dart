@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../../models/doc_field.dart';
 import '../../../models/doc_type_meta.dart';
+import '../screen_helpers.dart';
 
 /// Builds the form widget for a child table row (add/edit dialog or bottom sheet).
 /// [registerSubmit] is called with the form's submit handler so the host can show Save/Cancel.
@@ -164,7 +165,15 @@ class ChildTableField extends StatelessWidget {
     BuildContext context,
     List<dynamic> listValue,
   ) async {
-    if (getMeta == null || field.options == null || formBuilder == null) return;
+    // The same `onChanged == null` guard the edit-row dialog has at
+    // line 213. Without it, the add dialog appears successfully and then
+    // crashes when invoking `onChanged!(newList)` after the user submits.
+    if (getMeta == null ||
+        field.options == null ||
+        onChanged == null ||
+        formBuilder == null) {
+      return;
+    }
 
     DocTypeMeta? childMeta;
     try {
@@ -174,9 +183,9 @@ class ChildTableField extends StatelessWidget {
         'ChildTableField._showAddRowDialog: getMeta(${field.options}) failed — $e\n$st',
       );
       if (context.mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Error loading form: $e')));
+        // Original called the bare `SnackBar(content: Text(...))` with no
+        // backgroundColor — preserve that neutral styling explicitly.
+        showStatusSnackBar(context, 'Error loading form: $e');
       }
       return;
     }
@@ -223,9 +232,9 @@ class ChildTableField extends StatelessWidget {
         'ChildTableField._showEditRowDialog: getMeta(${field.options}) failed — $e\n$st',
       );
       if (context.mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Error loading form: $e')));
+        // Original called the bare `SnackBar(content: Text(...))` with no
+        // backgroundColor — preserve that neutral styling explicitly.
+        showStatusSnackBar(context, 'Error loading form: $e');
       }
       return;
     }

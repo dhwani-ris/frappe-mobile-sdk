@@ -1,6 +1,8 @@
 // Copyright (c) 2026, Bhushan Barbuddhe and contributors
 // For license information, please see license.txt
 
+import 'package:flutter/foundation.dart' show debugPrint;
+
 import 'rest_helper.dart';
 
 abstract class SessionStorage {
@@ -41,8 +43,7 @@ class AuthService {
     try {
       await _restHelper.post('/api/method/mobile_auth.logout');
     } catch (e, st) {
-      // ignore: avoid_print
-      print(
+      debugPrint(
         'AuthApi: server logout failed (continuing local cleanup) — $e\n$st',
       );
     } finally {

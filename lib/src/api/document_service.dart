@@ -3,6 +3,7 @@
 
 import 'dart:convert';
 import 'rest_helper.dart';
+import 'utils.dart';
 
 class DocumentService {
   final RestHelper _restHelper;
@@ -19,19 +20,13 @@ class DocumentService {
         '/api/method/frappe.client.insert',
         body: {'doc': jsonEncode(data..['doctype'] = doctype)},
       );
-      if (response is Map<String, dynamic> && response.containsKey('message')) {
-        return response['message'] as Map<String, dynamic>;
-      }
-      return response as Map<String, dynamic>;
+      return unwrapMessage<Map<String, dynamic>>(response);
     } else {
       final response = await _restHelper.post(
         '/api/resource/$doctype',
         body: data,
       );
-      if (response is Map<String, dynamic> && response.containsKey('data')) {
-        return response['data'] as Map<String, dynamic>;
-      }
-      return response as Map<String, dynamic>;
+      return unwrapData<Map<String, dynamic>>(response);
     }
   }
 
@@ -44,10 +39,7 @@ class DocumentService {
       '/api/resource/$doctype/$name',
       body: data,
     );
-    if (response is Map<String, dynamic> && response.containsKey('data')) {
-      return response['data'] as Map<String, dynamic>;
-    }
-    return response as Map<String, dynamic>;
+    return unwrapData<Map<String, dynamic>>(response);
   }
 
   Future<void> deleteDocument(String doctype, String name) async {

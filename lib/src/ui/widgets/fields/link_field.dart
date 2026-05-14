@@ -8,6 +8,8 @@ import '../../../models/link_filter_result.dart';
 import '../../../services/link_option_service.dart';
 import '../../../services/link_field_coordinator.dart';
 import '../../../database/entities/link_option_entity.dart';
+import '../../../utils/uuid_pattern.dart';
+import 'field_helpers.dart';
 import 'searchable_select.dart';
 
 /// Widget for Link field type with cached options
@@ -57,12 +59,16 @@ class LinkField extends BaseField {
         }
       }
 
-      // Auto-select when exactly one option and no valid selection
+      // Auto-select when exactly one option and no valid selection.
+      // Propagate `onIsLocalChanged` so an auto-picked UUID-shaped
+      // option (offline mobile_uuid) flips `<field>__is_local` for
+      // UuidRewriter at push time — matches `_applyOptionsAndAutoSelect`.
       if (options!.length == 1 &&
           (validInitialValue == null || validInitialValue.isEmpty)) {
         validInitialValue = options!.first;
         WidgetsBinding.instance.addPostFrameCallback((_) {
           onChanged?.call(options!.first);
+          onIsLocalChanged?.call(looksLikeMobileUuid(options!.first));
         });
       }
 
@@ -85,12 +91,7 @@ class LinkField extends BaseField {
             )
             .toList(),
         validator: field.reqd
-            ? (value) {
-                if (value == null || value.toString().isEmpty) {
-                  return '${field.displayLabel} is required';
-                }
-                return null;
-              }
+            ? (value) => requiredValidator(value, field.displayLabel)
             : null,
         onChanged: (val) => onChanged?.call(val),
       );
@@ -133,12 +134,7 @@ class LinkField extends BaseField {
         suffixIcon: const Icon(Icons.search),
       ),
       validator: field.reqd
-          ? (value) {
-              if (value == null || value.toString().isEmpty) {
-                return '${field.displayLabel} is required';
-              }
-              return null;
-            }
+          ? (value) => requiredValidator(value, field.displayLabel)
           : null,
       onChanged: (val) => onChanged?.call(val),
     );
@@ -275,14 +271,7 @@ class _LinkFieldDropdownState extends State<_LinkFieldDropdown> {
       final dependentNames = LinkOptionService.getDependentFieldNames(
         widget.linkFilters,
       );
-      setState(() {
-        _options = [];
-        _isLoading = false;
-        _waitingForDependent = true;
-        _dependentFieldName = dependentNames.isNotEmpty
-            ? dependentNames.first
-            : '';
-      });
+      _setWaitingForDependent(dependentNames);
       return;
     }
     setState(() => _isLoading = true);
@@ -291,6 +280,23 @@ class _LinkFieldDropdownState extends State<_LinkFieldDropdown> {
       widget.formData,
       _applyOptionsAndAutoSelect,
     );
+  }
+
+  /// Puts the dropdown into the "waiting for parent field" state. Always
+  /// guards `.first` against an empty list (defensive — the coordinator
+  /// path historically did this with a ternary, the `_loadOptions` path
+  /// relied on an outer `.isNotEmpty` if-condition; consolidating into
+  /// one helper means a future code edit can't accidentally call `.first`
+  /// unguarded).
+  void _setWaitingForDependent(List<String> dependentNames) {
+    setState(() {
+      _options = [];
+      _isLoading = false;
+      _waitingForDependent = true;
+      _dependentFieldName = dependentNames.isNotEmpty
+          ? dependentNames.first
+          : '';
+    });
   }
 
   DocField? _docFieldFromDynamic(dynamic f) {
@@ -335,12 +341,7 @@ class _LinkFieldDropdownState extends State<_LinkFieldDropdown> {
         widget.linkFilters!.isNotEmpty &&
         filters == null &&
         dependentNames.isNotEmpty) {
-      setState(() {
-        _options = [];
-        _isLoading = false;
-        _waitingForDependent = true;
-        _dependentFieldName = dependentNames.first;
-      });
+      _setWaitingForDependent(dependentNames);
       return;
     }
     try {

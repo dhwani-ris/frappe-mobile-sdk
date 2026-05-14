@@ -29,4 +29,22 @@ class QueryResult<T> {
     returnedCount: 0,
     originBreakdown: {},
   );
+
+  /// Convenience factory that derives `hasMore` from
+  /// `rows.length == pageSize` and `returnedCount` from `rows.length`.
+  /// Used by [UnifiedResolver] to keep the offline-path and online-passthrough
+  /// constructions in sync — a future change to the `hasMore` heuristic
+  /// (e.g. trusting a server-supplied flag) applies to both at once.
+  factory QueryResult.ofRows(
+    List<T> rows,
+    int pageSize,
+    Map<RowOrigin, int> originBreakdown,
+  ) {
+    return QueryResult<T>(
+      rows: rows,
+      hasMore: rows.length == pageSize,
+      returnedCount: rows.length,
+      originBreakdown: originBreakdown,
+    );
+  }
 }
