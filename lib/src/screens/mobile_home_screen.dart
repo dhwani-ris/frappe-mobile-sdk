@@ -114,7 +114,15 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
   int get _totalErrors => _errorCounts.values.fold(0, (a, b) => a + b);
 
   Future<void> _load() async {
-    setState(() => _loading = true);
+    // Only flash the full-screen spinner when there's nothing on screen yet
+    // (first paint, or after a wipe). Background reloads triggered by
+    // `syncComplete$` keep the existing list visible while counts refresh —
+    // otherwise every completed sync wipes the screen to a spinner before
+    // re-rendering, which reads as a jarring "whole screen refresh once".
+    final isFirstPaint = _groups.isEmpty;
+    if (isFirstPaint) {
+      setState(() => _loading = true);
+    }
     try {
       // Fire connectivity check without blocking — update UI when it resolves
       widget.sdk.sync

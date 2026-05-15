@@ -55,7 +55,6 @@ String extractErrorMessage(dynamic body) {
         raw = serverMsg;
       }
     } catch (e, st) {
-      // ignore: avoid_print
       debugPrint(
         'extractErrorMessage: _server_messages parse failed — $e\n$st',
       );
@@ -106,7 +105,6 @@ String? _extractServerMessage(dynamic body) {
         }
       }
     } catch (e, st) {
-      // ignore: avoid_print
       debugPrint('_extractServerMessage: jsonDecode failed — $e\n$st');
     }
   }

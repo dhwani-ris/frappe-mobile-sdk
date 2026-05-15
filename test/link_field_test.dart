@@ -27,7 +27,6 @@ class _FakeLinkOptionService extends LinkOptionService {
   @override
   Future<List<LinkOptionEntity>> getLinkOptions(
     String doctype, {
-    bool forceRefresh = false,
     List<List<dynamic>>? filters,
   }) => _completer.future;
 

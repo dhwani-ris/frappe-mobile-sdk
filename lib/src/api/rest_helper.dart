@@ -93,23 +93,41 @@ class RestHelper {
       Map<String, String>.from(_getHeaders());
 
   /// Performs a GET request.
+  ///
+  /// [timeout] overrides [requestTimeout] for this single call — use a
+  /// short value (e.g. 10s) for splash-blocking calls where the default
+  /// 30s × 3-retry budget (~93s worst case) would freeze the UI.
+  /// [maxRetries] overrides the default GET retry budget (2 retries on
+  /// transient network errors). Pass `0` for fast-fail boot probes.
   Future<dynamic> get(
     String endpoint, {
     Map<String, dynamic>? queryParams,
+    Duration? timeout,
+    int? maxRetries,
   }) async {
-    return _request('GET', endpoint, queryParams: queryParams);
+    return _request(
+      'GET',
+      endpoint,
+      queryParams: queryParams,
+      timeout: timeout,
+      maxRetries: maxRetries,
+    );
   }
 
   /// Performs a GET request without auth headers.
   Future<dynamic> getPublic(
     String endpoint, {
     Map<String, dynamic>? queryParams,
+    Duration? timeout,
+    int? maxRetries,
   }) async {
     return _request(
       'GET',
       endpoint,
       queryParams: queryParams,
       includeAuth: false,
+      timeout: timeout,
+      maxRetries: maxRetries,
     );
   }
 
@@ -139,6 +157,8 @@ class RestHelper {
     Map<String, dynamic>? queryParams,
     dynamic body,
     bool includeAuth = true,
+    Duration? timeout,
+    int? maxRetries,
   }) async {
     var uri = Uri.parse('$baseUrl$endpoint');
     if (queryParams != null) {
@@ -154,8 +174,13 @@ class RestHelper {
       body: method != 'GET' ? body : null,
     );
 
+    final effectiveTimeout = timeout ?? requestTimeout;
+    // Default budget: 1 initial attempt + 2 retries = 3 total attempts.
+    // Pass `maxRetries: 0` from boot/probe call sites to fail fast.
+    final effectiveMaxAttempts = (maxRetries ?? 2) + 1;
+
     int attempts = 0;
-    while (attempts < 3) {
+    while (attempts < effectiveMaxAttempts) {
       try {
         final headers = _getHeaders(includeAuth: includeAuth);
         if (method != 'GET' && body != null) {
@@ -167,7 +192,7 @@ class RestHelper {
           case 'GET':
             response = await _client
                 .get(uri, headers: headers)
-                .timeout(requestTimeout);
+                .timeout(effectiveTimeout);
             break;
           case 'POST':
             response = await _client
@@ -176,7 +201,7 @@ class RestHelper {
                   headers: headers,
                   body: body != null ? jsonEncode(body) : null,
                 )
-                .timeout(requestTimeout);
+                .timeout(effectiveTimeout);
             break;
           case 'PUT':
             response = await _client
@@ -185,12 +210,12 @@ class RestHelper {
                   headers: headers,
                   body: body != null ? jsonEncode(body) : null,
                 )
-                .timeout(requestTimeout);
+                .timeout(effectiveTimeout);
             break;
           case 'DELETE':
             response = await _client
                 .delete(uri, headers: headers)
-                .timeout(requestTimeout);
+                .timeout(effectiveTimeout);
             break;
           default:
             throw ApiException('Unsupported HTTP method: $method');
@@ -216,7 +241,7 @@ class RestHelper {
         }
         rethrow;
       } on SocketException catch (e) {
-        if (method == 'GET' && attempts < 2) {
+        if (method == 'GET' && attempts < effectiveMaxAttempts - 1) {
           attempts++;
           await Future.delayed(Duration(milliseconds: 500 * (1 << attempts)));
           continue;
@@ -229,7 +254,7 @@ class RestHelper {
         }
         throw NetworkException('No internet connection');
       } on TimeoutException {
-        if (method == 'GET' && attempts < 2) {
+        if (method == 'GET' && attempts < effectiveMaxAttempts - 1) {
           attempts++;
           await Future.delayed(Duration(milliseconds: 500 * (1 << attempts)));
           continue;

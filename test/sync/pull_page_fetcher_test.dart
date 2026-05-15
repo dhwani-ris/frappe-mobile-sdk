@@ -10,7 +10,7 @@ class _Captured {
 }
 
 void main() {
-  test('first page (null cursor): no cursor predicate', () async {
+  test('first page (null cursor): no filter, limit_start=0', () async {
     final cap = _Captured();
     final fetcher = PullPageFetcher(
       listHttp: (doctype, params) async {
@@ -38,6 +38,7 @@ void main() {
     expect(orFilters == null || orFilters.isEmpty, isTrue);
     expect(cap.params!['order_by'], 'modified asc, name asc');
     expect(cap.params!['limit_page_length'], 500);
+    expect(cap.params!['limit_start'], 0);
     expect(
       (cap.params!['fields'] as List),
       containsAll(<String>['name', 'modified', 'customer_name']),
@@ -45,7 +46,51 @@ void main() {
   });
 
   test(
-    'non-empty cursor → filters has modified >= cursor.modified (and ONLY that)',
+    'initial sync: limit_start advances by pageSize, no modified filter',
+    () async {
+      final capturedParams = <Map<String, Object?>>[];
+      var call = 0;
+      final fetcher = PullPageFetcher(
+        listHttp: (doctype, params) async {
+          capturedParams.add(Map.of(params));
+          call++;
+          if (call == 1) {
+            return List.generate(
+              3,
+              (i) => {'name': 'X-${i + 1}', 'modified': '2026-01-0${i + 1}'},
+            );
+          }
+          return const [];
+        },
+      );
+      final meta = DocTypeMeta(name: 'X', fields: const []);
+
+      // Page 1 — cursor.start = 0
+      final r1 = await fetcher.fetch(
+        doctype: 'X',
+        meta: meta,
+        cursor: Cursor.empty,
+        pageSize: 3,
+      );
+      expect(capturedParams[0]['limit_start'], 0);
+      expect(capturedParams[0]['filters'], isNull);
+      expect(r1.advancedCursor.complete, isFalse);
+      expect(r1.advancedCursor.start, 3);
+
+      // Page 2 — cursor.start = 3
+      await fetcher.fetch(
+        doctype: 'X',
+        meta: meta,
+        cursor: r1.advancedCursor,
+        pageSize: 3,
+      );
+      expect(capturedParams[1]['limit_start'], 3);
+      expect(capturedParams[1]['filters'], isNull);
+    },
+  );
+
+  test(
+    'incremental cursor (complete=true): modified filter, limit_start=0',
     () async {
       final cap = _Captured();
       final fetcher = PullPageFetcher(
@@ -58,10 +103,15 @@ void main() {
       await fetcher.fetch(
         doctype: 'X',
         meta: meta,
-        cursor: const Cursor(modified: '2026-01-01 00:00:00', name: 'A'),
+        cursor: const Cursor(
+          modified: '2026-01-01 00:00:00',
+          name: 'A',
+          complete: true,
+        ),
         pageSize: 500,
       );
 
+      expect(cap.params!['limit_start'], 0);
       final filters = cap.params!['filters'] as List?;
       expect(filters, isNotNull);
       expect(
@@ -79,39 +129,69 @@ void main() {
             'by PullApply UPSERT idempotency',
       );
 
-      // The earlier buggy `or_filters: [['modified', '>', X]]` shape must
-      // NOT be present — its presence + a separate `name > Y` filter is
-      // exactly what caused row exclusion.
       final orf = cap.params!['or_filters'] as List?;
       expect(orf == null || orf.isEmpty, isTrue);
     },
   );
 
-  test('returned rows + advancedCursor derived from last row', () async {
-    final fetcher = PullPageFetcher(
-      listHttp: (doctype, params) async => [
-        {'name': 'X-1', 'modified': '2026-01-01 00:00:00'},
-        {'name': 'X-2', 'modified': '2026-01-02 00:00:00'},
-      ],
-    );
-    final meta = DocTypeMeta(name: 'X', fields: const []);
-    final result = await fetcher.fetch(
-      doctype: 'X',
-      meta: meta,
-      cursor: Cursor.empty,
-      pageSize: 500,
-    );
-    expect(result.rows.length, 2);
-    expect(result.advancedCursor.name, 'X-2');
-    expect(result.advancedCursor.modified, '2026-01-02 00:00:00');
-  });
+  test(
+    'initial sync: advancedCursor tracks modified/name + advances start',
+    () async {
+      final fetcher = PullPageFetcher(
+        listHttp: (doctype, params) async => [
+          {'name': 'X-1', 'modified': '2026-01-01 00:00:00'},
+          {'name': 'X-2', 'modified': '2026-01-02 00:00:00'},
+        ],
+      );
+      final meta = DocTypeMeta(name: 'X', fields: const []);
+      final result = await fetcher.fetch(
+        doctype: 'X',
+        meta: meta,
+        cursor: Cursor.empty,
+        pageSize: 500,
+      );
+      expect(result.rows.length, 2);
+      expect(result.advancedCursor.name, 'X-2');
+      expect(result.advancedCursor.modified, '2026-01-02 00:00:00');
+      expect(result.advancedCursor.complete, isFalse);
+      expect(result.advancedCursor.start, 2);
+    },
+  );
+
+  test(
+    'incremental: advancedCursor uses last row modified/name, complete=true',
+    () async {
+      final fetcher = PullPageFetcher(
+        listHttp: (doctype, params) async => [
+          {'name': 'X-1', 'modified': '2026-01-01 00:00:00'},
+          {'name': 'X-2', 'modified': '2026-01-02 00:00:00'},
+        ],
+      );
+      final meta = DocTypeMeta(name: 'X', fields: const []);
+      final result = await fetcher.fetch(
+        doctype: 'X',
+        meta: meta,
+        cursor: const Cursor(
+          modified: '2026-01-01 00:00:00',
+          name: 'A',
+          complete: true,
+        ),
+        pageSize: 500,
+      );
+      expect(result.rows.length, 2);
+      expect(result.advancedCursor.name, 'X-2');
+      expect(result.advancedCursor.modified, '2026-01-02 00:00:00');
+      expect(result.advancedCursor.complete, isTrue);
+      expect(result.advancedCursor.start, 0);
+    },
+  );
 
   test('empty result → advancedCursor stays unchanged', () async {
     final fetcher = PullPageFetcher(
       listHttp: (doctype, params) async => const [],
     );
     final meta = DocTypeMeta(name: 'X', fields: const []);
-    final start = const Cursor(modified: '2026-01-01', name: 'A');
+    const start = Cursor(modified: '2026-01-01', name: 'A', complete: true);
     final result = await fetcher.fetch(
       doctype: 'X',
       meta: meta,
@@ -120,6 +200,7 @@ void main() {
     );
     expect(result.rows, isEmpty);
     expect(result.advancedCursor.name, 'A');
+    expect(result.advancedCursor.modified, '2026-01-01');
   });
 
   test('skips child-table fieldtypes from requested fields', () async {

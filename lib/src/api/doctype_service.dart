@@ -85,7 +85,15 @@ class DoctypeService {
     );
 
     if (response is Map<String, dynamic> && response.containsKey('message')) {
-      return response['message'] as List<dynamic>;
+      final msg = response['message'];
+      if (msg is List) return msg;
+      // Frappe returned a non-List message (null, error string, etc.).
+      // Treat as empty page — callers see no records and pull continues.
+      debugPrint(
+        'DoctypeService.list: unexpected message shape for $doctype '
+        '(${msg?.runtimeType ?? "null"}) — treating as empty page',
+      );
+      return [];
     }
     return [];
   }

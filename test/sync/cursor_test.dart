@@ -14,6 +14,38 @@ void main() {
     final back = Cursor.fromJson(jsonDecode(json) as Map<String, dynamic>?);
     expect(back.modified, '2026-01-01 00:00:00');
     expect(back.name, 'SO-1');
+    expect(back.start, 0);
+  });
+
+  test('start field round-trips through JSON', () {
+    const c = Cursor(modified: '2026-01-01', name: 'X', start: 300);
+    final json = c.toJson()!;
+    expect(json['start'], 300);
+    final back = Cursor.fromJson(json);
+    expect(back.start, 300);
+  });
+
+  test('start=0 is omitted from toJson to keep JSON clean', () {
+    const c = Cursor(modified: '2026-01-01', name: 'X', start: 0);
+    final json = c.toJson()!;
+    expect(json.containsKey('start'), isFalse);
+  });
+
+  test('fromJson missing "start" defaults to 0', () {
+    final c = Cursor.fromJson({'modified': '2026-01-01', 'name': 'X'});
+    expect(c.start, 0);
+  });
+
+  test('markComplete resets start to 0', () {
+    const c = Cursor(
+      modified: '2026-01-01',
+      name: 'X',
+      complete: false,
+      start: 500,
+    );
+    final done = c.markComplete();
+    expect(done.complete, isTrue);
+    expect(done.start, 0);
   });
 
   test('fromJson(null) → empty', () {
@@ -56,8 +88,15 @@ void main() {
     const a = Cursor(modified: '2026-01-01', name: 'SO-1', complete: true);
     const b = Cursor(modified: '2026-01-01', name: 'SO-1', complete: true);
     const c = Cursor(modified: '2026-01-01', name: 'SO-2', complete: true);
+    const d = Cursor(
+      modified: '2026-01-01',
+      name: 'SO-1',
+      complete: true,
+      start: 100,
+    );
     expect(a, equals(b));
     expect(a, isNot(equals(c)));
+    expect(a, isNot(equals(d)), reason: 'differing start breaks equality');
     expect(Cursor.empty, equals(const Cursor()));
   });
 
