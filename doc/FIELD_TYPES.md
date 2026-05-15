@@ -100,6 +100,14 @@ When the field has an existing value, it matches against loaded options by
 `name` first, then by `label`. Unknown values are preserved so existing
 documents still display correctly.
 
+### Runtime filter overrides
+
+Static meta `link_filters` can be overridden at fetch time by supplying a
+`LinkFilterBuilder` — useful when valid options depend on a sibling field,
+a parent-form field, or arbitrary app state. The same hook applies to Table
+MultiSelect fields below. See `LINK_FILTER_BUILDER.md` for the full contract,
+wiring, and recipes.
+
 ---
 
 ## Table MultiSelect Field

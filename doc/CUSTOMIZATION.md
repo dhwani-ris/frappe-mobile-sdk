@@ -129,4 +129,14 @@ DocumentListScreen(
 - Custom field factory mapping for specific field types/field names.
 - Custom field widgets for special behavior.
 - Login screen styling with `LoginScreenStyle`.
+- Runtime Link / Table MultiSelect filter overrides via `LinkFilterBuilder`.
+  See `LINK_FILTER_BUILDER.md` for the API, wiring points
+  (`MobileHomeScreen` / `FormScreen` / `DocumentListScreen` /
+  `FrappeFormBuilder`), precedence rules, and examples.
+- Field-edit hooks via `FieldChangeHandler` (`onFieldChange` on
+  `FrappeFormBuilder`/`FormScreen`/`DocumentListScreen`, or per-doctype
+  `getFieldChangeHandler` on `MobileHomeScreen`). Return a patch map to
+  derive or cascade-clear fields; handlers receive a snapshot of form data
+  so mutations never leak back into SDK state. See
+  `FIELD_CHANGE_HANDLER.md`.
 

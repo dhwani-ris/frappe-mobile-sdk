@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import '../api/client.dart';
 import '../models/doc_type_meta.dart';
 import '../models/document.dart';
+import '../models/link_filter_result.dart';
 import '../services/link_option_service.dart';
 import '../services/meta_service.dart';
 import '../services/offline_repository.dart';
@@ -13,7 +14,7 @@ import '../services/permission_service.dart';
 import '../services/sync_service.dart';
 import 'form_screen.dart';
 import 'widgets/form_builder.dart'
-    show FrappeFormStyle, OnButtonPressedCallback;
+    show FrappeFormStyle, OnButtonPressedCallback, FieldChangeHandler;
 
 /// Layout variants for [DocumentListScreen].
 enum DocumentListLayout { list, card }
@@ -68,12 +69,11 @@ class DocumentListScreen extends StatefulWidget {
   final OnButtonPressedCallback? onButtonPressed;
 
   /// Called when a field value changes in the form. Returns computed field patches.
-  final Map<String, dynamic>? Function(
-    String fieldName,
-    dynamic newValue,
-    Map<String, dynamic> formData,
-  )?
-  onFieldChange;
+  final FieldChangeHandler? onFieldChange;
+
+  /// Optional builder for runtime link filters. Called during link option resolution.
+  final LinkFilterBuilder? Function(String doctype, String fieldname)?
+      getLinkFilterBuilder;
 
   /// Optional customization for list UI (layout, colors, typography, button style).
   final DocumentListStyle? style;
@@ -100,6 +100,7 @@ class DocumentListScreen extends StatefulWidget {
     this.translate,
     this.onButtonPressed,
     this.onFieldChange,
+    this.getLinkFilterBuilder,
     this.style,
     this.formStyle,
     this.formScreenStyle,
@@ -572,6 +573,7 @@ class _DocumentListScreenState extends State<DocumentListScreen> {
           getMobileUuid: widget.getMobileUuid,
           onButtonPressed: widget.onButtonPressed,
           onFieldChange: widget.onFieldChange,
+          getLinkFilterBuilder: widget.getLinkFilterBuilder,
           style: widget.formStyle,
           screenStyle: widget.formScreenStyle,
           // Permissions

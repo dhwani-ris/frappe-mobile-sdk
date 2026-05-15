@@ -6,6 +6,7 @@ import '../api/utils.dart';
 import '../models/doc_field.dart';
 import '../models/doc_type_meta.dart';
 import '../models/document.dart';
+import '../models/link_filter_result.dart';
 import '../models/workflow_transition.dart';
 import '../services/link_option_service.dart';
 import '../services/meta_service.dart';
@@ -14,7 +15,11 @@ import '../services/sync_service.dart';
 import '../services/workflow_service.dart';
 import 'sync_status_screen.dart';
 import 'widgets/form_builder.dart'
-    show FrappeFormBuilder, FrappeFormStyle, OnButtonPressedCallback;
+    show
+        FrappeFormBuilder,
+        FrappeFormStyle,
+        OnButtonPressedCallback,
+        FieldChangeHandler;
 
 /// Visual customization for [FormScreen] action area.
 class FormScreenStyle {
@@ -68,12 +73,11 @@ class FormScreen extends StatefulWidget {
   final OnButtonPressedCallback? onButtonPressed;
 
   /// Called when a field value changes. Returns computed field patches (for hidden computed fields).
-  final Map<String, dynamic>? Function(
-    String fieldName,
-    dynamic newValue,
-    Map<String, dynamic> formData,
-  )?
-  onFieldChange;
+  final FieldChangeHandler? onFieldChange;
+
+  /// Optional builder for runtime link filters. Called during link option resolution.
+  final LinkFilterBuilder? Function(String doctype, String fieldname)?
+      getLinkFilterBuilder;
 
   /// When true (default), use LinkFieldCoordinator for sequenced link option loading.
   final bool useLinkFieldCoordinator;
@@ -100,6 +104,7 @@ class FormScreen extends StatefulWidget {
     this.initialData,
     this.onButtonPressed,
     this.onFieldChange,
+    this.getLinkFilterBuilder,
     this.useLinkFieldCoordinator = true,
     this.screenStyle,
   });
@@ -886,6 +891,7 @@ class _FormScreenState extends State<FormScreen> {
                   style: widget.style,
                   translate: widget.translate,
                   onFieldChange: widget.onFieldChange,
+                  getLinkFilterBuilder: widget.getLinkFilterBuilder,
                 ),
               ),
             ],

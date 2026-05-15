@@ -555,6 +555,9 @@ This repository includes focused documents (under `doc/` unless noted):
   - Includes a dedicated "Social Login (OAuth) Configuration" guide (Frappe server + mobile deep-link setup).
 - `doc/CUSTOMIZATION.md` – UI customization:
   - `FrappeFormStyle`, custom field factories, custom field widgets.
+- `doc/FIELD_TYPES.md` – Supported field types, SearchableSelect, Link, Table MultiSelect, Geolocation, DependsOn evaluator.
+- `doc/LINK_FILTER_BUILDER.md` – Runtime override of Link / Table MultiSelect filters using `LinkFilterBuilder` (PR #35). Covers API, wiring, precedence, and recipes.
+- `doc/FIELD_CHANGE_HANDLER.md` – `onFieldChange` / `FieldChangeHandler` hook for derived-field patches, snapshot-isolation guarantees, and per-doctype resolution via `MobileHomeScreen.getFieldChangeHandler` (PR #35).
 - `doc/TESTING.md` – Testing strategies:
   - Running the example app.
   - Using local path vs Git dependency.
@@ -576,6 +579,9 @@ In‑repo documentation:
 - `doc/DOCUMENTATION.md` – Full SDK documentation.
 - `doc/SETUP.md` – Environment and platform setup.
 - `doc/CUSTOMIZATION.md` – UI customization guide.
+- `doc/FIELD_TYPES.md` – Field type reference.
+- `doc/LINK_FILTER_BUILDER.md` – Runtime Link / Table MultiSelect filter overrides.
+- `doc/FIELD_CHANGE_HANDLER.md` – Field-edit hook with patch-map contract.
 - `doc/TESTING.md` – Testing and verification guide.
 - `doc/QUICK_TEST.md` – Quick validation steps.
 - `doc/WORKFLOWS.md` – Workflow behavior.
