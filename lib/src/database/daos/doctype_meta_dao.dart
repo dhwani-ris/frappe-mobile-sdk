@@ -1,10 +1,15 @@
 import 'package:sqflite/sqflite.dart';
 import '../entities/doctype_meta_entity.dart';
+import '../table_name.dart';
 
 class DoctypeMetaDao {
   final Database _database;
 
   DoctypeMetaDao(this._database);
+
+  Future<String> tableNameFor(String doctype) async {
+    return await getTableName(doctype) ?? normalizeDoctypeTableName(doctype);
+  }
 
   Future<DoctypeMetaEntity?> findByDoctype(String doctype) async {
     final maps = await _database.query(

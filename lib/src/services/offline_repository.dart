@@ -761,6 +761,30 @@ class OfflineRepository {
   /// (SQLite's `DROP COLUMN` story is finicky and stale columns are
   /// harmless extras). The diff is funneled through [MetaMigration.apply]
   /// so existing-row backfill of new `__norm` columns happens for free.
+  /// Public entrypoint for schema reconcile — called by [PullEngine]
+  /// right before applying a pull page so the table's columns match the
+  /// meta the apply step is about to use. Addresses the race where
+  /// SNF's `runSnfPostSdkSync.ensureSchemaForClosure` and the SDK's
+  /// concurrent `checkAndSyncDoctypes` read the meta cache at slightly
+  /// different moments — SNF builds the table with meta-T1, PullApply
+  /// then iterates meta-T2 (now refreshed) and crashes on
+  /// `no such column`.
+  ///
+  /// No-op if the table doesn't exist yet — the create path runs
+  /// elsewhere ([ensureSchemaForClosure] / [_ensurePerDoctypeTable]).
+  /// Bypasses [_ensuredTables] on purpose so re-entrant callers (e.g.
+  /// PullEngine running after [ensureSchemaForClosure] already added
+  /// the table to the set) still get their migrations applied.
+  Future<void> reconcileParentTableForMeta(
+    String doctype,
+    String tableName,
+    DocTypeMeta meta,
+  ) async {
+    final db = _database.rawDatabase;
+    if (!await sqliteTableExists(db, tableName)) return;
+    await _reconcileParentTableSchema(doctype, tableName, meta);
+  }
+
   Future<void> _reconcileParentTableSchema(
     String doctype,
     String tableName,

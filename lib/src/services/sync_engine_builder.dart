@@ -53,6 +53,7 @@ class SyncEngineBuilder {
     bool serverHasDedupHook = false,
     int? concurrencyOverride,
     SyncStateNotifier? sharedNotifier,
+    SchemaReconcilerFn? schemaReconciler,
   }) async {
     final notifier = sharedNotifier ?? SyncStateNotifier();
     final tier = await DeviceTier.detect(override: concurrencyOverride);
@@ -198,7 +199,8 @@ class SyncEngineBuilder {
         filters: (params['filters'] as List?)?.cast<List<dynamic>>(),
         fields: (params['fields'] as List?)?.cast<String>(),
         orderBy: params['order_by'] as String?,
-        limitPageLength: params['limit_page_length'] as int? ?? 100,
+        limitPageLength: params['limit_page_length'] as int? ?? 500,
+        limitStart: params['limit_start'] as int? ?? 0,
       );
       return result
           .whereType<Map>()
@@ -212,10 +214,11 @@ class SyncEngineBuilder {
       outboxDao: outboxDao,
       pool: pullPool,
       fetcher: PullPageFetcher(listHttp: listHttp),
-      pageSize: 100,
+      pageSize: 500,
       notifier: notifier,
       metaResolver: metaResolver,
       writeQueueResolver: writeQueueResolver,
+      schemaReconciler: schemaReconciler,
     );
 
     final controller = SyncController(

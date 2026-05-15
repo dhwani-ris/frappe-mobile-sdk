@@ -521,11 +521,11 @@ void main() {
   test(
     'resumes from pre-existing cursor (_decodeJsonOrNull with non-empty string)',
     () async {
-      // Pre-seed a cursor so getLastOkCursor returns a non-empty JSON string →
-      // _decodeJsonOrNull parses it and Cursor.fromJson uses the values.
+      // Pre-seed a complete cursor (complete=true → incremental mode) so the
+      // engine resumes with a modified >= filter rather than a fresh offset pull.
       await metaDao.setLastOkCursor(
         'Customer',
-        '{"modified":"2026-01-01 00:00:00","name":"C-0","complete":false}',
+        '{"modified":"2026-01-01 00:00:00","name":"C-0","complete":true}',
       );
       var calls = 0;
       final fetcher = PullPageFetcher(
@@ -632,9 +632,14 @@ void main() {
   test(
     'stall guard: terminates and persists cursor when all page rows share same modified',
     () async {
-      // Simulates a doctype where every row has the same `modified` timestamp
-      // (e.g. bulk-imported reference data). Without the stall guard,
+      // Simulates INCREMENTAL sync where every row has the same `modified`
+      // timestamp (e.g. bulk-imported reference data). Without the stall guard,
       // `modified >= cursor.modified` returns the same page forever.
+      // The stall guard only fires for complete=true cursors; seed one first.
+      await metaDao.setLastOkCursor(
+        'Customer',
+        '{"modified":"2025-12-31","name":"C-0","complete":true}',
+      );
       var calls = 0;
       final fetcher = PullPageFetcher(
         listHttp: (doctype, params) async {

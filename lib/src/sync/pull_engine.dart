@@ -10,6 +10,7 @@ import '../database/daos/outbox_dao.dart';
 import '../database/table_name.dart';
 import '../models/closure_result.dart';
 import '../models/dep_graph.dart';
+import '../models/doc_type_meta.dart';
 import '../models/meta_resolver.dart';
 import 'cursor.dart';
 import 'pull_apply.dart';
@@ -19,6 +20,18 @@ import 'sync_state_notifier.dart';
 
 /// Back-compat alias. Use [MetaResolverFn] directly in new code.
 typedef MetaResolver = MetaResolverFn;
+
+/// Per-doctype schema reconcile hook. Called at the start of each
+/// `_runDoctype` with the meta the engine is about to apply, so the
+/// receiver can `ALTER TABLE ADD COLUMN` any fields that were added to
+/// meta after the table was originally created.
+///
+/// In production this is wired to
+/// `OfflineRepository.reconcileParentTableForMeta`. Optional — when
+/// null, no reconcile happens and writes assume schema parity (fine for
+/// tests).
+typedef SchemaReconcilerFn =
+    Future<void> Function(String doctype, String tableName, DocTypeMeta meta);
 
 /// Drives the pull side of the sync engine. Spec §5.1 + §5.4.
 ///
@@ -58,6 +71,12 @@ class PullEngine {
   /// when [writeQueueResolver] is non-null.
   final Map<String, WriteQueue> _writeQueues = {};
 
+  /// Optional schema-reconcile callback invoked at the start of each
+  /// `_runDoctype`. See [SchemaReconcilerFn] for rationale. Failure is
+  /// caught and logged — pull continues with whatever columns currently
+  /// exist on the table.
+  final SchemaReconcilerFn? schemaReconciler;
+
   PullEngine({
     required this.db,
     required this.metaDao,
@@ -68,6 +87,7 @@ class PullEngine {
     required this.notifier,
     required this.metaResolver,
     this.writeQueueResolver,
+    this.schemaReconciler,
   });
 
   /// Returns the set of doctypes that were deferred (skipped because a
@@ -127,6 +147,23 @@ class PullEngine {
     }
 
     final meta = await metaResolver(doctype);
+
+    // Reconcile the on-disk schema against THIS meta snapshot before
+    // applying any pages. Closes the SNF/SDK race where the table was
+    // created from a slightly older meta and PullApply now wants to
+    // UPDATE columns that don't exist yet. See [SchemaReconcilerFn].
+    final reconciler = schemaReconciler;
+    if (reconciler != null) {
+      try {
+        final parentTableForReconcile = await metaDao.tableNameFor(doctype);
+        await reconciler(doctype, parentTableForReconcile, meta);
+      } catch (e, st) {
+        debugPrint(
+          'PullEngine._runDoctype($doctype): schemaReconciler failed — $e\n$st',
+        );
+      }
+    }
+
     var scratch = Cursor.fromJson(
       _decodeJsonOrNull(await metaDao.getLastOkCursor(doctype)),
     );
@@ -214,12 +251,15 @@ class PullEngine {
         // confirmation" case (network error on the next request) is what
         // protects the cursor from advancing prematurely.
 
-        // Stall guard: when `modified >= cursor.modified` returns a non-empty
-        // page where every row shares the same modified timestamp as the
-        // cursor, the advanced cursor equals the input cursor and the next
-        // request returns the same page — infinite loop. Break here; PullApply's
-        // UPSERT-by-server_name idempotency keeps the applied rows correct.
-        if (scratch.modified == priorModified && scratch.name == priorName) {
+        // Stall guard (incremental only): when `modified >= cursor.modified`
+        // returns a non-empty page where every row shares the same modified
+        // timestamp, the advanced cursor equals the input cursor and the next
+        // request returns the same page — infinite loop. Not applicable to
+        // initial sync (complete=false) because that path uses limit_start
+        // offset pagination, which always advances.
+        if (scratch.complete &&
+            scratch.modified == priorModified &&
+            scratch.name == priorName) {
           break;
         }
       }

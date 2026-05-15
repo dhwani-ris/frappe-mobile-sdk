@@ -8,6 +8,7 @@ import 'package:flutter/foundation.dart';
 
 import 'exceptions.dart';
 import 'rest_helper.dart';
+import 'utils.dart';
 
 class DoctypeService {
   final RestHelper _restHelper;
@@ -84,7 +85,15 @@ class DoctypeService {
     );
 
     if (response is Map<String, dynamic> && response.containsKey('message')) {
-      return response['message'] as List<dynamic>;
+      final msg = response['message'];
+      if (msg is List) return msg;
+      // Frappe returned a non-List message (null, error string, etc.).
+      // Treat as empty page — callers see no records and pull continues.
+      debugPrint(
+        'DoctypeService.list: unexpected message shape for $doctype '
+        '(${msg?.runtimeType ?? "null"}) — treating as empty page',
+      );
+      return [];
     }
     return [];
   }
@@ -148,10 +157,7 @@ class DoctypeService {
 
   Future<Map<String, dynamic>> getByName(String doctype, String name) async {
     final response = await _restHelper.get('/api/resource/$doctype/$name');
-    if (response is Map<String, dynamic> && response.containsKey('data')) {
-      return response['data'] as Map<String, dynamic>;
-    }
-    return response as Map<String, dynamic>;
+    return unwrapData<Map<String, dynamic>>(response);
   }
 
   /// Bulk-fetch full parent docs (with embedded child rows) via the
@@ -207,10 +213,13 @@ class DoctypeService {
     );
     if (nameList.isEmpty) return [];
 
+    // Use `?.toString()` (matches listChildDocs) so int-valued `name`
+    // fields from Frappe's autoname-by-numeric-series — which historically
+    // dropped silently under the `is String` check — round-trip correctly.
     final names = <String>[
       for (final n in nameList)
-        if (n is Map<String, dynamic> && n['name'] is String)
-          (n['name'] as String),
+        if (n is Map<String, dynamic>)
+          if (n['name']?.toString() case final String s when s.isNotEmpty) s,
     ];
     if (names.isEmpty) return [];
 

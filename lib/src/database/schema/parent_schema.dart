@@ -56,15 +56,28 @@ List<String> buildParentSchemaDDL(
     }
   }
 
-  final ddl = <String>['CREATE TABLE $tableName (\n  ${cols.join(',\n  ')}\n)'];
+  // `IF NOT EXISTS` on every CREATE makes the DDL idempotent so a second
+  // caller (e.g. SDK's schema-eager `_runUpgradeClosurePull` racing with
+  // SNF's `runSnfPostSdkSync.ensureSchemaForClosure`, or a re-entry after
+  // a partial prior failure) cannot abort the loop on "table already
+  // exists" / "index already exists" and leave later doctypes — especially
+  // child tables — uncreated. Aligns with `feedback_migration_safety_pattern`:
+  // idempotent CREATEs should be safe to re-run without explicit guards.
+  final ddl = <String>[
+    'CREATE TABLE IF NOT EXISTS $tableName (\n  ${cols.join(',\n  ')}\n)',
+  ];
 
   final suffix = _indexSuffix(tableName);
   ddl.add(
-    'CREATE UNIQUE INDEX ix_${suffix}_server_name '
+    'CREATE UNIQUE INDEX IF NOT EXISTS ix_${suffix}_server_name '
     'ON $tableName(server_name) WHERE server_name IS NOT NULL',
   );
-  ddl.add('CREATE INDEX ix_${suffix}_status ON $tableName(sync_status)');
-  ddl.add('CREATE INDEX ix_${suffix}_modified ON $tableName(modified)');
+  ddl.add(
+    'CREATE INDEX IF NOT EXISTS ix_${suffix}_status ON $tableName(sync_status)',
+  );
+  ddl.add(
+    'CREATE INDEX IF NOT EXISTS ix_${suffix}_modified ON $tableName(modified)',
+  );
 
   final additional = chooseIndexes(
     meta,
@@ -73,7 +86,7 @@ List<String> buildParentSchemaDDL(
   ).where((c) => c != 'server_name' && c != 'sync_status' && c != 'modified');
   for (final col in additional) {
     ddl.add(
-      'CREATE INDEX ix_${suffix}_${_sanitizeColName(col)} '
+      'CREATE INDEX IF NOT EXISTS ix_${suffix}_${_sanitizeColName(col)} '
       'ON $tableName($col)',
     );
   }
