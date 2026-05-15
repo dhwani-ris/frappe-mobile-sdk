@@ -1,56 +1,35 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
+
 import '../api/client.dart';
 import '../database/app_database.dart';
 import '../database/entities/link_option_entity.dart';
+import '../models/doc_field.dart';
 import '../models/doc_type_meta.dart';
+import '../models/link_filter_result.dart';
 import '../utils/depends_on_evaluator.dart';
 import 'meta_service.dart';
 
-const int _kLinkOptionCacheMaxEntries = 30;
-
 /// Fetches link field options from API at runtime. Link filters are sent to the API; no DB table.
+///
+/// No client-side result cache by design — matches Frappe Desk semantics
+/// (every dropdown re-queries) and avoids staleness when dependent fields
+/// mutate. Per-form dedupe lives in [LinkFieldCoordinator._resultsCache],
+/// which bounds cost to one API call per (doctype, filters) per form open.
 class LinkOptionService {
   final FrappeClient _client;
-  final Map<String, List<LinkOptionEntity>> _memoryCache = {};
-  final List<String> _cacheKeys = [];
 
   LinkOptionService(this._client);
-
-  /// Cache of doctype -> title_field name, populated lazily from DB metadata.
-  final Map<String, String?> _titleFieldCache = {};
-
-  String _cacheKey(String doctype, List<List<dynamic>>? filters) {
-    if (filters == null || filters.isEmpty) return doctype;
-    return '$doctype|${filters.hashCode}';
-  }
-
-  void _putCache(String key, List<LinkOptionEntity> options) {
-    if (_memoryCache.length >= _kLinkOptionCacheMaxEntries &&
-        !_memoryCache.containsKey(key)) {
-      if (_cacheKeys.isNotEmpty) {
-        final evict = _cacheKeys.removeAt(0);
-        _memoryCache.remove(evict);
-      }
-    }
-    if (!_memoryCache.containsKey(key)) _cacheKeys.add(key);
-    _memoryCache[key] = options;
-  }
 
   /// Fetches link options from API (with optional filters). No DB; filters sent to server.
   Future<List<LinkOptionEntity>> getLinkOptions(
     String doctype, {
-    bool forceRefresh = false,
     List<List<dynamic>>? filters,
   }) async {
     final normalizedFilters = _normalizeFiltersForDoctype(doctype, filters);
-    final key = _cacheKey(doctype, normalizedFilters);
-    if (!forceRefresh && _memoryCache.containsKey(key)) {
-      return _memoryCache[key]!;
-    }
-
     final meta = await _getDocTypeMeta(doctype);
-    final titleField = _resolveTitleField(doctype, meta);
+    final titleField = meta?.titleField;
 
     List<dynamic> documents;
 
@@ -119,7 +98,6 @@ class LinkOptionService {
       );
     }
 
-    _putCache(key, linkOptions);
     return linkOptions;
   }
 
@@ -212,26 +190,75 @@ class LinkOptionService {
     }
   }
 
-  void clearCache(String doctype) {
-    for (final k in _memoryCache.keys.toList()) {
-      if (k == doctype || k.startsWith('$doctype|')) {
-        _memoryCache.remove(k);
-        _cacheKeys.remove(k);
+  /// Resolves filters for a link-option fetch.
+  ///
+  /// Precedence:
+  /// 1. If [hook] is provided and `field.fieldname` is non-null, invoke it.
+  ///    - Non-null result → use `result.filters` (empty list normalizes to null).
+  ///    - Null result → fall through to meta.
+  ///    - **Throws are caught and treated as null** — host hook failures must
+  ///      never propagate into the SDK's UI layer (would freeze the dropdown
+  ///      in its loading state). Logged via [debugPrint] for diagnostics.
+  /// 2. Parse meta `linkFilters` via [parseLinkFilters] against a merged
+  ///    `parentFormData ∪ rowData` view (rowData wins on key collision).
+  ///    Mirrors Frappe Desk: child-row Link filters can reference parent
+  ///    fields via `eval: doc.X`, just like client scripts that read
+  ///    `frm.doc` from a child-row context. For top-level forms
+  ///    `parentFormData` equals `rowData`, so the merge is a no-op.
+  static List<List<dynamic>>? resolveFilters({
+    required DocField field,
+    required Map<String, dynamic> rowData,
+    required Map<String, dynamic> parentFormData,
+    LinkFilterBuilder? hook,
+  }) {
+    final fieldName = field.fieldname;
+    if (hook != null && fieldName != null) {
+      LinkFilterResult? result;
+      try {
+        result = hook(field, fieldName, rowData, parentFormData);
+      } catch (e, st) {
+        debugPrint(
+          'LinkOptionService.resolveFilters: LinkFilterBuilder threw for '
+          '${field.options}/$fieldName — falling back to meta. $e\n$st',
+        );
+        result = null;
+      }
+      if (result != null) {
+        final filters = result.filters;
+        if (filters == null || filters.isEmpty) return null;
+        return filters;
       }
     }
-    _titleFieldCache.remove(doctype);
+    return parseLinkFilters(field.linkFilters, {...parentFormData, ...rowData});
   }
 
-  /// Resolves the display field for a doctype.
-  /// Checks title_field first, then falls back to first search_field from meta
-  /// (common for child doctypes where title_field is not set).
-  String? _resolveTitleField(String doctype, DocTypeMeta? meta) {
-    if (_titleFieldCache.containsKey(doctype)) {
-      return _titleFieldCache[doctype];
+  /// Safely invokes a host-provided [getLinkFilterBuilder] factory.
+  ///
+  /// Host apps register builders via a factory keyed on
+  /// `(targetDoctype, fieldname)`. That factory itself runs host code (map
+  /// lookups, switch dispatch, etc.) and can throw — a thrown factory must
+  /// not propagate into the SDK's UI layer the same way a thrown builder
+  /// must not (see [resolveFilters]). All five SDK call sites should route
+  /// through this helper instead of calling `getLinkFilterBuilder?.call(...)`
+  /// directly so the safety guarantee lives in one place.
+  ///
+  /// Returns `null` when the factory is null, returns null, or throws.
+  static LinkFilterBuilder? safeHook(
+    LinkFilterBuilder? Function(String doctype, String fieldname)?
+    getLinkFilterBuilder,
+    String doctype,
+    String fieldname,
+  ) {
+    if (getLinkFilterBuilder == null) return null;
+    try {
+      return getLinkFilterBuilder(doctype, fieldname);
+    } catch (e, st) {
+      debugPrint(
+        'LinkOptionService.safeHook: getLinkFilterBuilder threw for '
+        '$doctype/$fieldname — falling back to meta. $e\n$st',
+      );
+      return null;
     }
-    final titleField = meta?.titleField;
-    _titleFieldCache[doctype] = titleField;
-    return titleField;
   }
 
   Future<DocTypeMeta?> _getDocTypeMeta(String doctype) async {
@@ -242,11 +269,5 @@ class LinkOptionService {
     } catch (_) {
       return null;
     }
-  }
-
-  void clearAllCache() {
-    _memoryCache.clear();
-    _cacheKeys.clear();
-    _titleFieldCache.clear();
   }
 }

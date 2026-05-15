@@ -1,7 +1,9 @@
 // ignore_for_file: use_build_context_synchronously
 import 'package:flutter/material.dart';
+import '../models/link_filter_result.dart';
 import '../sdk/frappe_sdk.dart';
 import '../ui/document_list_screen.dart';
+import '../ui/widgets/form_builder.dart' show FieldChangeHandler;
 
 /// Generic home screen that renders doctype groups from the SDK's Mobile Configuration.
 ///
@@ -43,11 +45,11 @@ class MobileHomeScreen extends StatefulWidget {
   /// getFieldChangeHandler: (doctype) =>
   ///     FormHandlers.forDoctype(doctype)?.onFieldChange,
   /// ```
-  final Map<String, dynamic>? Function(
-    String fieldName,
-    dynamic newValue,
-    Map<String, dynamic> formData,
-  )? Function(String doctype)? getFieldChangeHandler;
+  final FieldChangeHandler? Function(String doctype)? getFieldChangeHandler;
+
+  /// Optional builder for runtime link filters. Called during link option resolution.
+  final LinkFilterBuilder? Function(String doctype, String fieldname)?
+      getLinkFilterBuilder;
 
   const MobileHomeScreen({
     super.key,
@@ -58,6 +60,7 @@ class MobileHomeScreen extends StatefulWidget {
     this.groupHeaderBuilder,
     this.tileBuilder,
     this.getFieldChangeHandler,
+    this.getLinkFilterBuilder,
   });
 
   @override
@@ -480,6 +483,7 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
               permissionService: widget.sdk.permissions,
               translate: (s) => widget.sdk.translations.translate(s),
               onFieldChange: widget.getFieldChangeHandler?.call(doctype),
+              getLinkFilterBuilder: widget.getLinkFilterBuilder,
             ),
           ),
         );

@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../../../constants/field_types.dart';
 import '../../../models/doc_field.dart';
 import '../../../models/doc_type_meta.dart';
+import '../../../models/link_filter_result.dart';
 import '../../../services/link_option_service.dart';
 import '../../../services/link_field_coordinator.dart';
 import 'attach_field.dart';
@@ -72,6 +73,9 @@ class FieldFactory {
     ChildTableFormBuilder? childTableFormBuilder,
     Future<void> Function(DocField field, Map<String, dynamic> formData)?
     onButtonPressed,
+    Map<String, dynamic>? parentFormData,
+    LinkFilterBuilder? Function(String doctype, String fieldname)?
+    getLinkFilterBuilder,
   }) {
     if (field.hidden) {
       return null;
@@ -129,6 +133,9 @@ class FieldFactory {
           enabled: enabled,
           getMeta: getMeta,
           linkOptionService: linkOptionService,
+          formData: formData ?? const {},
+          parentFormData: parentFormData ?? const {},
+          getLinkFilterBuilder: getLinkFilterBuilder,
           style: fieldStyle,
         );
 
@@ -190,6 +197,8 @@ class FieldFactory {
           linkFieldCoordinator: linkFieldCoordinator,
           options: linkOptions,
           formData: formData,
+          parentFormData: parentFormData ?? const {},
+          getLinkFilterBuilder: getLinkFilterBuilder,
           style: fieldStyle,
         );
 
