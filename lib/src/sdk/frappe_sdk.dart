@@ -6,12 +6,14 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import '../api/client.dart';
+import '../api/exceptions.dart';
 import '../concurrency/concurrency_pool.dart';
 import '../concurrency/connectivity_watcher.dart';
 import '../database/app_database.dart';
 import '../database/daos/doctype_meta_dao.dart';
 import '../database/daos/sdk_meta_dao.dart';
 import '../models/closure_result.dart';
+import '../models/doc_type_meta.dart';
 import '../models/offline_mode.dart';
 import '../models/offline_mode_notifier.dart';
 import '../models/session_user.dart';
@@ -30,12 +32,19 @@ import '../services/link_option_service.dart';
 import '../services/translation_service.dart';
 import '../sync/pull_engine.dart';
 import '../sync/push_engine.dart';
+import '../sync/sync_state.dart';
 import '../sync/sync_state_notifier.dart';
 
 /// Main SDK initialization class for easy setup
 class FrappeSDK {
   final String baseUrl;
   final String? databaseAppName;
+
+  /// Optional payload transformer; passed to the push pipeline. See
+  /// [PayloadTransformerFn] in `push_engine.dart`. Apps use this to
+  /// override push payloads (e.g. SNF auto-submits submittable doctypes
+  /// to `docstatus=1` on sync).
+  final PayloadTransformerFn? payloadTransformer;
 
   FrappeClient? _client;
   AppDatabase? _database;
@@ -137,7 +146,11 @@ class FrappeSDK {
     _modeNotifier?.value = next;
   }
 
-  FrappeSDK({required this.baseUrl, this.databaseAppName});
+  FrappeSDK({
+    required this.baseUrl,
+    this.databaseAppName,
+    this.payloadTransformer,
+  });
 
   /// Test-only constructor: accepts a pre-built [AppDatabase] (e.g. in-memory).
   /// Wires all services directly without calling [initialize()].
@@ -155,7 +168,8 @@ class FrappeSDK {
       enabled: true,
       isPersisted: true,
     ),
-  }) : databaseAppName = null {
+  }) : databaseAppName = null,
+       payloadTransformer = null {
     _database = database;
     _modeNotifier = OfflineModeNotifier(offlineMode);
     _syncCompleteController = StreamController<void>.broadcast();
@@ -300,6 +314,11 @@ class FrappeSDK {
       // INSERTs after a ghost-success retry instead of falling back to L3
       // (extra GET-by-mobile_uuid before each retry).
       serverHasDedupHook: true,
+      // Closes the SDK meta-cache race: PullEngine reconciles the
+      // on-disk schema against the meta it's about to apply, just before
+      // each doctype's pull loop runs.
+      schemaReconciler: _repository!.reconcileParentTableForMeta,
+      payloadTransformer: payloadTransformer,
     );
     _syncStateNotifier = pack.notifier;
     _pushPool = pack.pushPool;
@@ -418,6 +437,15 @@ class FrappeSDK {
               .whenComplete(() => _pendingDrain = null);
           unawaited(_pendingDrain!);
         }
+        // Awaited intentionally — keeps the boot pipeline sequential
+        // with the host app's own post-init sync, avoiding two
+        // concurrent invocations of `checkAndSyncDoctypes` /
+        // `resyncMobileConfiguration` that would otherwise race.
+        //
+        // The splash-hang concern (wrong / unresponsive server) is
+        // addressed inside [_initialMetaAndDataSync] by a short-timeout
+        // permissions probe that bails fast and surfaces the failure
+        // on [syncStateNotifier.value.lastError].
         await _initialMetaAndDataSync();
       }
     }
@@ -439,6 +467,20 @@ class FrappeSDK {
         await _hasResidualOfflineState()) {
       await _offlineTransitionService!.runDrainAndWipe();
     }
+  }
+
+  /// Re-run the boot-time metadata + data sync. Host apps wire this to a
+  /// "Retry" action on the UI banner they show when
+  /// [syncStateNotifier]'s `lastError` populates with `code == 'network'`
+  /// — the only sanctioned way to retry a failed initial sync without
+  /// going through full logout/login.
+  ///
+  /// Returns the future that completes when the boot sync settles (or
+  /// fails fast on the short-timeout probe). The future never throws —
+  /// failures are reported via [syncStateNotifier].
+  Future<void> retryInitialMetaAndDataSync() async {
+    if (!_initialized) return;
+    await _initialMetaAndDataSync();
   }
 
   /// Resolves the session-bound offline mode from the persisted record.
@@ -635,6 +677,10 @@ class FrappeSDK {
         isPersisted: false,
       );
     }
+    // The notifier outlives session boundaries; drop a stale boot-sync
+    // banner so the next login doesn't inherit the previous session's
+    // unreachable-server state.
+    _syncStateNotifier?.clearLastError();
   }
 
   /// Throws if [initialize] hasn't run. Called as the first line of every
@@ -981,11 +1027,50 @@ class FrappeSDK {
     // race-free.
     if (!_cachedOnline) return;
 
+    // Clear any prior boot error so the host UI can drop a stale banner
+    // before we probe again.
+    _syncStateNotifier?.clearLastError();
+
+    // Flip `isInitialSync: true` for the whole boot/login data-pull so
+    // any host UI subscribed to `state$` (SyncStatusBar, custom banners)
+    // can render a "Syncing…" indicator while the closure pull runs.
+    // The flag is reset by [_setInitialSyncFlag] at every exit point
+    // below so it never sticks across early returns or thrown errors.
+    final initialSyncNotifier = _syncStateNotifier;
+    _setInitialSyncFlag(initialSyncNotifier, true);
+
     try {
-      await _permissionService?.syncFromApi();
+      // Short-timeout probe: if the configured base URL is wrong or the
+      // server is down, this fails in ~10s instead of ~93s. Bailing here
+      // also skips the long-timeout downstream calls (meta, config,
+      // closure pull) that would chain another ~90s wait each.
+      await _permissionService?.syncFromApi(
+        timeout: const Duration(seconds: 10),
+      );
+    } on NetworkException catch (e, st) {
+      _syncStateNotifier?.recordLastError(
+        SyncErrorSummary(
+          code: 'network',
+          message: e.message,
+          at: DateTime.now(),
+        ),
+      );
+      // ignore: avoid_print
+      print('FrappeSDK: boot sync — server unreachable: $e\n$st');
+      _setInitialSyncFlag(initialSyncNotifier, false);
+      return;
     } catch (e, st) {
+      _syncStateNotifier?.recordLastError(
+        SyncErrorSummary(
+          code: 'permissions',
+          message: e.toString(),
+          at: DateTime.now(),
+        ),
+      );
       // ignore: avoid_print
       print('FrappeSDK: permissions.syncFromApi failed — $e\n$st');
+      // Non-network failure: continue with other steps so a partial
+      // outage (e.g. one method 500) doesn't block the rest of boot.
     }
 
     try {
@@ -1010,9 +1095,25 @@ class FrappeSDK {
     }
 
     // Online mode stops here — closure pull is offline-only.
-    if (!_offlineMode.enabled) return;
+    if (!_offlineMode.enabled) {
+      _setInitialSyncFlag(initialSyncNotifier, false);
+      return;
+    }
 
-    await _runUpgradeClosurePull();
+    try {
+      await _runUpgradeClosurePull();
+    } finally {
+      _setInitialSyncFlag(initialSyncNotifier, false);
+    }
+  }
+
+  /// Toggles [SyncState.isInitialSync] when [notifier] is non-null. Used
+  /// by [_initialMetaAndDataSync] to bracket the first-pull window so any
+  /// host UI subscribed to `state$` can render a "Syncing…" indicator
+  /// without leaking the flag across early-return paths.
+  void _setInitialSyncFlag(SyncStateNotifier? notifier, bool value) {
+    if (notifier == null) return;
+    notifier.value = notifier.value.copyWith(isInitialSync: value);
   }
 
   /// Pulls every doctype in the closure of the user's mobile-form entry
@@ -1052,6 +1153,38 @@ class FrappeSDK {
       if (!await onlineCheck()) return const <String>{};
       final entryPoints = await _metaService!.getMobileFormDoctypeNames();
       final closure = await _metaService!.closure(entryPoints);
+
+      // Create per-doctype mirror tables BEFORE the pull writes into them.
+      // Without this, PullEngine.applyPageInTxn crashes with
+      // `no such table: docs__<doctype>` for any doctype whose schema
+      // hasn't been created yet (the per-doctype table create path is
+      // owned by saveDocument / ensureSchemaForClosure — neither of which
+      // ran during the SDK's auto-fired initial sync before this fix).
+      // SNF's own runSnfPostSdkSync also calls ensureSchemaForClosure as
+      // belt-and-suspenders; this call is idempotent.
+      if (_repository != null) {
+        final metasByDoctype = <String, DocTypeMeta>{};
+        for (final dt in closure.doctypes) {
+          try {
+            metasByDoctype[dt] = await _metaService!.getMeta(dt);
+          } catch (e, st) {
+            // ignore: avoid_print
+            print('FrappeSDK: closure pull — getMeta($dt) failed — $e\n$st');
+          }
+        }
+        try {
+          await _repository!.ensureSchemaForClosure(
+            metas: metasByDoctype,
+            childDoctypes: closure.childDoctypes,
+          );
+        } catch (e, st) {
+          // ignore: avoid_print
+          print(
+            'FrappeSDK: closure pull — ensureSchemaForClosure failed — $e\n$st',
+          );
+        }
+      }
+
       final pullable = await _buildPullableDoctypes(
         entryPoints: entryPoints,
         closure: closure,

@@ -18,26 +18,26 @@ class PullPageResult {
   const PullPageResult({required this.rows, required this.advancedCursor});
 }
 
-/// One-page list fetch with cursor pagination. Spec §5.1.
+/// One-page list fetch with dual-mode pagination. Spec §5.1.
 ///
-/// Builds the Frappe `frappe.client.get_list` query with the cursor
-/// predicate. The spec's true predicate is
-/// `(modified > cursor.modified) OR (modified == cursor.modified AND
-/// name > cursor.name)` — Frappe's REST `or_filters` cannot express the
-/// nested AND-within-OR in a single request, so we approximate with
-/// `modified >= cursor.modified` and rely on PullApply's
-/// UPSERT-by-`server_name` idempotency to absorb the seam row(s).
+/// **Initial sync** (`cursor.complete == false`): uses `limit_start` offset
+/// pagination — no `modified` filter, `limit_start` advances by `pageSize`
+/// each page. This guarantees the full dataset is fetched before the cursor
+/// is committed, avoiding the seam-skip risk of applying `modified >=` while
+/// new records can still land behind the advancing watermark.
 ///
-/// **Stall hazard:** when many rows share the same `modified` second (e.g.
-/// a bulk import on the server), `modified >= cursor.modified` keeps
-/// returning the same page — `advancedCursor` equals the input cursor and
-/// the loop never terminates. [PullEngine] owns a stall guard: it detects
-/// when `advancedCursor.modified == scratch.modified && advancedCursor.name
-/// == scratch.name` and breaks. Callers that drive this fetcher directly
-/// must apply the same guard. Idempotent UPSERT keeps applied rows correct.
-/// For the `>pageSize` same-second case, rows past the first page are
-/// missed until the cursor moves forward; the spec's two-request variant
-/// (one per OR branch) can close that gap as a follow-up.
+/// **Incremental sync** (`cursor.complete == true`): uses the classic
+/// `modified >= cursor.modified` predicate with `limit_start = 0`. Combined
+/// with `order_by modified asc, name asc` this returns:
+///   - the seam row(s) at `modified == cursor.modified` — idempotently
+///     re-applied by PullApply's UPSERT-by-server_name
+///   - all rows with `modified > cursor.modified`
+///
+/// **Stall hazard (incremental only):** when many rows share the same
+/// `modified` second, `modified >= cursor.modified` keeps returning the same
+/// page. [PullEngine] owns the stall guard for this case (it only fires for
+/// `complete == true` pages). For initial sync the loop terminates on an
+/// empty page, so no stall guard is needed.
 class PullPageFetcher {
   final ListHttpFn listHttp;
 
@@ -54,31 +54,42 @@ class PullPageFetcher {
       'fields': fields,
       'order_by': 'modified asc, name asc',
       'limit_page_length': pageSize,
+      'limit_start': cursor.complete ? 0 : cursor.start,
     };
 
-    if (!cursor.isNull && cursor.modified != null) {
-      // Plan-compliant single-predicate form: `modified >= cursor.modified`.
-      // Combined with `order_by modified asc, name asc`, this returns:
-      //   - the seam row(s) at modified == cursor.modified — idempotently
-      //     re-applied by PullApply's UPSERT-by-server_name
-      //   - all rows with modified > cursor.modified
-      // No row is silently skipped (unlike the earlier `name > X AND
-      // modified > X` form, which excluded later-modified earlier-named
-      // rows).
+    if (cursor.complete && cursor.modified != null) {
+      // Incremental: single-predicate form `modified >= cursor.modified`.
+      // Seam row at cursor.modified is re-applied idempotently by PullApply.
       params['filters'] = <List<Object?>>[
         ['modified', '>=', cursor.modified],
       ];
     }
+    // Initial sync (complete=false): no filter, offset advances via limit_start.
 
     final rows = await listHttp(doctype, params);
     if (rows.isEmpty) {
       return PullPageResult(rows: rows, advancedCursor: cursor);
     }
     final last = rows.last;
-    final next = Cursor(
-      modified: last['modified'] as String?,
-      name: last['name'] as String?,
-    );
+
+    final Cursor next;
+    if (cursor.complete) {
+      // Incremental: advance by last row's modified/name timestamp.
+      next = Cursor(
+        modified: last['modified'] as String?,
+        name: last['name'] as String?,
+        complete: true,
+      );
+    } else {
+      // Initial sync: advance offset; track modified/name for the final cursor
+      // that markComplete() will persist after the full drain.
+      next = Cursor(
+        modified: last['modified'] as String?,
+        name: last['name'] as String?,
+        complete: false,
+        start: cursor.start + rows.length,
+      );
+    }
     return PullPageResult(rows: rows, advancedCursor: next);
   }
 

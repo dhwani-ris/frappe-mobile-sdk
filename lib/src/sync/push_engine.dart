@@ -53,6 +53,20 @@ typedef PushServerFetchFn =
 typedef PushServerLookupByUuidFn =
     Future<Map<String, dynamic>?> Function(String doctype, String mobileUuid);
 
+/// Optional transformer invoked just before the SDK pushes a row to the
+/// server. Receives the doctype, the assembled payload, and the parent
+/// meta; returns a (possibly modified) payload that gets sent.
+///
+/// Use case: consumers can override `docstatus` (e.g. auto-submit
+/// submittable doctypes on sync) or strip/inject metadata without
+/// changing the local row's representation.
+typedef PayloadTransformerFn =
+    Map<String, dynamic> Function(
+      String doctype,
+      Map<String, dynamic> payload,
+      DocTypeMeta meta,
+    );
+
 /// Top-level orchestrator for the offline-first push path. Spec §5.2.
 ///
 /// Pipeline per outbox row:
@@ -104,6 +118,10 @@ class PushEngine {
   /// when [writeQueueResolver] is non-null.
   final Map<String, WriteQueue> _writeQueues = {};
 
+  /// Optional payload transformer; runs after [PayloadAssembler.assemble]
+  /// and before HTTP dispatch. See [PayloadTransformerFn].
+  final PayloadTransformerFn? payloadTransformer;
+
   PushEngine({
     required this.db,
     required this.outboxDao,
@@ -121,6 +139,7 @@ class PushEngine {
     required this.attachmentUploader,
     DependenciesForRowFn? dependencyScanner,
     this.writeQueueResolver,
+    this.payloadTransformer,
     this.attachmentBackoff = kDefaultSyncBackoff,
     this.networkBackoff = kDefaultSyncBackoff,
   }) : dependencyScanner = dependencyScanner ?? _defaultDependencyScanner;
@@ -301,6 +320,17 @@ class PushEngine {
       resolveServerName: resolveServerName,
     );
     payload = AttachmentPipeline.inlinePayload(payload, resolved: uploaded);
+
+    final transformer = payloadTransformer;
+    if (transformer != null) {
+      try {
+        payload = transformer(row.doctype, payload, meta);
+      } catch (e, st) {
+        // ignore: avoid_print
+        print('PushEngine._dispatchOnce: payloadTransformer threw — $e\n$st');
+        // Fall through with un-transformed payload — never block the push.
+      }
+    }
 
     final method = _methodFor(row.operation);
     final isInsert = row.operation == OutboxOperation.insert;

@@ -94,6 +94,8 @@ export 'src/ui/widgets/fields/button_field.dart';
 export 'src/ui/widgets/fields/numeric_field.dart';
 export 'src/ui/widgets/fields/link_field.dart';
 export 'src/ui/widgets/fields/phone_field.dart';
+export 'src/ui/widgets/fields/child_table_field.dart'
+    show ChildTableFormBuilder;
 
 // Constants
 export 'src/constants/field_types.dart';
@@ -120,6 +122,7 @@ export 'src/services/sync_controller.dart'
 export 'src/sync/sync_state.dart'
     show SyncState, DoctypeSyncState, QueueSummary, SyncErrorSummary;
 export 'src/sync/sync_state_notifier.dart' show SyncStateNotifier;
+export 'src/sync/push_engine.dart' show PayloadTransformerFn;
 export 'src/ui/widgets/sync_status_bar.dart' show SyncStatusBar;
 export 'src/ui/widgets/document_list_filter_chip.dart'
     show DocumentListFilterChip, DocumentListFilter, DocumentListFilterCounts;

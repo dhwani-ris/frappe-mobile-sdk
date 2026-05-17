@@ -39,12 +39,17 @@ List<String> buildChildSchemaDDL(
     }
   }
 
+  // `IF NOT EXISTS` on every CREATE makes the DDL idempotent so a re-entry
+  // after a partial prior failure (or a concurrent caller racing against
+  // SNF's `runSnfPostSdkSync.ensureSchemaForClosure`) cannot abort the
+  // schema-create loop on "table/index already exists". See parent_schema.dart
+  // for the full rationale.
   final suffix = stripDocsPrefix(tableName);
   return [
-    'CREATE TABLE $tableName (\n  ${cols.join(',\n  ')}\n)',
-    'CREATE UNIQUE INDEX ix_${suffix}_server_name '
+    'CREATE TABLE IF NOT EXISTS $tableName (\n  ${cols.join(',\n  ')}\n)',
+    'CREATE UNIQUE INDEX IF NOT EXISTS ix_${suffix}_server_name '
         'ON $tableName(server_name) WHERE server_name IS NOT NULL',
-    'CREATE UNIQUE INDEX ux_${suffix}_parent_slot '
+    'CREATE UNIQUE INDEX IF NOT EXISTS ux_${suffix}_parent_slot '
         'ON $tableName(parent_uuid, parentfield, idx)',
   ];
 }

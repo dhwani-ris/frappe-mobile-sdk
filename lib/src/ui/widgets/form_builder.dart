@@ -173,6 +173,12 @@ class FrappeFormBuilder extends StatefulWidget {
   /// Called once with the form's submit handler so the parent (e.g. FormScreen) can trigger save from AppBar.
   final void Function(void Function() submit)? registerSubmit;
 
+  /// Fires when [registerSubmit]'s callback was invoked but form
+  /// validation rejected the submit attempt. Use this to stop a
+  /// parent-managed loading indicator that was started before triggering
+  /// submit. Does not fire on successful submit ([onSubmit] does).
+  final VoidCallback? onValidationFailed;
+
   /// If set, field labels, section titles and tab labels are passed through this (e.g. sdk.translations.translate).
   final String Function(String)? translate;
 
@@ -211,6 +217,7 @@ class FrappeFormBuilder extends StatefulWidget {
     this.fetchLinkedDocument,
     this.getMeta,
     this.registerSubmit,
+    this.onValidationFailed,
     this.translate,
     this.onButtonPressed,
     this.onFormDataChanged,
@@ -315,6 +322,16 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
           linkOptionService: widget.linkOptionService,
           linkFieldCoordinator: _linkFieldCoordinator,
         );
+    // Custom factories supplied by the host won't have these wired in
+    // their own constructor — they're host-internal services exposed
+    // here so override factories (e.g. SNF's SnfFieldFactory) can
+    // still produce Link/etc. fields without their pickers being half-
+    // configured on first build. Default-constructed FieldFactory above
+    // sets both directly; this branch handles the custom case.
+    if (widget.customFieldFactory != null) {
+      _fieldFactory.linkOptionService ??= widget.linkOptionService;
+      _fieldFactory.linkFieldCoordinator ??= _linkFieldCoordinator;
+    }
 
     _buildFormStructure();
     _tabController = TabController(
@@ -1236,6 +1253,7 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
           break;
         }
       }
+      widget.onValidationFailed?.call();
       return;
     }
 
