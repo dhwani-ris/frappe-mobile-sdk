@@ -60,6 +60,7 @@ export 'src/screens/mobile_home_screen.dart';
 
 // Offline mode toggle (Spec §7)
 export 'src/models/offline_mode.dart' show OfflineMode;
+export 'src/models/offline_mode_notifier.dart' show OfflineModeNotifier;
 export 'src/services/offline_transition_service.dart'
     show
         OfflineTransitionService,

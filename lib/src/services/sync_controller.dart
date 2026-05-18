@@ -70,6 +70,14 @@ class SyncController {
   final Future<String?> Function(String doctype, String mobileUuid)?
   resolveServerName;
 
+  /// Optional. Clears the local `sync_status = 'conflict'` marker on the
+  /// `docs__<doctype>` row when [resolveConflict] takes the empty-serverName
+  /// branch (the INSERT never reached the server, so there is no snapshot
+  /// to fetch). Without this hook, the row would stay flagged as conflict
+  /// in the UI forever even though the outbox row is gone.
+  final Future<void> Function(String doctype, String mobileUuid)?
+  clearLocalConflict;
+
   SyncController({
     required this.outboxDao,
     required this.notifier,
@@ -79,6 +87,7 @@ class SyncController {
     required this.fetchSingleDoc,
     required this.applySingleDoc,
     this.resolveServerName,
+    this.clearLocalConflict,
   });
 
   SyncState get state => notifier.value;
@@ -210,6 +219,22 @@ class SyncController {
         // INSERT that never reached the server — there is nothing to
         // fetch. Close the outbox row; per-doctype row stays as the
         // user's local copy. NOT a "treat 404 as deleted" path.
+        // Also clear the docs__ `sync_status = 'conflict'` marker —
+        // otherwise the UI would surface this row as stuck-in-conflict
+        // forever even though the outbox row is gone.
+        if (clearLocalConflict != null) {
+          try {
+            await clearLocalConflict!(row.doctype, row.mobileUuid);
+          } catch (e, st) {
+            // Best-effort. The outbox row still gets closed; logging
+            // surfaces the cleanup failure without blocking resolution.
+            // ignore: avoid_print
+            print(
+              'SyncController.resolveConflict: clearLocalConflict failed '
+              'for ${row.doctype}/${row.mobileUuid} — $e\n$st',
+            );
+          }
+        }
         await outboxDao.markDone(outboxId, serverName: '');
         return;
       }

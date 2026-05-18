@@ -68,4 +68,38 @@ void main() {
 
     await db.close();
   });
+
+  test(
+    'wipeOfflineDocumentTables resets bootstrap_done but keeps other sdk_meta',
+    () async {
+      // Regression for PR#36 review minor item — without this reset, the
+      // SDK would skip re-bootstrapping the docs__ mirrors after a wipe.
+      final db = await AppDatabase.inMemoryDatabase();
+      await db.rawDatabase.rawUpdate(
+        'UPDATE sdk_meta SET schema_version = ?, bootstrap_done = ?, '
+        'session_user_json = ? WHERE id = 1',
+        [3, 1, '{"user":"alice"}'],
+      );
+
+      await db.wipeOfflineDocumentTables();
+
+      final rows = await db.rawDatabase.rawQuery(
+        'SELECT schema_version, bootstrap_done, session_user_json '
+        'FROM sdk_meta WHERE id = 1',
+      );
+      expect(rows.first['bootstrap_done'], 0);
+      expect(
+        rows.first['schema_version'],
+        3,
+        reason: 'wipe must not touch schema_version',
+      );
+      expect(
+        rows.first['session_user_json'],
+        '{"user":"alice"}',
+        reason: 'wipe must not log the user out',
+      );
+
+      await db.close();
+    },
+  );
 }

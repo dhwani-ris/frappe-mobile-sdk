@@ -319,6 +319,48 @@ void main() {
     },
   );
 
+  test(
+    'resolveConflict pullAndOverwriteLocal: serverName=null calls clearLocalConflict',
+    () async {
+      // Regression for PR#36 review item #8. Without this hook, the
+      // docs__ row stays in `sync_status=conflict` after the outbox row
+      // is removed — the document is stuck with no recovery path.
+      final id = await outbox.insertPending(
+        doctype: 'Customer',
+        mobileUuid: 'u-conflict',
+        operation: OutboxOperation.insert,
+      );
+      await outbox.markConflict(id, errorMessage: 'mismatch');
+
+      String? clearedDoctype;
+      String? clearedUuid;
+      Future<void> trackClear(String doctype, String mobileUuid) async {
+        clearedDoctype = doctype;
+        clearedUuid = mobileUuid;
+      }
+
+      final ctrl = SyncController(
+        outboxDao: outbox,
+        notifier: SyncStateNotifier(),
+        runPull: () async => <String>{},
+        runPullForDoctypes: (_) async {},
+        runPush: () async {},
+        fetchSingleDoc: noopFetch,
+        applySingleDoc: noopApply,
+        clearLocalConflict: trackClear,
+      );
+
+      await ctrl.resolveConflict(
+        outboxId: id,
+        action: ConflictAction.pullAndOverwriteLocal,
+      );
+
+      expect(clearedDoctype, 'Customer');
+      expect(clearedUuid, 'u-conflict');
+      expect(await outbox.findById(id), isNull);
+    },
+  );
+
   test('resolveConflict keepLocalAndRetry → flips to pending + push', () async {
     final id = await outbox.insertPending(
       doctype: 'X',

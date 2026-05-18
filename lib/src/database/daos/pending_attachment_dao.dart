@@ -97,6 +97,18 @@ class PendingAttachmentDao {
     );
   }
 
+  /// Removes every attachment row whose `top_parent_uuid` matches
+  /// [topParentUuid], regardless of state. Used when the parent doc is
+  /// hard-deleted (offline-cancelled INSERT) so the uploader doesn't
+  /// retry attachments against a non-existent parent.
+  Future<int> deleteForTopParent(String topParentUuid) async {
+    return _db.delete(
+      'pending_attachments',
+      where: 'top_parent_uuid = ?',
+      whereArgs: [topParentUuid],
+    );
+  }
+
   Future<void> markFailed(int id, {required String errorMessage}) async {
     await _db.rawUpdate(
       '''

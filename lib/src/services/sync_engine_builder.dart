@@ -221,6 +221,18 @@ class SyncEngineBuilder {
       schemaReconciler: schemaReconciler,
     );
 
+    Future<void> clearLocalConflict(String doctype, String mobileUuid) async {
+      final tableName =
+          await metaDao.getTableName(doctype) ??
+          normalizeDoctypeTableName(doctype);
+      await rawDb.update(
+        tableName,
+        <String, Object?>{'sync_status': 'dirty', 'sync_error': null},
+        where: 'mobile_uuid = ? AND sync_status = ?',
+        whereArgs: [mobileUuid, 'conflict'],
+      );
+    }
+
     final controller = SyncController(
       outboxDao: outboxDao,
       notifier: notifier,
@@ -230,6 +242,7 @@ class SyncEngineBuilder {
       fetchSingleDoc: serverFetcher,
       applySingleDoc: applyServerDoc,
       resolveServerName: resolveServerName,
+      clearLocalConflict: clearLocalConflict,
     );
 
     return SyncEnginePack(
