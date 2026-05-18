@@ -304,14 +304,21 @@ class AppDatabase {
 
   /// Drops every `docs__<doctype>` table and clears `outbox`,
   /// `pending_attachments`, `link_options`. Preserves `doctype_meta`,
-  /// `auth_tokens`, `doctype_permission`, `sdk_meta`. Used by the
-  /// offline → online transition (Spec §7.5).
+  /// `auth_tokens`, `doctype_permission`, `sdk_meta` — except for the
+  /// `bootstrap_done` flag, which is reset to 0 because the per-doctype
+  /// mirrors that bootstrap built are gone. Used by the offline → online
+  /// transition (Spec §7.5).
   Future<void> wipeOfflineDocumentTables() async {
     await _db.transaction((txn) async {
       await _dropTablesWhere(txn, r"name LIKE 'docs\_\_%' ESCAPE '\'");
       await txn.delete('outbox');
       await txn.delete('pending_attachments');
       await txn.delete('link_options');
+      // bootstrap_done marks "the SDK finished its first-time docs__
+      // bootstrap" — after a wipe that no longer holds, so reset.
+      await txn.rawUpdate(
+        'UPDATE sdk_meta SET bootstrap_done = 0 WHERE id = 1',
+      );
     });
   }
 

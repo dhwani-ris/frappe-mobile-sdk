@@ -113,10 +113,12 @@ For each hit, replace per the table below:
 | 1.x usage | 2.0 replacement |
 |---|---|
 | `sdk.documentDao.getAll(doctype: 'X')` | `(await sdk.unifiedResolver.resolve(doctype: 'X')).rows` |
-| `sdk.documentDao.create(doctype, data)` | `sdk.offlineRepository.createDocument(doctype: 'X', data: data)` |
-| `sdk.documentDao.update(localId, data)` | `sdk.offlineRepository.updateDocumentData(localId: ..., data: ...)` |
-| `sdk.documentDao.delete(localId)` | `sdk.offlineRepository.deleteDocument(localId: ...)` |
+| `sdk.documentDao.create(doctype, data)` | `sdk.offlineRepository.saveDocument(doctype: 'X', data: data)` |
+| `sdk.documentDao.update(localId, data)` | `sdk.offlineRepository.saveDocument(doctype: 'X', data: {...data, 'mobile_uuid': mobileUuid})` |
+| `sdk.documentDao.delete(localId)` | `sdk.offlineRepository.deleteDocument(doctype: 'X', mobileUuid: mobileUuid)` |
 | `sdk.documentDao.getById(localId)` | `sdk.offlineRepository.getRowFromPerDoctypeTable(...)` |
+
+> **Note:** 2.0 collapses create + update into a single `saveDocument`. Pass `mobile_uuid` in the data map for updates; omit it for new rows (the SDK assigns one). The 1.x `localId` parameter is replaced by the `mobile_uuid` field — see [Breaking changes §1.3](breaking-changes.md#13-documententity-removed).
 
 If you build SDK services manually (rare), update constructor signatures per [Breaking changes §2](breaking-changes.md#2-constructor-signature-changes).
 

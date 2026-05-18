@@ -381,6 +381,113 @@ void main() {
   });
 
   test(
+    'TimestampMismatch with empty push_base_payload → markConflict (no auto-merge)',
+    () async {
+      // Regression for PR#36 review item #6 (claim 2). With an empty
+      // base, three-way merge can't tell a "user-left-null" field from
+      // a "user-explicitly-cleared" one, and would silently take server
+      // values. Safer: surface to the user as conflict.
+      await db.update(
+        'docs__customer',
+        {
+          'server_name': 'CUST-1',
+          'modified': '2026-01-01',
+          'customer_name': 'LocalEdit',
+          // push_base_payload deliberately NULL to simulate a legacy or
+          // unmetafied save.
+          'push_base_payload': null,
+        },
+        where: 'mobile_uuid=?',
+        whereArgs: ['u-c-1'],
+      );
+      await db.update(
+        'outbox',
+        {'operation': 'UPDATE'},
+        where: 'mobile_uuid=?',
+        whereArgs: ['u-c-1'],
+      );
+
+      var sendCalls = 0;
+      var fetchCalls = 0;
+      final engine = buildEngine(
+        send: (m, p, sn) async {
+          sendCalls++;
+          throw TimestampMismatchError(serverModified: '2026-01-02');
+        },
+        serverFetcher: (doctype, name) async {
+          fetchCalls++;
+          return {
+            'name': 'CUST-1',
+            'modified': '2026-01-02',
+            'customer_name': 'ServerEdit',
+          };
+        },
+      );
+      await engine.runOnce();
+      expect(sendCalls, 1, reason: 'no auto-merge attempt with empty base');
+      expect(fetchCalls, 0, reason: 'no server refetch with empty base');
+      final row = await outbox.findById(1);
+      expect(row!.state, OutboxState.conflict);
+      expect(row.errorCode, ErrorCode.TIMESTAMP_MISMATCH);
+    },
+  );
+
+  test(
+    'TimestampMismatch persists across merge retry → markConflict (no unbounded recursion)',
+    () async {
+      // Regression for PR#36 review item #2. The merge-retry guard must
+      // give up after one attempt and mark the row conflict; if the guard
+      // is wrong, the engine recurses forever.
+      await db.update(
+        'docs__customer',
+        {
+          'server_name': 'CUST-1',
+          'modified': '2026-01-01',
+          'customer_name': 'LocalEdit',
+          'push_base_payload': '{"customer_name":"ACME"}',
+        },
+        where: 'mobile_uuid=?',
+        whereArgs: ['u-c-1'],
+      );
+      await db.update(
+        'outbox',
+        {'operation': 'UPDATE'},
+        where: 'mobile_uuid=?',
+        whereArgs: ['u-c-1'],
+      );
+
+      var sendCalls = 0;
+      final engine = buildEngine(
+        send: (m, p, sn) async {
+          sendCalls++;
+          // Server keeps rejecting on every attempt.
+          throw TimestampMismatchError(serverModified: '2026-01-0$sendCalls');
+        },
+        serverFetcher: (doctype, name) async {
+          // Server keeps moving each time we refetch.
+          return {
+            'name': 'CUST-1',
+            'modified': '2026-01-0$sendCalls',
+            'customer_name': 'ServerEdit',
+          };
+        },
+      );
+      await engine.runOnce().timeout(const Duration(seconds: 5));
+      // Engine must NOT recurse forever — at most two send attempts
+      // (the original + one merge retry).
+      expect(
+        sendCalls,
+        lessThanOrEqualTo(2),
+        reason: 'merge guard must stop after one retry, not recurse',
+      );
+      final row = await outbox.findById(1);
+      expect(row, isNotNull);
+      expect(row!.state, OutboxState.conflict);
+      expect(row.errorCode, ErrorCode.TIMESTAMP_MISMATCH);
+    },
+  );
+
+  test(
     'L1 INSERT: DuplicateEntryError → fetch by mobile_uuid + write-back',
     () async {
       // Default test setup: autoname=field:mobile_uuid → L1.

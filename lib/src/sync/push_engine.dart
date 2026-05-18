@@ -202,13 +202,18 @@ class PushEngine {
     }
   }
 
-  Future<void> _process(OutboxRow row) async {
+  Future<void> _process(OutboxRow row, {bool mergeAttempted = false}) async {
     await outboxDao.markInFlight(row.id);
     try {
       final response = await _dispatchOnce(row);
       await _writeBack(row, response);
     } on TimestampMismatchError catch (e) {
-      if (row.retryCount < 1) {
+      // `mergeAttempted` breaks the merge-retry recursion: the slim
+      // outbox no longer carries `retry_count`, so a counter-based guard
+      // would always see 0 and recurse unbounded. The flag is local to
+      // this dispatch chain; a user re-save would clear it because the
+      // next dispatch starts from a fresh `runOnce` drain.
+      if (!mergeAttempted) {
         await _autoMergeAndRetry(row, e);
       } else {
         await outboxDao.markConflict(row.id, errorMessage: e.message);
@@ -458,13 +463,24 @@ class PushEngine {
       );
       return;
     }
-    final fresh = await serverFetcher(row.doctype, docServerName);
     // Base for ThreeWayMerge: the pre-edit snapshot captured by
     // OfflineRepository.saveDocument and stored on docs__.push_base_payload.
+    // Without it, the merge cannot distinguish "user left null" from
+    // "user explicitly cleared" — every null field would silently fall
+    // to the server value and a legacy row with many null columns would
+    // lose the user's actual edits. Safer: surface to the user as a
+    // conflict (Spec §5.5 — review item #6 claim 2).
     final basePayload = currentRow['push_base_payload'] as String?;
-    final base = (basePayload == null || basePayload.isEmpty)
-        ? <String, Object?>{}
-        : Map<String, Object?>.from(jsonDecode(basePayload) as Map);
+    if (basePayload == null || basePayload.isEmpty) {
+      await outboxDao.markConflict(
+        row.id,
+        errorMessage:
+            'TimestampMismatch with no push_base_payload — manual resolution required',
+      );
+      return;
+    }
+    final fresh = await serverFetcher(row.doctype, docServerName);
+    final base = Map<String, Object?>.from(jsonDecode(basePayload) as Map);
     final merged = ThreeWayMerge.mergeFields(
       base: base,
       ours: Map<String, Object?>.from(currentRow),
@@ -498,7 +514,10 @@ class PushEngine {
 
     // Route both writes through the per-doctype WriteQueue when wired so
     // they share a transaction with concurrent writeback activity. Falls
-    // back to two direct db.update calls when no resolver is provided.
+    // back to a single `db.transaction` when no resolver is provided —
+    // never two bare `db.update` calls: a crash between them would leave
+    // docs__ merged but the outbox row still `in_flight`, which would
+    // mis-assemble the payload on the next drain.
     if (writeQueueResolver != null) {
       final wq = _writeQueues.putIfAbsent(
         row.doctype,
@@ -519,23 +538,25 @@ class PushEngine {
         );
       });
     } else {
-      await db.update(
-        parentTable,
-        mergedForUpdate,
-        where: 'mobile_uuid = ?',
-        whereArgs: [row.mobileUuid],
-      );
-      await db.update(
-        'outbox',
-        outboxUpdate,
-        where: 'id = ?',
-        whereArgs: [row.id],
-      );
+      await db.transaction((txn) async {
+        await txn.update(
+          parentTable,
+          mergedForUpdate,
+          where: 'mobile_uuid = ?',
+          whereArgs: [row.mobileUuid],
+        );
+        await txn.update(
+          'outbox',
+          outboxUpdate,
+          where: 'id = ?',
+          whereArgs: [row.id],
+        );
+      });
     }
 
     final updated = await outboxDao.findById(row.id);
     if (updated != null) {
-      await _process(updated);
+      await _process(updated, mergeAttempted: true);
     }
   }
 

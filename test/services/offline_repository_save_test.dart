@@ -183,6 +183,45 @@ void main() {
   );
 
   test(
+    'deleteDocument on never-pushed doc also clears its pending_attachments',
+    () async {
+      // Regression for PR#36 review minor item — without the cleanup, an
+      // orphaned attachment row would keep retrying upload against a
+      // top_parent_uuid whose docs__ row has been hard-deleted.
+      final uuid = await repo.saveDocument(
+        doctype: 'Customer',
+        data: {'customer_name': 'Acme'},
+      );
+      // Manually enqueue a pending attachment for this doc.
+      await appDb.rawDatabase.insert('pending_attachments', <String, Object?>{
+        'parent_doctype': 'Customer',
+        'parent_uuid': uuid,
+        'parent_fieldname': 'image',
+        'top_parent_uuid': uuid,
+        'top_parent_doctype': 'Customer',
+        'local_path': '/tmp/fake.png',
+        'is_private': 1,
+        'state': 'pending',
+        'retry_count': 0,
+        'created_at': DateTime.now().toUtc().millisecondsSinceEpoch,
+      });
+
+      await repo.deleteDocument(doctype: 'Customer', mobileUuid: uuid);
+
+      final attachments = await appDb.rawDatabase.query(
+        'pending_attachments',
+        where: 'top_parent_uuid = ?',
+        whereArgs: [uuid],
+      );
+      expect(
+        attachments,
+        isEmpty,
+        reason: 'pending_attachments orphans must be cleared too',
+      );
+    },
+  );
+
+  test(
     'getDirtyDocuments surfaces dirty + deleted rows after offline saves',
     () async {
       // Two dirty offline saves.

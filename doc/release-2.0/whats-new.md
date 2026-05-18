@@ -174,6 +174,8 @@ if (blocking) {
 
 `SyncController` exposes a public, imperative API for sync operations and a stream of state snapshots.
 
+> **Do not construct `SyncController` directly.** Its constructor takes internal types (`OutboxDao`, `RunPullFn`, `RunPullForFn`, `FetchSingleDocFn`, `ApplySingleDocFn`, `SyncStateNotifier`) that are intentionally not exported from `frappe_mobile_sdk.dart`. Obtain the wired instance via `sdk.syncController` after `FrappeSDK.initialize()`.
+
 **Surface:**
 
 | Method | Purpose |

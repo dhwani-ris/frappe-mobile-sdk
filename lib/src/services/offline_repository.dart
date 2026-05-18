@@ -545,6 +545,22 @@ class OfflineRepository {
       final tableName = normalizeDoctypeTableName(doctype);
       if (result == RecordSaveResult.cancelledLocally) {
         // Pending INSERT cancelled; server never knew about this doc.
+        // Any queued attachments are orphans — without this cleanup the
+        // uploader would keep retrying against a top_parent_uuid that no
+        // longer has a docs__ row (review minor #1).
+        try {
+          await txn.delete(
+            'pending_attachments',
+            where: 'top_parent_uuid = ?',
+            whereArgs: [mobileUuid],
+          );
+        } on DatabaseException catch (e, st) {
+          // ignore: avoid_print
+          print(
+            'OfflineRepository.deleteDocument: attachment cleanup failed '
+            'for $doctype/$mobileUuid — $e\n$st',
+          );
+        }
         try {
           await txn.delete(
             tableName,

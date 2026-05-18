@@ -65,4 +65,32 @@ void main() {
     expect(mode, OfflineMode.fallback);
     await db.close();
   });
+
+  test(
+    'writeOfflineMode preserves schema_version, bootstrap_done, session_user_json',
+    () async {
+      // Regression for PR#36 review item #3. INSERT OR REPLACE wiped the
+      // sibling columns back to defaults; the fix is an UPDATE.
+      final db = await _freshDb();
+      await db.rawUpdate(
+        'UPDATE sdk_meta SET schema_version = ?, bootstrap_done = ?, '
+        'session_user_json = ? WHERE id = 1',
+        [3, 1, '{"user":"alice@example.com"}'],
+      );
+      final dao = SdkMetaDao(db);
+      await dao.writeOfflineMode(enabled: true, setAtMs: 999);
+
+      final rows = await db.rawQuery(
+        'SELECT schema_version, bootstrap_done, session_user_json, '
+        'offline_enabled, offline_enabled_set_at FROM sdk_meta WHERE id = 1',
+      );
+      expect(rows, hasLength(1));
+      expect(rows.first['schema_version'], 3);
+      expect(rows.first['bootstrap_done'], 1);
+      expect(rows.first['session_user_json'], '{"user":"alice@example.com"}');
+      expect(rows.first['offline_enabled'], 1);
+      expect(rows.first['offline_enabled_set_at'], 999);
+      await db.close();
+    },
+  );
 }

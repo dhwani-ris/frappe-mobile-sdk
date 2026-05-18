@@ -21,13 +21,24 @@ class SdkMetaDao {
   }
 
   /// Persists the offline-mode value with the given epoch-ms timestamp.
-  /// Always upserts onto the singleton `id = 1` row.
+  /// Single-statement upsert on the singleton `id = 1` row: inserts when
+  /// missing, updates the offline-mode columns when present. Columns not
+  /// named in the SET clause (`schema_version`, `bootstrap_done`,
+  /// `session_user_json`) are preserved.
+  ///
+  /// IMPORTANT: never use `INSERT OR REPLACE` here. That is `DELETE +
+  /// INSERT` in SQLite and would zero out the unrelated columns. The
+  /// `ON CONFLICT(id) DO UPDATE` form is the surgical upsert.
   Future<void> writeOfflineMode({
     required bool enabled,
     required int setAtMs,
   }) async {
     await _db.rawInsert(
-      'INSERT OR REPLACE INTO sdk_meta (id, offline_enabled, offline_enabled_set_at) VALUES (1, ?, ?)',
+      'INSERT INTO sdk_meta (id, offline_enabled, offline_enabled_set_at) '
+      'VALUES (1, ?1, ?2) '
+      'ON CONFLICT(id) DO UPDATE SET '
+      '  offline_enabled = ?1, '
+      '  offline_enabled_set_at = ?2',
       [enabled ? 1 : 0, setAtMs],
     );
   }

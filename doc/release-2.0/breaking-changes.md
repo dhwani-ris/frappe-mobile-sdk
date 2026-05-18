@@ -52,13 +52,15 @@ final id = await dao.create(doctype: 'Customer', data: {...});
 // 2.0
 final result = await sdk.unifiedResolver.resolve(doctype: 'Customer');
 final docs = result.rows;
-final id = await sdk.offlineRepository.createDocument(
+final mobileUuid = await sdk.offlineRepository.saveDocument(
   doctype: 'Customer',
   data: {...},
 );
 ```
 
 `DocumentDao` is verified absent from `lib/src/` in `frappe_mobile_sdk` 2.0.
+
+> **Method name change:** `createDocument` / `updateDocumentData` from 1.x are merged into a single `saveDocument({required String doctype, required Map<String, dynamic> data})` — it inserts when no `mobile_uuid` is present and updates when one is. `deleteDocument` now takes `(doctype:, mobileUuid:)` instead of `localId:`.
 
 ### 1.2 Legacy `documents` table — dropped
 
@@ -68,11 +70,34 @@ You should not have been reading from `documents` directly through public APIs; 
 
 See [Schema migration](schema-migration.md) for the migration mechanics.
 
+### 1.3 `DocumentEntity` — removed
+
+`DocumentEntity` was the return type of every `DocumentDao` method in 1.x and was exported from the SDK barrel (`lib/frappe_mobile_sdk.dart`). It is gone in 2.0; per-doctype `docs__<doctype>` rows are now opaque `Map<String, Object?>` payloads keyed by `mobile_uuid`, returned from `UnifiedResolver` / `OfflineRepository` query helpers.
+
+```dart
+// 1.x — typed entity
+List<DocumentEntity> docs = await sdk.documentDao.getAll(doctype: 'Customer');
+final id = docs.first.localId;
+final data = docs.first.dataJson; // Map<String, dynamic>
+```
+
+```dart
+// 2.0 — Map-shaped rows
+final result = await sdk.unifiedResolver.resolve(doctype: 'Customer');
+final List<Map<String, Object?>> docs = result.rows;
+final uuid = docs.first['mobile_uuid'] as String;
+final customerName = docs.first['customer_name'] as String?;
+```
+
+If your code was annotated with `List<DocumentEntity>` or `DocumentEntity?` anywhere, replace those with `List<Map<String, Object?>>` / `Map<String, Object?>?`. The `localId` field maps to the `mobile_uuid` column; `dataJson` is no longer needed — fields are top-level on the row.
+
 ---
 
 ## 2. Constructor signature changes
 
 If you build SDK services manually (rather than via `FrappeSDK.initialize()`), these constructors now take additional parameters. **All new parameters are optional with sensible defaults**, so call sites that don't reference them continue to compile.
+
+> **`SyncController` is not user-constructable.** Its constructor takes internal types (`OutboxDao`, `RunPullFn`, `RunPullForFn`, `FetchSingleDocFn`, `ApplySingleDocFn`, `SyncStateNotifier`) that are intentionally not exported. Use `sdk.syncController` after `FrappeSDK.initialize()`. The construction recipe lives in `SyncEngineBuilder` (private).
 
 ### 2.1 `OfflineRepository`
 
@@ -93,7 +118,7 @@ OfflineRepository(
 })
 ```
 
-If you pass `offlineModeNotifier`, it wins over `offlineMode` — the repository reads live mode through the notifier so mid-session flips take effect at every gate site immediately. When the effective mode has `enabled = false`, `create` / `updateDocumentData` / `deleteDocument` route to `FrappeClient` directly; `getDirtyDocuments` returns empty.
+If you pass `offlineModeNotifier`, it wins over `offlineMode` — the repository reads live mode through the notifier so mid-session flips take effect at every gate site immediately. When the effective mode has `enabled = false`, `saveDocument` / `deleteDocument` route to `FrappeClient` directly.
 
 ### 2.2 `LinkOptionService`
 
