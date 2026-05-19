@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_form_builder/flutter_form_builder.dart';
 import 'base_field.dart';
@@ -18,6 +20,11 @@ class LinkField extends BaseField {
   final LinkFilterBuilder? Function(String doctype, String fieldname)?
   getLinkFilterBuilder;
 
+  /// Fires whenever the picked option's locality changes, including on
+  /// clear (false). Wires the `<field>__is_local` companion in the host
+  /// form data so [UuidRewriter] can rewrite the value at push time.
+  final ValueChanged<bool>? onIsLocalChanged;
+
   const LinkField({
     super.key,
     required super.field,
@@ -31,6 +38,7 @@ class LinkField extends BaseField {
     this.formData,
     this.parentFormData = const {},
     this.getLinkFilterBuilder,
+    this.onIsLocalChanged,
   });
 
   @override
@@ -107,6 +115,7 @@ class LinkField extends BaseField {
         parentFormData: parentFormData,
         getLinkFilterBuilder: getLinkFilterBuilder,
         style: style,
+        onIsLocalChanged: onIsLocalChanged,
       );
     }
 
@@ -151,6 +160,7 @@ class _LinkFieldDropdown extends StatefulWidget {
   final LinkFilterBuilder? Function(String doctype, String fieldname)?
   getLinkFilterBuilder;
   final FieldStyle? style;
+  final ValueChanged<bool>? onIsLocalChanged;
 
   const _LinkFieldDropdown({
     required this.field,
@@ -165,6 +175,7 @@ class _LinkFieldDropdown extends StatefulWidget {
     this.parentFormData = const {},
     this.getLinkFilterBuilder,
     this.style,
+    this.onIsLocalChanged,
   });
 
   @override
@@ -176,6 +187,7 @@ class _LinkFieldDropdownState extends State<_LinkFieldDropdown> {
   bool _isLoading = true;
   bool _waitingForDependent = false;
   String _dependentFieldName = '';
+  StreamSubscription<void>? _syncSub;
 
   @override
   void initState() {
@@ -186,6 +198,33 @@ class _LinkFieldDropdownState extends State<_LinkFieldDropdown> {
     } else {
       _loadOptions();
     }
+
+    // Pickers opened mid-sync see an empty `docs__<doctype>` table and
+    // return an empty option list. Without this subscription the dropdown
+    // stayed empty forever even after the closure pull populated the
+    // table. On every sync-complete tick, retry the load if we currently
+    // have nothing — the coordinator's empty results aren't cached, so
+    // the retry hits the resolver and picks up freshly-synced rows.
+    final stream = widget.linkOptionService.syncComplete$;
+    if (stream != null) {
+      _syncSub = stream.listen((_) {
+        if (!mounted) return;
+        if (_isLoading || _waitingForDependent) return;
+        if (_options.isNotEmpty) return;
+        if (widget.linkFieldCoordinator != null &&
+            widget.linkFieldCoordinator!.useCoordinator) {
+          _loadOptionsViaCoordinator();
+        } else {
+          _loadOptions();
+        }
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _syncSub?.cancel();
+    super.dispose();
   }
 
   void _applyOptionsAndAutoSelect(List<LinkOptionEntity> options) {
@@ -205,7 +244,14 @@ class _LinkFieldDropdownState extends State<_LinkFieldDropdown> {
           );
       if (!hasValidSelection) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) widget.onChanged?.call(options.first.name);
+          if (!mounted) return;
+          widget.onChanged?.call(options.first.name);
+          // Auto-select must also propagate the option's locality —
+          // otherwise an auto-picked offline target leaves
+          // `<field>__is_local` at 0 and [UuidRewriter] skips the
+          // rewrite at push time, sending the raw mobile_uuid to
+          // the server (LinkValidationError 417).
+          widget.onIsLocalChanged?.call(options.first.isLocal);
         });
       }
     }
@@ -303,7 +349,10 @@ class _LinkFieldDropdownState extends State<_LinkFieldDropdown> {
         filters: filters,
       );
       _applyOptionsAndAutoSelect(options);
-    } catch (e) {
+    } catch (e, st) {
+      debugPrint(
+        'LinkField: getLinkOptions(${widget.linkedDoctype}) failed — $e\n$st',
+      );
       setState(() {
         _options = [];
         _isLoading = false;
@@ -438,8 +487,25 @@ class _LinkFieldDropdownState extends State<_LinkFieldDropdown> {
       enabled: widget.enabled && !widget.field.readOnly,
       hintText:
           widget.field.placeholder ?? 'Search ${widget.field.displayLabel}...',
+      labelText: widget.style?.decoration?.labelText,
       onChanged: (values) {
-        widget.onChanged?.call(values.isEmpty ? null : values.first);
+        final picked = values.isEmpty ? null : values.first;
+        widget.onChanged?.call(picked);
+        // Mirror the picked option's locality into `<field>__is_local`. On
+        // clear, force false so a stale `1` from a prior local pick doesn't
+        // linger.
+        if (widget.onIsLocalChanged != null) {
+          var isLocal = false;
+          if (picked != null) {
+            for (final o in _options) {
+              if (o.name == picked) {
+                isLocal = o.isLocal;
+                break;
+              }
+            }
+          }
+          widget.onIsLocalChanged!(isLocal);
+        }
       },
     );
   }

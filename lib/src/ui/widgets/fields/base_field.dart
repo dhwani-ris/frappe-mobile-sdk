@@ -21,8 +21,8 @@ class FieldStyle {
     this.descriptionStyle,
     this.decoration,
     this.translate,
-    this.showLabel = true,
-    this.showDescription = true,
+    this.showLabel = false,
+    this.showDescription = false,
   });
 }
 

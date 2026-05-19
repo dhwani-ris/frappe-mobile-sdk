@@ -19,6 +19,7 @@ class SearchableSelect extends StatefulWidget {
     this.enabled = true,
     this.loading = false,
     this.hintText,
+    this.labelText,
   });
 
   /// All available options (already loaded).
@@ -34,6 +35,11 @@ class SearchableSelect extends StatefulWidget {
   final bool enabled;
   final bool loading;
   final String? hintText;
+
+  /// Floating label shown inside the input border (mirrors [InputDecoration.labelText]).
+  /// Derives from the parent field's [FieldStyle.decoration.labelText] so the
+  /// Link field matches every other field type in the form's visual style.
+  final String? labelText;
 
   @override
   State<SearchableSelect> createState() => _SearchableSelectState();
@@ -79,7 +85,6 @@ class _SearchableSelectState extends State<SearchableSelect> {
               _search.isEmpty ||
               (o.label ?? o.name).toLowerCase().contains(_search.toLowerCase()),
         )
-        .take(8)
         .toList();
   }
 
@@ -158,6 +163,7 @@ class _SearchableSelectState extends State<SearchableSelect> {
                 : null,
             child: InputDecorator(
               decoration: InputDecoration(
+                labelText: widget.labelText,
                 isDense: true,
                 contentPadding: const EdgeInsets.symmetric(
                   horizontal: 12,
@@ -187,6 +193,7 @@ class _SearchableSelectState extends State<SearchableSelect> {
             controller: _controller,
             focusNode: _focusNode,
             decoration: InputDecoration(
+              labelText: widget.labelText,
               hintText:
                   widget.hintText ??
                   (widget.multiSelect

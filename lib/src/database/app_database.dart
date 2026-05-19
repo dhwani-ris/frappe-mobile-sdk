@@ -1,27 +1,35 @@
+import 'package:flutter/foundation.dart';
 import 'package:path/path.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:sqflite/sqflite.dart';
 import 'daos/doctype_meta_dao.dart';
-import 'daos/document_dao.dart';
 import 'daos/link_option_dao.dart';
 import 'daos/auth_token_dao.dart';
 import 'daos/doctype_permission_dao.dart';
+import 'schema/system_tables.dart';
 
 class AppDatabase {
-  static const int _version = 2;
-  static Database? _database;
+  static const int _version = 3;
+
+  /// Singleton instance for the production (on-disk) database. The in-memory
+  /// factory does NOT touch this — each call returns an independent instance
+  /// for hermetic tests.
   static AppDatabase? _instance;
   static String? _databaseName;
 
+  /// Underlying sqflite handle. Held per-instance so both production and
+  /// in-memory test databases work identically through [database] /
+  /// [rawDatabase] / DAOs.
+  final Database _db;
+
   final DoctypeMetaDao doctypeMetaDao;
-  final DocumentDao documentDao;
   final LinkOptionDao linkOptionDao;
   final AuthTokenDao authTokenDao;
   final DoctypePermissionDao doctypePermissionDao;
 
   AppDatabase._(Database database)
-    : doctypeMetaDao = DoctypeMetaDao(database),
-      documentDao = DocumentDao(database),
+    : _db = database,
+      doctypeMetaDao = DoctypeMetaDao(database),
       linkOptionDao = LinkOptionDao(database),
       authTokenDao = AuthTokenDao(database),
       doctypePermissionDao = DoctypePermissionDao(database);
@@ -40,12 +48,10 @@ class AppDatabase {
 
     try {
       final packageInfo = await PackageInfo.fromPlatform();
-      // Use appName, fallback to packageName if appName is empty
       final appName = packageInfo.appName.isNotEmpty
           ? packageInfo.appName
           : packageInfo.packageName;
 
-      // If both are empty or invalid, use fallback
       if (appName.isEmpty || appName.trim().isEmpty) {
         _databaseName = 'frappe_mobile_sdk.db';
         return _databaseName!;
@@ -53,7 +59,6 @@ class AppDatabase {
 
       final sanitized = _sanitizeName(appName);
 
-      // If sanitization resulted in empty string, use fallback
       if (sanitized.isEmpty) {
         _databaseName = 'frappe_mobile_sdk.db';
         return _databaseName!;
@@ -61,8 +66,10 @@ class AppDatabase {
 
       _databaseName = '${sanitized}_frappe.db';
       return _databaseName!;
-    } catch (e) {
-      // Fallback to default name if package_info fails (e.g., in CI/test environments)
+    } catch (e, st) {
+      debugPrint(
+        'AppDatabase._resolveDatabaseName: PackageInfo lookup failed, falling back to default — $e\n$st',
+      );
       _databaseName = 'frappe_mobile_sdk.db';
       return _databaseName!;
     }
@@ -76,24 +83,21 @@ class AppDatabase {
         .replaceAll(RegExp(r'^_|_$'), '');
   }
 
-  /// Get database instance (singleton)
+  /// Get database instance (singleton).
   static Future<AppDatabase> getInstance({String? appName}) async {
     if (_instance != null) return _instance!;
 
-    if (_database == null) {
-      final documentsDirectory = await getDatabasesPath();
-      final dbName = await _getDatabaseName(appNameOverride: appName);
-      final path = join(documentsDirectory, dbName);
-      _database = await openDatabase(
-        path,
-        version: _version,
-        onCreate: _onCreate,
-        onConfigure: _onConfigure,
-        onUpgrade: _onUpgrade,
-      );
-    }
-
-    _instance = AppDatabase._(_database!);
+    final documentsDirectory = await getDatabasesPath();
+    final dbName = await _getDatabaseName(appNameOverride: appName);
+    final path = join(documentsDirectory, dbName);
+    final db = await openDatabase(
+      path,
+      version: _version,
+      onCreate: _onCreate,
+      onConfigure: _onConfigure,
+      onUpgrade: _onUpgrade,
+    );
+    _instance = AppDatabase._(db);
     return _instance!;
   }
 
@@ -111,15 +115,63 @@ class AppDatabase {
     return AppDatabase._(database);
   }
 
-  /// Migrate database schema on upgrade
+  /// Migrate a 1.1.0 / DB v2 device to 2.0.0 / DB v3 in a single
+  /// transaction. The four intermediate steps (v3, v4, v5, v6) that
+  /// existed during offline-first development are collapsed: no device
+  /// in the wild is at any of those versions.
   static Future<void> _onUpgrade(
     Database db,
     int oldVersion,
     int newVersion,
   ) async {
-    if (oldVersion < 2) {
-      await db.execute('ALTER TABLE doctype_meta ADD COLUMN groupName TEXT');
-      await db.execute('ALTER TABLE doctype_meta ADD COLUMN sortOrder INTEGER');
+    if (oldVersion < 3) {
+      await _migrateV2ToV3(db);
+    }
+  }
+
+  static Future<void> _migrateV2ToV3(Database db) async {
+    await db.transaction((txn) async {
+      // 1. doctype_meta column adds (only non-idempotent statements).
+      for (final stmt in [
+        ...doctypeMetaExtensionsDDL(),
+        ...doctypeMetaV4ExtensionsDDL(),
+      ]) {
+        await _safeAddColumn(txn, stmt);
+      }
+
+      // 2. System tables in their final shape (CREATE TABLE IF NOT EXISTS
+      //    is already idempotent; no guard needed).
+      for (final stmt in systemTablesDDL()) {
+        await txn.execute(stmt);
+      }
+
+      // 3. Drop legacy `documents` table and its indexes (DROP IF EXISTS
+      //    is already idempotent; no guard needed). Confirmed safe: the
+      //    1.1.0 SDK pushes before persisting, so no dirty rows survive.
+      await txn.execute('DROP TABLE IF EXISTS documents');
+      await txn.execute('DROP INDEX IF EXISTS idx_documents_doctype');
+      await txn.execute('DROP INDEX IF EXISTS idx_documents_status');
+      await txn.execute('DROP INDEX IF EXISTS idx_documents_modified');
+
+      // 4. Singleton upsert. Recovers from a missing or corrupted row.
+      await txn.insert('sdk_meta', <String, Object?>{
+        'id': 1,
+        'schema_version': 3,
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
+    });
+  }
+
+  /// Wraps a non-idempotent `ALTER TABLE ADD COLUMN` so the migration
+  /// remains safe to re-run after an interrupted upgrade. SQLite raises
+  /// a `DatabaseException` containing "duplicate column name" when the
+  /// column already exists; everything else is rethrown.
+  static Future<void> _safeAddColumn(Transaction txn, String sql) async {
+    try {
+      await txn.execute(sql);
+    } on DatabaseException catch (e) {
+      if (!e.toString().toLowerCase().contains('duplicate column name')) {
+        rethrow;
+      }
     }
   }
 
@@ -128,31 +180,23 @@ class AppDatabase {
     await db.execute('PRAGMA foreign_keys = ON');
   }
 
-  /// Create database tables
-  static Future<void> _onCreate(Database db, int version) async {
-    // Documents table
-    await db.execute('''
-      CREATE TABLE documents (
-        localId TEXT PRIMARY KEY,
-        doctype TEXT NOT NULL,
-        serverId TEXT,
-        dataJson TEXT NOT NULL,
-        status TEXT NOT NULL,
-        modified INTEGER NOT NULL
-      )
-    ''');
+  /// Fresh-install path. Builds every table in its final v3 shape.
+  /// Post-condition is identical to running [_migrateV2ToV3] on a v2 DB —
+  /// see `app_database_fresh_vs_upgraded_test.dart`.
+  ///
+  /// Thin wrapper over [_onCreateBody] so sqflite's `onCreate` callback
+  /// can keep its `Database` signature. [_clearAllDataInternal] calls
+  /// [_onCreateBody] directly with a [Transaction] so the wipe + rebuild
+  /// happen atomically.
+  static Future<void> _onCreate(Database db, int version) =>
+      _onCreateBody(db, version);
 
-    // Indexes for documents table
-    await db.execute(
-      'CREATE INDEX idx_documents_doctype ON documents(doctype)',
-    );
-    await db.execute('CREATE INDEX idx_documents_status ON documents(status)');
-    await db.execute(
-      'CREATE INDEX idx_documents_modified ON documents(modified)',
-    );
-
-    // DocType metadata table
-    await db.execute('''
+  /// Builds the base schema. Accepts any [DatabaseExecutor] so it can run
+  /// either on a fresh `Database` (sqflite's `onCreate` path) or inside
+  /// a `Transaction` (the `clearAllData` rebuild path that needs to be
+  /// atomic with the preceding DROP loop).
+  static Future<void> _onCreateBody(DatabaseExecutor exec, int version) async {
+    await exec.execute('''
       CREATE TABLE doctype_meta (
         doctype TEXT PRIMARY KEY,
         modified TEXT,
@@ -163,14 +207,21 @@ class AppDatabase {
         sortOrder INTEGER
       )
     ''');
-
-    // Index for doctype_meta table
-    await db.execute(
+    await exec.execute(
       'CREATE INDEX idx_doctype_meta_isMobileForm ON doctype_meta(isMobileForm)',
     );
 
-    // Link options table
-    await db.execute('''
+    // doctype_meta v3 + v4 column extensions. Fresh installs apply them
+    // directly — no duplicate-column guard needed because the table is
+    // brand new.
+    for (final stmt in [
+      ...doctypeMetaExtensionsDDL(),
+      ...doctypeMetaV4ExtensionsDDL(),
+    ]) {
+      await exec.execute(stmt);
+    }
+
+    await exec.execute('''
       CREATE TABLE link_options (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         doctype TEXT NOT NULL,
@@ -180,17 +231,14 @@ class AppDatabase {
         lastUpdated INTEGER NOT NULL
       )
     ''');
-
-    // Indexes for link_options table
-    await db.execute(
+    await exec.execute(
       'CREATE INDEX idx_link_options_doctype ON link_options(doctype)',
     );
-    await db.execute(
+    await exec.execute(
       'CREATE INDEX idx_link_options_lastUpdated ON link_options(lastUpdated)',
     );
 
-    // Auth tokens table
-    await db.execute('''
+    await exec.execute('''
       CREATE TABLE auth_tokens (
         id INTEGER PRIMARY KEY,
         accessToken TEXT NOT NULL,
@@ -201,11 +249,25 @@ class AppDatabase {
       )
     ''');
 
-    await _createDoctypePermissionTable(db);
+    await _createDoctypePermissionTable(exec);
+
+    // System tables (outbox, pending_attachments, sdk_meta) in final shape.
+    for (final stmt in systemTablesDDL()) {
+      await exec.execute(stmt);
+    }
+
+    // Singleton upsert — same shape as the migration to keep _onCreate
+    // and _onUpgrade post-conditions identical.
+    await exec.insert('sdk_meta', <String, Object?>{
+      'id': 1,
+      'schema_version': 3,
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
-  static Future<void> _createDoctypePermissionTable(Database db) async {
-    await db.execute('''
+  static Future<void> _createDoctypePermissionTable(
+    DatabaseExecutor exec,
+  ) async {
+    await exec.execute('''
       CREATE TABLE IF NOT EXISTS doctype_permission (
         doctype TEXT PRIMARY KEY,
         can_read INTEGER NOT NULL DEFAULT 0,
@@ -220,22 +282,111 @@ class AppDatabase {
   }
 
   /// Get the underlying database instance (for advanced operations if needed)
-  Database get database => _database!;
+  Database get database => _db;
 
-  /// Close the database
+  /// Alias for [database] used by SDK-internal code (P1 offline-first).
+  Database get rawDatabase => _db;
+
+  /// Close the database. If this instance is the production singleton, also
+  /// clear the static slot so a subsequent [getInstance] reopens cleanly.
   Future<void> close() async {
-    await _database?.close();
-    _database = null;
-    _instance = null;
+    await _db.close();
+    if (identical(this, _instance)) {
+      _instance = null;
+    }
   }
 
-  /// Clear all data from all tables. Call on logout to wipe local DB.
+  /// Drops every `docs__<doctype>` table and clears `outbox`,
+  /// `pending_attachments`, `link_options`. Preserves `doctype_meta`,
+  /// `auth_tokens`, `doctype_permission`, `sdk_meta` — except for the
+  /// `bootstrap_done` flag, which is reset to 0 because the per-doctype
+  /// mirrors that bootstrap built are gone. Used by the offline → online
+  /// transition (Spec §7.5).
+  Future<void> wipeOfflineDocumentTables() async {
+    await _db.transaction((txn) async {
+      final tables = await txn.rawQuery(
+        "SELECT name FROM sqlite_master WHERE type='table' "
+        "AND name LIKE 'docs\\_\\_%' ESCAPE '\\'",
+      );
+      for (final r in tables) {
+        final name = r['name'] as String;
+        await txn.execute('DROP TABLE IF EXISTS "$name"');
+      }
+      await txn.delete('outbox');
+      await txn.delete('pending_attachments');
+      await txn.delete('link_options');
+      // bootstrap_done marks "the SDK finished its first-time docs__
+      // bootstrap" — after a wipe that no longer holds, so reset.
+      await txn.rawUpdate(
+        'UPDATE sdk_meta SET bootstrap_done = 0 WHERE id = 1',
+      );
+    });
+  }
+
+  /// Clear all local data. Call on logout to wipe the device's local DB.
+  /// Drops every application-owned table (mirrors, system tables, etc.)
+  /// and rebuilds the base schema from scratch. Per-doctype tables are
+  /// rebuilt lazily on the next pull via
+  /// `OfflineRepository.ensureSchemaForClosure`.
   static Future<void> clearAllData() async {
     final db = await getInstance();
-    await db.doctypeMetaDao.deleteAll();
-    await db.documentDao.deleteAll();
-    await db.linkOptionDao.deleteAll();
-    await db.authTokenDao.deleteAll();
-    await db.doctypePermissionDao.deleteAll();
+    await _clearAllDataInternal(db._db);
   }
+
+  /// Test seam — same logic as [clearAllData] but operates on this
+  /// instance without going through [getInstance]. Production code should
+  /// call [clearAllData] (which routes through the singleton).
+  @visibleForTesting
+  Future<void> clearAllDataForTesting() => _clearAllDataInternal(_db);
+
+  /// Drops every application-owned table (anything not in SQLite's
+  /// internal namespace) and rebuilds the base schema by running
+  /// [_onCreateBody]. SQLite internals (`sqlite_master`, `sqlite_sequence`,
+  /// `sqlite_stat*`) are preserved.
+  ///
+  /// Tables wiped include — non-exhaustively —
+  /// `doctype_meta`, `link_options`, `auth_tokens`, `doctype_permission`,
+  /// `outbox`, `pending_attachments`, `sdk_meta`, every `docs__*` mirror
+  /// table, and any future SDK-owned table. The contract is `NOT LIKE
+  /// 'sqlite_%'`: if it's not a SQLite internal, it gets dropped.
+  ///
+  /// DROP loop + rebuild run in ONE transaction. Otherwise a process
+  /// kill between the two would leave application tables dropped but
+  /// `PRAGMA user_version` untouched — the next `openDatabase(version:3)`
+  /// would skip both `onCreate` and `onUpgrade` and hard-brick the DB
+  /// until the user clears app data manually (PR#36 round-2 H4).
+  static Future<void> _clearAllDataInternal(Database db) async {
+    await db.transaction((txn) async {
+      final tables = await txn.rawQuery(
+        "SELECT name FROM sqlite_master "
+        "WHERE type='table' "
+        "AND name NOT LIKE 'sqlite_%'",
+      );
+      for (final r in tables) {
+        final tableName = r['name'] as String;
+        await txn.execute('DROP TABLE IF EXISTS "$tableName"');
+      }
+      // Recreate the base schema inside the same txn. _onCreateBody
+      // brings back doctype_meta (with v3+v4 extensions), link_options,
+      // auth_tokens, doctype_permission, outbox, pending_attachments,
+      // sdk_meta, plus all associated indexes. Per-doctype docs__*
+      // tables are NOT recreated here — they are rebuilt lazily on the
+      // next pull via OfflineRepository.ensureSchemaForClosure.
+      await _onCreateBody(txn, _version);
+    });
+  }
+}
+
+/// Test-only seam exposing private `_onUpgrade` and `_version` so
+/// migration tests can drive them via `openDatabase`. Production code
+/// never touches this.
+@visibleForTesting
+class AppDatabaseTestSeam {
+  static Future<void> runOnUpgrade(
+    Database db,
+    int oldVersion,
+    int newVersion,
+  ) => AppDatabase._onUpgrade(db, oldVersion, newVersion);
+
+  static int get version => AppDatabase._version;
 }

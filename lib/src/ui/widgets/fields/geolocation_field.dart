@@ -85,8 +85,9 @@ class _GeolocationFieldWidgetState extends State<_GeolocationFieldWidget> {
           _latitude = (coords[1] as num).toDouble();
         }
       }
-    } catch (_) {
-      // Ignore parse errors for existing value
+    } catch (e, st) {
+      // Ignore parse errors for existing value, but surface them.
+      debugPrint('GeolocationField._parseExistingValue failed — $e\n$st');
     }
   }
 
@@ -163,7 +164,8 @@ class _GeolocationFieldWidgetState extends State<_GeolocationFieldWidget> {
       });
 
       widget.onChanged?.call(geoJson);
-    } catch (e) {
+    } catch (e, st) {
+      debugPrint('GeolocationField._fetchLocation failed — $e\n$st');
       setState(() {
         _error = 'Failed to get location. Please try again.';
         _loading = false;

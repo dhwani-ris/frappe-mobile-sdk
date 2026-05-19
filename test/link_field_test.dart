@@ -13,7 +13,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:frappe_mobile_sdk/frappe_mobile_sdk.dart';
 import 'package:frappe_mobile_sdk/src/ui/widgets/fields/searchable_select.dart';
 
-
 // ---------------------------------------------------------------------------
 // Test doubles
 // ---------------------------------------------------------------------------
@@ -23,15 +22,13 @@ import 'package:frappe_mobile_sdk/src/ui/widgets/fields/searchable_select.dart';
 class _FakeLinkOptionService extends LinkOptionService {
   final Completer<List<LinkOptionEntity>> _completer = Completer();
 
-  _FakeLinkOptionService() : super(FrappeClient('https://fake.test'));
+  _FakeLinkOptionService() : super.withoutResolver();
 
   @override
   Future<List<LinkOptionEntity>> getLinkOptions(
     String doctype, {
-    bool forceRefresh = false,
     List<List<dynamic>>? filters,
-  }) =>
-      _completer.future;
+  }) => _completer.future;
 
   void resolve(List<LinkOptionEntity> options) {
     if (!_completer.isCompleted) _completer.complete(options);
@@ -42,42 +39,34 @@ class _FakeLinkOptionService extends LinkOptionService {
 // Helpers
 // ---------------------------------------------------------------------------
 
-Widget _wrap(
-  Widget child, {
-  GlobalKey<FormBuilderState>? formKey,
-}) {
+Widget _wrap(Widget child, {GlobalKey<FormBuilderState>? formKey}) {
   return MaterialApp(
     home: Scaffold(
-      body: FormBuilder(
-        key: formKey,
-        child: child,
-      ),
+      body: FormBuilder(key: formKey, child: child),
     ),
   );
 }
 
 DocField _linkField({String? linkFilters}) => DocField(
-      fieldname: 'test_link',
-      fieldtype: 'Link',
-      label: 'Test Link',
-      options: 'TestDocType',
-      linkFilters: linkFilters,
-    );
+  fieldname: 'test_link',
+  fieldtype: 'Link',
+  label: 'Test Link',
+  options: 'TestDocType',
+  linkFilters: linkFilters,
+);
 
 LinkOptionEntity _opt(String name) => LinkOptionEntity(
-      doctype: 'TestDocType',
-      name: name,
-      label: name,
-      lastUpdated: 0,
-    );
+  doctype: 'TestDocType',
+  name: name,
+  label: name,
+  lastUpdated: 0,
+);
 
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
 void main() {
-
-
   // ---- Loading state -------------------------------------------------------
 
   group('LinkField — loading state', () {
@@ -87,56 +76,59 @@ void main() {
         final formKey = GlobalKey<FormBuilderState>();
         final service = _FakeLinkOptionService();
 
-        await tester.pumpWidget(_wrap(
-          LinkField(
-            field: _linkField(),
-            linkOptionService: service,
+        await tester.pumpWidget(
+          _wrap(
+            LinkField(field: _linkField(), linkOptionService: service),
+            formKey: formKey,
           ),
-          formKey: formKey,
-        ));
+        );
 
         // Service completer is unresolved → widget stays in loading state.
         expect(
           formKey.currentState!.value['test_link'],
           isNull,
-          reason: 'Loading state must not put __blank__ or any sentinel into form data',
+          reason:
+              'Loading state must not put __blank__ or any sentinel into form data',
         );
       },
     );
 
-    testWidgets(
-      'no __blank__ string in any form value during loading',
-      (tester) async {
-        final formKey = GlobalKey<FormBuilderState>();
-        final service = _FakeLinkOptionService();
+    testWidgets('no __blank__ string in any form value during loading', (
+      tester,
+    ) async {
+      final formKey = GlobalKey<FormBuilderState>();
+      final service = _FakeLinkOptionService();
 
-        await tester.pumpWidget(_wrap(
+      await tester.pumpWidget(
+        _wrap(
           LinkField(field: _linkField(), linkOptionService: service),
           formKey: formKey,
-        ));
+        ),
+      );
 
-        for (final v in formKey.currentState!.value.values) {
-          expect(
-            v,
-            isNot(equals('__blank__')),
-            reason: 'Sentinel __blank__ must never appear in submitted form data',
-          );
-        }
-      },
-    );
+      for (final v in formKey.currentState!.value.values) {
+        expect(
+          v,
+          isNot(equals('__blank__')),
+          reason: 'Sentinel __blank__ must never appear in submitted form data',
+        );
+      }
+    });
 
     testWidgets(
       'prior value is displayed and no __blank__ item exists while loading',
       (tester) async {
         final service = _FakeLinkOptionService();
 
-        await tester.pumpWidget(_wrap(
-          LinkField(
-            field: _linkField(),
-            linkOptionService: service,
-            value: 'Meghalaya',
+        await tester.pumpWidget(
+          _wrap(
+            LinkField(
+              field: _linkField(),
+              linkOptionService: service,
+              value: 'Meghalaya',
+            ),
           ),
-        ));
+        );
 
         // The existing value must be visible so the UI doesn't flash.
         expect(find.text('Meghalaya'), findsOneWidget);
@@ -161,10 +153,12 @@ void main() {
         final formKey = GlobalKey<FormBuilderState>();
         final service = _FakeLinkOptionService();
 
-        await tester.pumpWidget(_wrap(
-          LinkField(field: _linkField(), linkOptionService: service),
-          formKey: formKey,
-        ));
+        await tester.pumpWidget(
+          _wrap(
+            LinkField(field: _linkField(), linkOptionService: service),
+            formKey: formKey,
+          ),
+        );
 
         await tester.runAsync(() async => service.resolve([]));
         await tester.pump();
@@ -177,31 +171,30 @@ void main() {
       },
     );
 
-    testWidgets(
-      'no DropdownMenuItem carries __blank__ as its value',
-      (tester) async {
-        final service = _FakeLinkOptionService();
+    testWidgets('no DropdownMenuItem carries __blank__ as its value', (
+      tester,
+    ) async {
+      final service = _FakeLinkOptionService();
 
-        await tester.pumpWidget(
-          _wrap(LinkField(field: _linkField(), linkOptionService: service)),
+      await tester.pumpWidget(
+        _wrap(LinkField(field: _linkField(), linkOptionService: service)),
+      );
+
+      await tester.runAsync(() async => service.resolve([]));
+      await tester.pump();
+
+      // Covers both loading and empty state items visible in the tree.
+      final items = tester.widgetList<DropdownMenuItem<String>>(
+        find.byType(DropdownMenuItem<String>),
+      );
+      for (final item in items) {
+        expect(
+          item.value,
+          isNot(equals('__blank__')),
+          reason: 'No DropdownMenuItem should carry __blank__ as its value',
         );
-
-        await tester.runAsync(() async => service.resolve([]));
-        await tester.pump();
-
-        // Covers both loading and empty state items visible in the tree.
-        final items = tester.widgetList<DropdownMenuItem<String>>(
-          find.byType(DropdownMenuItem<String>),
-        );
-        for (final item in items) {
-          expect(
-            item.value,
-            isNot(equals('__blank__')),
-            reason: 'No DropdownMenuItem should carry __blank__ as its value',
-          );
-        }
-      },
-    );
+      }
+    });
 
     testWidgets(
       'onChanged emits null (not __blank__) when the hint item is tapped',
@@ -209,13 +202,15 @@ void main() {
         dynamic captured = 'NOT_CALLED';
         final service = _FakeLinkOptionService();
 
-        await tester.pumpWidget(_wrap(
-          LinkField(
-            field: _linkField(),
-            linkOptionService: service,
-            onChanged: (v) => captured = v,
+        await tester.pumpWidget(
+          _wrap(
+            LinkField(
+              field: _linkField(),
+              linkOptionService: service,
+              onChanged: (v) => captured = v,
+            ),
           ),
-        ));
+        );
 
         await tester.runAsync(() async => service.resolve([]));
         await tester.pump();
@@ -247,111 +242,118 @@ void main() {
     // parseLinkFilters returns null → widget enters waiting state.
     const kLinkFilters = '[["District","state","=","eval: doc.state"]]';
 
-    testWidgets(
-      'shows dependent field name and hides refresh button',
-      (tester) async {
-        final service = _FakeLinkOptionService();
+    testWidgets('shows dependent field name and hides refresh button', (
+      tester,
+    ) async {
+      final service = _FakeLinkOptionService();
 
-        await tester.pumpWidget(_wrap(
+      await tester.pumpWidget(
+        _wrap(
           LinkField(
             field: _linkField(linkFilters: kLinkFilters),
             linkOptionService: service,
             formData: {},
           ),
-        ));
-        await tester.pump(); // process setState from initState
+        ),
+      );
+      await tester.pump(); // process setState from initState
 
-        // Hint text appears in the button AND in the DropdownMenuItem overlay.
-        expect(find.text('Select state first'), findsAtLeastNWidgets(1));
-        expect(find.byIcon(Icons.refresh), findsNothing);
-      },
-    );
+      // Hint text appears in the button AND in the DropdownMenuItem overlay.
+      expect(find.text('Select state first'), findsAtLeastNWidgets(1));
+      expect(find.byIcon(Icons.refresh), findsNothing);
+    });
 
-    testWidgets(
-      'form value is null while waiting for dependent field',
-      (tester) async {
-        final formKey = GlobalKey<FormBuilderState>();
-        final service = _FakeLinkOptionService();
+    testWidgets('form value is null while waiting for dependent field', (
+      tester,
+    ) async {
+      final formKey = GlobalKey<FormBuilderState>();
+      final service = _FakeLinkOptionService();
 
-        await tester.pumpWidget(_wrap(
+      await tester.pumpWidget(
+        _wrap(
           LinkField(
             field: _linkField(linkFilters: kLinkFilters),
             linkOptionService: service,
             formData: {},
           ),
           formKey: formKey,
-        ));
-        await tester.pump();
+        ),
+      );
+      await tester.pump();
 
-        expect(formKey.currentState!.value['test_link'], isNull);
-      },
-    );
+      expect(formKey.currentState!.value['test_link'], isNull);
+    });
 
-    testWidgets(
-      'loads options when dependent field value is supplied',
-      (tester) async {
-        final service = _FakeLinkOptionService();
+    testWidgets('loads options when dependent field value is supplied', (
+      tester,
+    ) async {
+      final service = _FakeLinkOptionService();
 
-        await tester.pumpWidget(_wrap(
+      await tester.pumpWidget(
+        _wrap(
           LinkField(
             field: _linkField(linkFilters: kLinkFilters),
             linkOptionService: service,
             formData: {'state': 'Meghalaya'}, // dependent value present
           ),
-        ));
+        ),
+      );
 
-        // With the dependent value present the widget immediately starts
-        // loading, not waiting.
-        expect(find.text('Select state first'), findsNothing);
-      },
-    );
+      // With the dependent value present the widget immediately starts
+      // loading, not waiting.
+      expect(find.text('Select state first'), findsNothing);
+    });
 
-    testWidgets(
-      'options load when dependent field value is filled in',
-      (tester) async {
-        final formKey = GlobalKey<FormBuilderState>();
-        final service = _FakeLinkOptionService();
+    testWidgets('options load when dependent field value is filled in', (
+      tester,
+    ) async {
+      final formKey = GlobalKey<FormBuilderState>();
+      final service = _FakeLinkOptionService();
 
-        // Initial render: no dependent value → waiting state.
-        await tester.pumpWidget(_wrap(
+      // Initial render: no dependent value → waiting state.
+      await tester.pumpWidget(
+        _wrap(
           LinkField(
             field: _linkField(linkFilters: kLinkFilters),
             linkOptionService: service,
             formData: {},
           ),
           formKey: formKey,
-        ));
-        await tester.pump();
-        expect(find.text('Select state first'), findsAtLeastNWidgets(1));
+        ),
+      );
+      await tester.pump();
+      expect(find.text('Select state first'), findsAtLeastNWidgets(1));
 
-        // Rebuild with dependent value → triggers didUpdateWidget → _loadOptions.
-        await tester.pumpWidget(_wrap(
+      // Rebuild with dependent value → triggers didUpdateWidget → _loadOptions.
+      await tester.pumpWidget(
+        _wrap(
           LinkField(
             field: _linkField(linkFilters: kLinkFilters),
             linkOptionService: service,
             formData: {'state': 'Meghalaya'},
           ),
           formKey: formKey,
-        ));
-        await tester.pump(); // enter loading state
+        ),
+      );
+      await tester.pump(); // enter loading state
 
-        expect(
-          find.text('Select state first'),
-          findsNothing,
-          reason: 'Once dependent field is filled, widget must exit waiting state',
-        );
+      expect(
+        find.text('Select state first'),
+        findsNothing,
+        reason:
+            'Once dependent field is filled, widget must exit waiting state',
+      );
 
-        await tester.runAsync(() async => service.resolve([_opt('DistrictA')]));
-        await tester.pump();
+      await tester.runAsync(() async => service.resolve([_opt('DistrictA')]));
+      await tester.pump();
 
-        expect(find.byType(SearchableSelect), findsOneWidget);
-        expect(
-          formKey.currentState!.value['test_link'],
-          isNull,
-          reason: 'Form value must remain null until user explicitly selects',
-        );
-      },
-    );
+      expect(find.byType(SearchableSelect), findsOneWidget);
+      expect(
+        formKey.currentState!.value['test_link'],
+        isNull,
+        reason: 'Form value must remain null until user explicitly selects',
+      );
+    });
   });
 
   // ---- Options loaded state ------------------------------------------------
@@ -389,13 +391,15 @@ void main() {
         dynamic captured = 'NOT_CALLED';
         final service = _FakeLinkOptionService();
 
-        await tester.pumpWidget(_wrap(
-          LinkField(
-            field: _linkField(),
-            linkOptionService: service,
-            onChanged: (v) => captured = v,
+        await tester.pumpWidget(
+          _wrap(
+            LinkField(
+              field: _linkField(),
+              linkOptionService: service,
+              onChanged: (v) => captured = v,
+            ),
           ),
-        ));
+        );
 
         await tester.runAsync(
           () async => service.resolve([_opt('OnlyOption')]),
@@ -407,47 +411,48 @@ void main() {
         expect(
           captured,
           equals('OnlyOption'),
-          reason: 'Single option must be auto-selected and surfaced via onChanged',
+          reason:
+              'Single option must be auto-selected and surfaced via onChanged',
         );
       },
     );
 
-    testWidgets(
-      'onChanged emits null when selection is cleared',
-      (tester) async {
-        dynamic captured = 'NOT_CALLED';
-        final service = _FakeLinkOptionService();
+    testWidgets('onChanged emits null when selection is cleared', (
+      tester,
+    ) async {
+      dynamic captured = 'NOT_CALLED';
+      final service = _FakeLinkOptionService();
 
-        await tester.pumpWidget(_wrap(
+      await tester.pumpWidget(
+        _wrap(
           LinkField(
             field: _linkField(),
             linkOptionService: service,
             value: 'Option A',
             onChanged: (v) => captured = v,
           ),
-        ));
+        ),
+      );
 
-        await tester.runAsync(
-          () async =>
-              service.resolve([_opt('Option A'), _opt('Option B')]),
-        );
-        await tester.pump();
+      await tester.runAsync(
+        () async => service.resolve([_opt('Option A'), _opt('Option B')]),
+      );
+      await tester.pump();
 
-        // SearchableSelect exposes a clear action (empty selection → null).
-        final searchableSelect = find.byType(SearchableSelect);
-        expect(searchableSelect, findsOneWidget);
-        
-        // Find and tap the clear button (IconButton with Icons.close).
-        final clearButton = find.descendant(
-          of: searchableSelect,
-          matching: find.byIcon(Icons.close),
-        );
-        expect(clearButton, findsOneWidget);
-        await tester.tap(clearButton);
-        await tester.pump();
+      // SearchableSelect exposes a clear action (empty selection → null).
+      final searchableSelect = find.byType(SearchableSelect);
+      expect(searchableSelect, findsOneWidget);
 
-        expect(captured, isNull);
-      },
-    );
+      // Find and tap the clear button (IconButton with Icons.close).
+      final clearButton = find.descendant(
+        of: searchableSelect,
+        matching: find.byIcon(Icons.close),
+      );
+      expect(clearButton, findsOneWidget);
+      await tester.tap(clearButton);
+      await tester.pump();
+
+      expect(captured, isNull);
+    });
   });
 }

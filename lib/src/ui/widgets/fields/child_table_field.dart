@@ -169,7 +169,10 @@ class ChildTableField extends StatelessWidget {
     DocTypeMeta? childMeta;
     try {
       childMeta = await getMeta!(field.options!);
-    } catch (e) {
+    } catch (e, st) {
+      debugPrint(
+        'ChildTableField._showAddRowDialog: getMeta(${field.options}) failed — $e\n$st',
+      );
       if (context.mounted) {
         ScaffoldMessenger.of(
           context,
@@ -215,7 +218,10 @@ class ChildTableField extends StatelessWidget {
     DocTypeMeta? childMeta;
     try {
       childMeta = await getMeta!(field.options!);
-    } catch (e) {
+    } catch (e, st) {
+      debugPrint(
+        'ChildTableField._showEditRowDialog: getMeta(${field.options}) failed — $e\n$st',
+      );
       if (context.mounted) {
         ScaffoldMessenger.of(
           context,

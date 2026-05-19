@@ -1,4 +1,7 @@
 import 'dart:async';
+
+import 'package:flutter/foundation.dart';
+
 import '../models/doc_field.dart';
 import '../models/doc_type_meta.dart';
 import '../models/link_filter_result.dart';
@@ -214,7 +217,7 @@ class LinkFieldCoordinator {
       completer: completer,
     );
     _queue.add(req);
-    _processQueue();
+    unawaited(_processQueue());
 
     future.whenComplete(() {
       _inProgress.remove(ck);
@@ -233,12 +236,21 @@ class LinkFieldCoordinator {
           req.doctype,
           filters: req.filters,
         );
-        final ck = _cacheKey(req.doctype, req.filters);
-        _resultsCache[ck] = options;
+        // Skip caching empty results — sync may not have populated the
+        // target table yet, and a stale cached `[]` would defeat the
+        // post-sync refresh path. Re-running the fetch later is cheap
+        // (single SQLite SELECT) compared to leaving the dropdown empty.
+        if (options.isNotEmpty) {
+          final ck = _cacheKey(req.doctype, req.filters);
+          _resultsCache[ck] = options;
+        }
         if (!req.completer.isCompleted) {
           req.completer.complete(options);
         }
-      } catch (e) {
+      } catch (e, st) {
+        debugPrint(
+          'LinkFieldCoordinator: queue worker failed for ${req.doctype} — $e\n$st',
+        );
         if (!req.completer.isCompleted) {
           req.completer.complete([]);
         }
@@ -246,9 +258,6 @@ class LinkFieldCoordinator {
         _inFlight--;
         if (_inFlight == 0 && _queue.isEmpty) {
           _emitProgress(false);
-        }
-        if (_queue.isNotEmpty) {
-          _processQueue();
         }
       }
     }

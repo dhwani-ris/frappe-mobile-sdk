@@ -6,7 +6,7 @@
 /// - Offline-first architecture with SQLite
 /// - Bi-directional sync engine
 /// - Generic storage (no table per DocType)
-library frappe_mobile_sdk;
+library;
 
 // Core models
 export 'src/models/app_config.dart';
@@ -20,10 +20,8 @@ export 'src/models/link_filter_result.dart';
 // Database
 export 'src/database/app_database.dart';
 export 'src/database/entities/doctype_meta_entity.dart';
-export 'src/database/entities/document_entity.dart';
 export 'src/database/entities/link_option_entity.dart';
 export 'src/database/daos/doctype_meta_dao.dart';
-export 'src/database/daos/document_dao.dart';
 
 // API Client (Direct Frappe API Access)
 export 'src/api/client.dart' show FrappeClient;
@@ -60,6 +58,21 @@ export 'src/services/workflow_service.dart';
 // Screens
 export 'src/screens/mobile_home_screen.dart';
 
+// Offline mode toggle (Spec §7)
+export 'src/models/offline_mode.dart' show OfflineMode;
+export 'src/models/offline_mode_notifier.dart' show OfflineModeNotifier;
+export 'src/services/offline_transition_service.dart'
+    show
+        OfflineTransitionService,
+        OfflineTransitionState,
+        TransitionIdle,
+        TransitionDraining,
+        TransitionDrainFailed,
+        TransitionWipingTables,
+        TransitionCompleted;
+export 'src/ui/offline_transition_screen.dart' show OfflineTransitionScreen;
+export 'src/ui/offline_transition_guard.dart' show OfflineTransitionGuard;
+
 // UI Components
 export 'src/ui/app_guard.dart';
 export 'src/ui/login_screen.dart';
@@ -86,6 +99,38 @@ export 'src/ui/widgets/fields/phone_field.dart';
 // Constants
 export 'src/constants/field_types.dart';
 export 'src/constants/oauth_constants.dart';
+
+// Query (UnifiedResolver + FilterParser) — Spec §6
+export 'src/query/filter_errors.dart'
+    show FilterParseError, UnsupportedFilterError;
+export 'src/query/filter_parser.dart' show FilterParser;
+export 'src/query/frappe_timespan.dart' show FrappeTimespan, TimespanRange;
+export 'src/query/link_decorator.dart' show LinkDecorator, TargetMetaResolver;
+export 'src/query/parsed_query.dart' show ParsedQuery;
+export 'src/query/query_result.dart' show QueryResult, RowOrigin;
+export 'src/query/unified_resolver.dart'
+    show UnifiedResolver, BackgroundFetcher, IsOnlineFn;
+
+// UI surface + lifecycle (P6) — Spec §6.6, §7.x, §9.3
+export 'src/models/session_user.dart' show SessionUser;
+export 'src/services/atomic_wipe.dart' show AtomicWipe, OnCreateFn;
+export 'src/services/retry_priority.dart' show RetryPriority;
+export 'src/services/session_user_service.dart' show SessionUserService;
+export 'src/services/sync_controller.dart'
+    show SyncController, ConflictAction, DeleteCascadePlan, RunFn;
+export 'src/sync/sync_state.dart'
+    show SyncState, DoctypeSyncState, QueueSummary, SyncErrorSummary;
+export 'src/sync/sync_state_notifier.dart' show SyncStateNotifier;
+export 'src/ui/widgets/sync_status_bar.dart' show SyncStatusBar;
+export 'src/ui/widgets/document_list_filter_chip.dart'
+    show DocumentListFilterChip, DocumentListFilter, DocumentListFilterCounts;
+export 'src/ui/widgets/delete_cascade_prompt.dart'
+    show showDeleteCascadePrompt, DeleteCascadeAction;
+export 'src/ui/screens/sync_errors_screen.dart' show SyncErrorsScreen;
+export 'src/ui/screens/sync_progress_screen.dart' show SyncProgressScreen;
+export 'src/ui/dialogs/logout_guard_dialog.dart'
+    show showLogoutGuardDialog, LogoutGuardAction;
+export 'src/ui/dialogs/force_logout_confirm.dart' show showForceLogoutConfirm;
 
 // Utils (debug tracer + user-friendly errors)
 export 'src/api/utils.dart' show extractErrorMessage, toUserFriendlyMessage;

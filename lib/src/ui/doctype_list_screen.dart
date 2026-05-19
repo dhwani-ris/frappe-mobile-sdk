@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../models/app_config.dart';
+import '../query/unified_resolver.dart';
 import '../services/offline_repository.dart';
 
 enum HomeScreenLayout { list, folder }
@@ -9,6 +10,7 @@ enum HomeScreenLayout { list, folder }
 class DoctypeListScreen extends StatefulWidget {
   final AppConfig appConfig;
   final OfflineRepository repository;
+  final UnifiedResolver resolver;
   final Function(String doctype) onDoctypeSelected;
   final Function(String doctype)? onNewDocument;
 
@@ -21,6 +23,7 @@ class DoctypeListScreen extends StatefulWidget {
     super.key,
     required this.appConfig,
     required this.repository,
+    required this.resolver,
     required this.onDoctypeSelected,
     this.onNewDocument,
     this.doctypes,
@@ -68,11 +71,17 @@ class _DoctypeListScreenState extends State<DoctypeListScreen> {
 
     try {
       for (final doctype in _allDoctypesForCount) {
-        final docs = await widget.repository.getDocumentsByDoctype(doctype);
-        _documentCounts[doctype] = docs.length;
+        try {
+          _documentCounts[doctype] = await widget.resolver.count(doctype);
+        } catch (e, st) {
+          // ignore: avoid_print
+          print('DoctypeListScreen: count($doctype) failed — $e\n$st');
+          _documentCounts[doctype] = 0;
+        }
       }
-    } catch (e) {
-      // Ignore errors
+    } catch (e, st) {
+      // ignore: avoid_print
+      print('DoctypeListScreen: _loadDocumentCounts failed — $e\n$st');
     } finally {
       setState(() {
         _isLoading = false;

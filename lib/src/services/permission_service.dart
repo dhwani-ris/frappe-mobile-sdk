@@ -37,18 +37,21 @@ class PermissionService {
 
   /// Call mobile_auth.permissions API and refresh local cache.
   /// Accepts permissions as list or map (same as [saveFromLoginResponse]).
-  Future<Map<String, dynamic>?> syncFromApi() async {
-    try {
-      final result = await _client.rest.get(
-        '/api/v2/method/mobile_auth.permissions',
-      );
-      if (result is! Map<String, dynamic>) return null;
-      final data = result['data'] as Map<String, dynamic>? ?? result;
-      await saveFromLoginResponse(data['permissions']);
-      return data;
-    } catch (_) {
-      return null;
-    }
+  ///
+  /// [timeout], when supplied, fast-fails the call instead of waiting on
+  /// the default 30s × 3-retry budget — pass a short value (e.g. 10s)
+  /// when this is gating a splash/boot path so a wrong-server or down
+  /// server surfaces a [NetworkException] quickly.
+  Future<Map<String, dynamic>?> syncFromApi({Duration? timeout}) async {
+    final result = await _client.rest.get(
+      '/api/v2/method/mobile_auth.permissions',
+      timeout: timeout,
+      maxRetries: timeout != null ? 0 : null,
+    );
+    if (result is! Map<String, dynamic>) return null;
+    final data = result['data'] as Map<String, dynamic>? ?? result;
+    await saveFromLoginResponse(data['permissions']);
+    return data;
   }
 
   Future<void> _savePermissionMap(Map<String, dynamic> map) async {

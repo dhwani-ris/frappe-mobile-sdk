@@ -5,7 +5,10 @@ import 'package:frappe_mobile_sdk/src/api/client.dart';
 import 'package:frappe_mobile_sdk/src/database/app_database.dart';
 import 'package:frappe_mobile_sdk/src/database/daos/doctype_meta_dao.dart';
 import 'package:frappe_mobile_sdk/src/database/entities/doctype_meta_entity.dart';
+import 'package:frappe_mobile_sdk/src/models/doc_field.dart';
+import 'package:frappe_mobile_sdk/src/models/doc_type_meta.dart';
 import 'package:frappe_mobile_sdk/src/models/mobile_form_name.dart';
+import 'package:frappe_mobile_sdk/src/services/bulk_watermark_probe.dart';
 import 'package:frappe_mobile_sdk/src/services/meta_service.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
@@ -430,5 +433,232 @@ void main() {
         expect(result?.modified, '2026-01-02');
       },
     );
+  });
+
+  group('MetaService — P2 extensions', () {
+    DocField f(String name, String type, {String? options}) =>
+        DocField(fieldname: name, fieldtype: type, label: name, options: options);
+
+    test('closure walks Link + Table edges via injected metaFetcher', () async {
+      final db = await AppDatabase.inMemoryDatabase();
+      final svc = MetaService(FrappeClient('https://fake.test'), db);
+
+      final cat = <String, DocTypeMeta>{
+        'Sales Order': DocTypeMeta(name: 'Sales Order', fields: [
+          f('customer', 'Link', options: 'Customer'),
+          f('items', 'Table', options: 'Sales Order Item'),
+        ]),
+        'Customer': DocTypeMeta(name: 'Customer', fields: const []),
+        'Sales Order Item': DocTypeMeta(
+          name: 'Sales Order Item',
+          isTable: true,
+          fields: const [],
+        ),
+      };
+
+      final closure = await svc.closure(
+        const ['Sales Order'],
+        metaFetcher: (dt) async => cat[dt]!,
+      );
+      expect(
+        closure.doctypes.toSet(),
+        {'Sales Order', 'Customer', 'Sales Order Item'},
+      );
+      expect(closure.childDoctypes, {'Sales Order Item'});
+    });
+
+    test('refreshWatermarks falls back to per-doctype fetcher', () async {
+      final db = await AppDatabase.inMemoryDatabase();
+      final svc = MetaService(FrappeClient('https://fake.test'), db);
+      final marks = await svc.refreshWatermarks(
+        const ['Customer', 'Sales Order'],
+        watermarkFetcher: (dt) async => '$dt-mark',
+      );
+      expect(marks['Customer'], 'Customer-mark');
+      expect(marks['Sales Order'], 'Sales Order-mark');
+    });
+
+    test('refreshWatermarks uses bulk probe when available', () async {
+      final db = await AppDatabase.inMemoryDatabase();
+      final svc = MetaService(FrappeClient('https://fake.test'), db);
+      final probe = BulkWatermarkProbe(
+        appMethodName: 'app.get_meta_watermarks',
+        requester: (method, doctypes) async => BulkProbeResult(
+          headerVersion: '1',
+          rows: [
+            for (final dt in doctypes)
+              {'doctype': dt, 'modified': 'bulk-$dt'},
+          ],
+        ),
+      );
+      final marks = await svc.refreshWatermarks(
+        const ['Customer', 'Sales Order'],
+        probe: probe,
+      );
+      expect(marks['Customer'], 'bulk-Customer');
+      expect(marks['Sales Order'], 'bulk-Sales Order');
+    });
+
+    test(
+      'ensureUpToDate skips doctypes whose watermark matches local',
+      () async {
+        final db = await AppDatabase.inMemoryDatabase();
+        final svc = MetaService(FrappeClient('https://fake.test'), db);
+
+        // Seed a meta row + watermark.
+        await db.doctypeMetaDao.insertDoctypeMeta(
+          DoctypeMetaEntity(
+            doctype: 'Customer',
+            modified: '2026-01-01',
+            serverModifiedAt: null,
+            isMobileForm: false,
+            metaJson: jsonEncode(
+              DocTypeMeta(name: 'Customer', fields: const []).toJson(),
+            ),
+          ),
+        );
+        await db.doctypeMetaDao.setMetaWatermark('Customer', 'mark-1');
+
+        var fetchCalls = 0;
+        final result = await svc.ensureUpToDate(
+          const ['Customer'],
+          watermarkFetcher: (dt) async => 'mark-1',
+          metaFetcher: (dt) async {
+            fetchCalls++;
+            return DocTypeMeta(name: dt, fields: const []);
+          },
+        );
+        expect(fetchCalls, 0,
+            reason: 'identical watermark must not refetch meta');
+        expect(result.unchanged, ['Customer']);
+        expect(result.updated, isEmpty);
+        expect(result.failed, isEmpty);
+      },
+    );
+
+    test(
+      'ensureUpToDate isolates per-doctype failures (one bad doctype does '
+      'NOT block the others)',
+      () async {
+        final db = await AppDatabase.inMemoryDatabase();
+        final svc = MetaService(FrappeClient('https://fake.test'), db);
+        final dao = db.doctypeMetaDao;
+
+        for (final dt in ['Good', 'Boom', 'AlsoGood']) {
+          await dao.insertDoctypeMeta(
+            DoctypeMetaEntity(
+              doctype: dt,
+              modified: null,
+              serverModifiedAt: null,
+              isMobileForm: false,
+              metaJson: '{}',
+            ),
+          );
+        }
+
+        final result = await svc.ensureUpToDate(
+          const ['Good', 'Boom', 'AlsoGood'],
+          watermarkFetcher: (dt) async => 'mark',
+          metaFetcher: (dt) async {
+            if (dt == 'Boom') throw StateError('upstream meta server is down');
+            return DocTypeMeta(name: dt, fields: const []);
+          },
+        );
+
+        expect(result.updated.toSet(), {'Good', 'AlsoGood'});
+        expect(result.failed.keys, ['Boom']);
+        expect(result.failed['Boom'], contains('upstream meta server'));
+        expect(result.allSucceeded, isFalse);
+        expect(await dao.getMetaWatermark('Good'), 'mark');
+        expect(await dao.getMetaWatermark('AlsoGood'), 'mark');
+        expect(await dao.getMetaWatermark('Boom'), isNull,
+            reason: 'failed doctype must not advance its watermark');
+      },
+    );
+
+    test(
+      'ensureUpToDate refetches meta and persists graph + watermark on mismatch',
+      () async {
+        final db = await AppDatabase.inMemoryDatabase();
+        final svc = MetaService(FrappeClient('https://fake.test'), db);
+        final dao = db.doctypeMetaDao;
+
+        await dao.insertDoctypeMeta(
+          DoctypeMetaEntity(
+            doctype: 'Customer',
+            modified: null,
+            serverModifiedAt: null,
+            isMobileForm: false,
+            metaJson: '{}',
+          ),
+        );
+
+        final result = await svc.ensureUpToDate(
+          const ['Customer'],
+          watermarkFetcher: (dt) async => 'mark-2',
+          metaFetcher: (dt) async => DocTypeMeta(
+            name: dt,
+            fields: [
+              DocField(
+                fieldname: 'territory',
+                fieldtype: 'Link',
+                label: 'Territory',
+                options: 'Territory',
+              ),
+            ],
+          ),
+        );
+
+        expect(result.updated, ['Customer']);
+        expect(result.failed, isEmpty);
+        expect(await dao.getMetaWatermark('Customer'), 'mark-2');
+        final dg = await svc.depGraphFor('Customer');
+        expect(dg, isNotNull);
+        expect(dg!.outgoing.length, 1);
+        expect(dg.outgoing.first.targetDoctype, 'Territory');
+      },
+    );
+
+    test('primeDepGraphs writes one row per closure doctype', () async {
+      final db = await AppDatabase.inMemoryDatabase();
+      final svc = MetaService(FrappeClient('https://fake.test'), db);
+      final dao = db.doctypeMetaDao;
+
+      // Seed meta rows so foreign-keyish lookups succeed.
+      for (final dt in ['Sales Order', 'Customer', 'Sales Order Item']) {
+        await dao.insertDoctypeMeta(
+          DoctypeMetaEntity(
+            doctype: dt,
+            modified: null,
+            serverModifiedAt: null,
+            isMobileForm: false,
+            metaJson: '{}',
+          ),
+        );
+      }
+
+      final cat = <String, DocTypeMeta>{
+        'Sales Order': DocTypeMeta(name: 'Sales Order', fields: [
+          f('customer', 'Link', options: 'Customer'),
+          f('items', 'Table', options: 'Sales Order Item'),
+        ]),
+        'Customer': DocTypeMeta(name: 'Customer', fields: const []),
+        'Sales Order Item': DocTypeMeta(
+          name: 'Sales Order Item',
+          isTable: true,
+          fields: const [],
+        ),
+      };
+      final closure = await svc.closure(
+        const ['Sales Order'],
+        metaFetcher: (dt) async => cat[dt]!,
+      );
+      await svc.primeDepGraphs(closure);
+
+      for (final dt in closure.doctypes) {
+        final g = await svc.depGraphFor(dt);
+        expect(g, isNotNull, reason: 'dep graph missing for $dt');
+      }
+    });
   });
 }

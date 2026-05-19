@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:path/path.dart';
 import 'exceptions.dart';
@@ -16,6 +18,15 @@ class RestHelper {
   final http.Client _client;
   final Future<bool> Function()? onTokenExpired;
 
+  /// Per-request hard ceiling. Without this, a server that accepts the TCP
+  /// connection but never sends a response would hang the caller forever
+  /// (Dart's http.Client has no default timeout). Boot-time SDK init awaits
+  /// these calls, so a hang freezes the splash spinner.
+  final Duration requestTimeout;
+
+  /// Longer ceiling for multipart uploads where slow uplinks are normal.
+  final Duration uploadTimeout;
+
   String? _sidCookie;
   String? _apiKey;
   String? _apiSecret;
@@ -23,11 +34,16 @@ class RestHelper {
 
   http.Client get client => _client;
 
-  RestHelper(String baseUrlParam, {http.Client? client, this.onTokenExpired})
-    : baseUrl = baseUrlParam.endsWith('/')
-          ? baseUrlParam.substring(0, baseUrlParam.length - 1)
-          : baseUrlParam,
-      _client = client ?? http.Client();
+  RestHelper(
+    String baseUrlParam, {
+    http.Client? client,
+    this.onTokenExpired,
+    this.requestTimeout = const Duration(seconds: 30),
+    this.uploadTimeout = const Duration(minutes: 5),
+  }) : baseUrl = baseUrlParam.endsWith('/')
+           ? baseUrlParam.substring(0, baseUrlParam.length - 1)
+           : baseUrlParam,
+       _client = client ?? http.Client();
 
   /// Sets session cookie for credential-based auth.
   void setSessionCookie(String sid) {
@@ -77,23 +93,41 @@ class RestHelper {
       Map<String, String>.from(_getHeaders());
 
   /// Performs a GET request.
+  ///
+  /// [timeout] overrides [requestTimeout] for this single call — use a
+  /// short value (e.g. 10s) for splash-blocking calls where the default
+  /// 30s × 3-retry budget (~93s worst case) would freeze the UI.
+  /// [maxRetries] overrides the default GET retry budget (2 retries on
+  /// transient network errors). Pass `0` for fast-fail boot probes.
   Future<dynamic> get(
     String endpoint, {
     Map<String, dynamic>? queryParams,
+    Duration? timeout,
+    int? maxRetries,
   }) async {
-    return _request('GET', endpoint, queryParams: queryParams);
+    return _request(
+      'GET',
+      endpoint,
+      queryParams: queryParams,
+      timeout: timeout,
+      maxRetries: maxRetries,
+    );
   }
 
   /// Performs a GET request without auth headers.
   Future<dynamic> getPublic(
     String endpoint, {
     Map<String, dynamic>? queryParams,
+    Duration? timeout,
+    int? maxRetries,
   }) async {
     return _request(
       'GET',
       endpoint,
       queryParams: queryParams,
       includeAuth: false,
+      timeout: timeout,
+      maxRetries: maxRetries,
     );
   }
 
@@ -123,6 +157,8 @@ class RestHelper {
     Map<String, dynamic>? queryParams,
     dynamic body,
     bool includeAuth = true,
+    Duration? timeout,
+    int? maxRetries,
   }) async {
     var uri = Uri.parse('$baseUrl$endpoint');
     if (queryParams != null) {
@@ -138,8 +174,13 @@ class RestHelper {
       body: method != 'GET' ? body : null,
     );
 
+    final effectiveTimeout = timeout ?? requestTimeout;
+    // Default budget: 1 initial attempt + 2 retries = 3 total attempts.
+    // Pass `maxRetries: 0` from boot/probe call sites to fail fast.
+    final effectiveMaxAttempts = (maxRetries ?? 2) + 1;
+
     int attempts = 0;
-    while (attempts < 3) {
+    while (attempts < effectiveMaxAttempts) {
       try {
         final headers = _getHeaders(includeAuth: includeAuth);
         if (method != 'GET' && body != null) {
@@ -149,24 +190,32 @@ class RestHelper {
         http.Response response;
         switch (method) {
           case 'GET':
-            response = await _client.get(uri, headers: headers);
+            response = await _client
+                .get(uri, headers: headers)
+                .timeout(effectiveTimeout);
             break;
           case 'POST':
-            response = await _client.post(
-              uri,
-              headers: headers,
-              body: body != null ? jsonEncode(body) : null,
-            );
+            response = await _client
+                .post(
+                  uri,
+                  headers: headers,
+                  body: body != null ? jsonEncode(body) : null,
+                )
+                .timeout(effectiveTimeout);
             break;
           case 'PUT':
-            response = await _client.put(
-              uri,
-              headers: headers,
-              body: body != null ? jsonEncode(body) : null,
-            );
+            response = await _client
+                .put(
+                  uri,
+                  headers: headers,
+                  body: body != null ? jsonEncode(body) : null,
+                )
+                .timeout(effectiveTimeout);
             break;
           case 'DELETE':
-            response = await _client.delete(uri, headers: headers);
+            response = await _client
+                .delete(uri, headers: headers)
+                .timeout(effectiveTimeout);
             break;
           default:
             throw ApiException('Unsupported HTTP method: $method');
@@ -191,13 +240,28 @@ class RestHelper {
           }
         }
         rethrow;
-      } on SocketException {
-        if (method == 'GET' && attempts < 2) {
+      } on SocketException catch (e) {
+        if (method == 'GET' && attempts < effectiveMaxAttempts - 1) {
           attempts++;
           await Future.delayed(Duration(milliseconds: 500 * (1 << attempts)));
           continue;
         }
+        final msg = e.message.toLowerCase();
+        if (msg.contains('refused') || msg.contains('unreachable')) {
+          throw NetworkException(
+            'Cannot reach server. Check your Wi-Fi connection.',
+          );
+        }
         throw NetworkException('No internet connection');
+      } on TimeoutException {
+        if (method == 'GET' && attempts < effectiveMaxAttempts - 1) {
+          attempts++;
+          await Future.delayed(Duration(milliseconds: 500 * (1 << attempts)));
+          continue;
+        }
+        throw NetworkException(
+          'Server is not responding. Check your connection or try again.',
+        );
       } catch (e) {
         if (e is FrappeException) rethrow;
         throw NetworkException('Request failed: $e');
@@ -209,7 +273,14 @@ class RestHelper {
     dynamic body;
     try {
       body = jsonDecode(response.body);
-    } catch (e) {
+    } catch (e, st) {
+      // Non-JSON body. On 2xx we return raw text; on error status we
+      // synthesize an ApiException below using the same raw body. Logged
+      // because a missing JSON envelope on an error response is often
+      // useful when triaging server-side issues.
+      debugPrint(
+        'RestHelper._handleResponse: jsonDecode failed (status=${response.statusCode}) — $e\n$st',
+      );
       if (response.statusCode >= 200 && response.statusCode < 300) {
         return response.body;
       }
@@ -306,9 +377,15 @@ class RestHelper {
     request.files.add(multipartFile);
 
     try {
-      var streamedResponse = await _client.send(request);
-      var response = await http.Response.fromStream(streamedResponse);
+      var streamedResponse = await _client.send(request).timeout(uploadTimeout);
+      var response = await http.Response.fromStream(
+        streamedResponse,
+      ).timeout(uploadTimeout);
       return _handleResponse(response);
+    } on TimeoutException {
+      throw NetworkException(
+        'Upload timed out. Check your connection and try again.',
+      );
     } catch (e) {
       if (e is FrappeException) rethrow;
       throw NetworkException('Upload failed: $e');

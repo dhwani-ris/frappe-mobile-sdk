@@ -1,10 +1,17 @@
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import '../api/client.dart';
+import '../models/closure_result.dart';
+import '../models/dep_graph.dart';
 import '../models/doc_type_meta.dart';
 import '../models/mobile_form_name.dart';
 import '../database/app_database.dart';
 import '../database/entities/doctype_meta_entity.dart';
+import 'bulk_watermark_probe.dart';
+import 'closure_builder.dart';
+import 'dependency_graph_builder.dart';
+import 'meta_differ.dart';
+import 'meta_migration.dart';
 
 /// Max doctypes kept in memory; oldest (LRU) evicted when exceeded.
 const int _kMetaCacheMaxSize = 15;
@@ -16,6 +23,19 @@ class MetaService {
   final AppDatabase _database;
   final Map<String, DocTypeMeta> _metaCache = {};
   final List<String> _metaCacheOrder = [];
+
+  /// Fires whenever a per-doctype meta-sync inside
+  /// [checkAndSyncDoctypes] fails. Set by [FrappeSDK] once the
+  /// [SyncStateNotifier] is built so failures surface on
+  /// `SyncState.failedMetaSyncs` instead of being lost to `debugPrint`.
+  /// Optional — when null, failures are still logged.
+  void Function(String doctype, Object error)? onMetaSyncFailure;
+
+  /// Fires when a previously-failed doctype's meta is successfully
+  /// re-fetched, so the SDK can clear the doctype from
+  /// `SyncState.failedMetaSyncs`. Optional and paired with
+  /// [onMetaSyncFailure].
+  void Function(String doctype)? onMetaSyncRecovered;
 
   MetaService(this._client, this._database);
 
@@ -53,6 +73,13 @@ class MetaService {
     } else {
       await _database.doctypeMetaDao.insertDoctypeMeta(entity);
     }
+    // Invalidate the in-memory LRU so the next getMeta() reload reads the
+    // freshly-persisted row instead of serving the previous cached copy.
+    // Without this, schema changes synced via prefetchToDb /
+    // checkAndSyncDoctypes / resyncMobileConfiguration stay invisible to
+    // the form layer until the entry is naturally evicted (15 reads later)
+    // or the app restarts.
+    clearDocTypeCache(doctype);
   }
 
   Future<Map<String, dynamic>> _fetchMetaFromServer(String doctype) async {
@@ -137,8 +164,8 @@ class MetaService {
     for (final doctype in doctypes) {
       try {
         await fetchAndStoreInDb(doctype);
-      } catch (_) {
-        // skip failed doctypes
+      } catch (e, st) {
+        debugPrint('MetaService.prefetchToDb($doctype) failed — $e\n$st');
       }
     }
   }
@@ -149,7 +176,9 @@ class MetaService {
     for (final doctype in doctypes) {
       try {
         result[doctype] = await getMeta(doctype);
-      } catch (_) {}
+      } catch (e, st) {
+        debugPrint('MetaService.getMetas getMeta($doctype) failed — $e\n$st');
+      }
     }
     return result;
   }
@@ -213,14 +242,22 @@ class MetaService {
         for (final doctype in doctypesToSync) {
           try {
             await fetchAndStoreInDb(doctype);
-          } catch (e) {
-            // Skip failed doctypes, continue with others
+            // Successful re-fetch — clear any prior failure from the
+            // observable surface so the counter goes back down.
+            onMetaSyncRecovered?.call(doctype);
+          } catch (e, st) {
+            debugPrint(
+              'MetaService.checkAndSyncDoctypes($doctype) failed — $e\n$st',
+            );
+            onMetaSyncFailure?.call(doctype, e);
             continue;
           }
         }
       }
-    } catch (e) {
-      // Silently fail - don't block app launch
+    } catch (e, st) {
+      // Don't block app launch on errors here, but surface them.
+      debugPrint('MetaService.checkAndSyncDoctypes failed — $e\n$st');
+      onMetaSyncFailure?.call('checkAndSyncDoctypes', e);
       return;
     }
   }
@@ -260,8 +297,8 @@ class MetaService {
       if (mobileFormDoctypes.isNotEmpty) {
         await prefetchToDb(mobileFormDoctypes);
       }
-    } catch (e) {
-      // Silently fail
+    } catch (e, st) {
+      debugPrint('MetaService.prefetchMobileFormDoctypes failed — $e\n$st');
       return;
     }
   }
@@ -279,14 +316,16 @@ class MetaService {
         for (final doctype in mobileFormDoctypes) {
           try {
             await fetchAndStoreInDb(doctype);
-          } catch (e) {
-            // Continue with other doctypes
+          } catch (e, st) {
+            debugPrint(
+              'MetaService.syncAllMobileFormDoctypes($doctype) failed — $e\n$st',
+            );
             continue;
           }
         }
       }
-    } catch (e) {
-      // Silently fail
+    } catch (e, st) {
+      debugPrint('MetaService.syncAllMobileFormDoctypes failed — $e\n$st');
       return;
     }
   }
@@ -388,9 +427,8 @@ class MetaService {
   /// Throws if not authenticated or API call fails.
   Future<void> resyncMobileConfiguration() async {
     try {
-      // Guest endpoint: call without auth headers to avoid invalid-token 401
-      // when a stale/expired token is still present in memory.
-      final result = await _client.rest.getPublic(
+      // Authenticated call so the server can filter to doctypes this user can read.
+      final result = await _client.rest.get(
         '/api/v2/method/mobile_auth.configuration',
       );
 
@@ -424,8 +462,10 @@ class MetaService {
         for (final doctype in doctypesToSync) {
           try {
             await fetchAndStoreInDb(doctype);
-          } catch (e) {
-            // Skip failed doctypes, continue with others
+          } catch (e, st) {
+            debugPrint(
+              'MetaService.resyncMobileConfiguration($doctype) failed — $e\n$st',
+            );
             continue;
           }
         }
@@ -446,7 +486,10 @@ class MetaService {
       final date2 = _parseTimestamp(timestamp2);
       if (date1 == null || date2 == null) return false;
       return date1.isAfter(date2);
-    } catch (e) {
+    } catch (e, st) {
+      debugPrint(
+        'MetaService._isTimestampNewer($timestamp1, $timestamp2) failed — $e\n$st',
+      );
       return false;
     }
   }
@@ -463,8 +506,185 @@ class MetaService {
       }
       // Try just date
       return DateTime.parse(timestamp);
-    } catch (e) {
+    } catch (e, st) {
+      debugPrint('MetaService._parseTimestamp($timestamp) failed — $e\n$st');
       return null;
     }
   }
+
+  // ─────────── P2: offline-first extensions ───────────
+
+  /// Computes the closure of doctypes reachable from [entryPoints] via
+  /// `Link` + `Table` + `Table MultiSelect` edges. Spec §3.2.
+  ///
+  /// [metaFetcher] is an optional injection seam used by tests; in
+  /// production it defaults to [getMeta] which itself uses the in-memory
+  /// LRU + DB cache + network fallback chain.
+  Future<ClosureResult> closure(
+    List<String> entryPoints, {
+    MetaFetcher? metaFetcher,
+  }) async {
+    return ClosureBuilder.build(
+      entryPoints: entryPoints,
+      metaFetcher: metaFetcher ?? (dt) => getMeta(dt),
+    );
+  }
+
+  /// Returns the latest server `modified` per doctype. If [probe] is
+  /// supplied and detects the optional bulk endpoint, one round-trip is
+  /// used; otherwise it falls back to per-doctype GETs.
+  ///
+  /// [watermarkFetcher] overrides the per-doctype fallback for tests.
+  Future<Map<String, String?>> refreshWatermarks(
+    List<String> doctypes, {
+    BulkWatermarkProbe? probe,
+    Future<String?> Function(String doctype)? watermarkFetcher,
+  }) async {
+    if (probe != null) {
+      final detection = await probe.detect(candidates: doctypes);
+      if (detection.available) {
+        final rows = await probe.fetchWatermarks(doctypes);
+        return {
+          for (final r in rows)
+            r['doctype'] as String: r['modified'] as String?,
+        };
+      }
+    }
+    final out = <String, String?>{};
+    final fallback =
+        watermarkFetcher ?? (dt) => _client.doctype.getDocTypeWatermark(dt);
+    for (final dt in doctypes) {
+      try {
+        out[dt] = await fallback(dt);
+      } catch (e, st) {
+        debugPrint(
+          'MetaService.refreshWatermarks fallback($dt) failed — $e\n$st',
+        );
+        out[dt] = null;
+      }
+    }
+    return out;
+  }
+
+  /// For each doctype, compares local `meta_watermark` against the server
+  /// `modified`. On mismatch: refetches the full meta, runs [MetaDiffer],
+  /// applies the diff via [MetaMigration], and persists fresh meta_json,
+  /// meta_watermark, and dep_graph_json. Spec §4.9.
+  ///
+  /// Each doctype is processed independently — a failure on one (network
+  /// error fetching meta, malformed payload, ALTER TABLE conflict, …) does
+  /// NOT abort the rest of the batch. Returns a [MetaUpdateResult]
+  /// summarising successes and per-doctype failures so the caller can
+  /// surface them to the user or retry later.
+  Future<MetaUpdateResult> ensureUpToDate(
+    List<String> doctypes, {
+    BulkWatermarkProbe? probe,
+    Future<String?> Function(String doctype)? watermarkFetcher,
+    MetaFetcher? metaFetcher,
+  }) async {
+    final dao = _database.doctypeMetaDao;
+    final fetchMeta = metaFetcher ?? (dt) => getMeta(dt, forceRefresh: true);
+    final serverMarks = await refreshWatermarks(
+      doctypes,
+      probe: probe,
+      watermarkFetcher: watermarkFetcher,
+    );
+
+    final updated = <String>[];
+    final unchanged = <String>[];
+    final failed = <String, String>{};
+
+    for (final dt in doctypes) {
+      try {
+        final newMark = serverMarks[dt];
+        if (newMark == null) {
+          // No watermark = nothing to compare. Treat as "unchanged" rather
+          // than silently failing — caller decides whether to retry.
+          unchanged.add(dt);
+          continue;
+        }
+        // Best-effort read: not wrapped in a transaction, so a concurrent
+        // PullEngine job updating this row's last_ok_cursor could cause SQLite
+        // to re-read the row. SQLite WAL guarantees no torn read, but the
+        // watermark value here may be one write behind. Worst case: unnecessary
+        // meta re-fetch on the next cycle, not data corruption.
+        final localMark = await dao.getMetaWatermark(dt);
+        if (localMark == newMark) {
+          unchanged.add(dt);
+          continue;
+        }
+
+        final fresh = await fetchMeta(dt);
+        final oldJson = await dao.getMetaJson(dt);
+        final old = (oldJson == null || oldJson.isEmpty || oldJson == '{}')
+            ? DocTypeMeta(name: dt, fields: const [])
+            : DocTypeMeta.fromJson(jsonDecode(oldJson) as Map<String, dynamic>);
+
+        final diff = MetaDiffer.diff(oldMeta: old, newMeta: fresh);
+        if (!diff.isNoOp) {
+          final tableName = await dao.getTableName(dt);
+          if (tableName != null) {
+            await MetaMigration.apply(
+              _database.rawDatabase,
+              diff,
+              tableName: tableName,
+            );
+          }
+        }
+        await dao.upsertMetaJson(dt, jsonEncode(fresh.toJson()));
+        await dao.setMetaWatermark(dt, newMark);
+        final dg = DependencyGraphBuilder.buildOutgoing(fresh);
+        await dao.setDepGraphJson(dt, jsonEncode(dg.toJson()));
+        updated.add(dt);
+      } catch (e, st) {
+        debugPrint('MetaService.ensureUpToDate($dt) failed — $e\n$st');
+        failed[dt] = e.toString();
+      }
+    }
+
+    return MetaUpdateResult(
+      updated: updated,
+      unchanged: unchanged,
+      failed: failed,
+    );
+  }
+
+  /// Reads the cached dep graph for a doctype, or null if none persisted yet.
+  Future<DepGraph?> depGraphFor(String doctype) async {
+    final raw = await _database.doctypeMetaDao.getDepGraphJson(doctype);
+    if (raw == null) return null;
+    return DepGraph.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+  }
+
+  /// Persists each per-doctype graph in [closure] onto
+  /// `doctype_meta.dep_graph_json` so later phases (PullEngine, push tier
+  /// computer) can read them without rebuilding from meta.
+  Future<void> primeDepGraphs(ClosureResult closure) async {
+    final dao = _database.doctypeMetaDao;
+    for (final dt in closure.doctypes) {
+      final g = closure.graph[dt];
+      if (g == null) continue;
+      await dao.setDepGraphJson(dt, jsonEncode(g.toJson()));
+    }
+  }
+}
+
+/// Outcome of a [MetaService.ensureUpToDate] call. Each doctype lands in
+/// exactly one of the three buckets — `updated` (watermark advanced and
+/// schema/meta refreshed), `unchanged` (already in sync or no server
+/// watermark available), or `failed` (with the stringified error). Allows
+/// the caller to surface partial results to the user without aborting the
+/// rest of the batch on a single error.
+class MetaUpdateResult {
+  final List<String> updated;
+  final List<String> unchanged;
+  final Map<String, String> failed;
+
+  const MetaUpdateResult({
+    required this.updated,
+    required this.unchanged,
+    required this.failed,
+  });
+
+  bool get allSucceeded => failed.isEmpty;
 }

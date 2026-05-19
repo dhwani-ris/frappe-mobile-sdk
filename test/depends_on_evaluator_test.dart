@@ -150,5 +150,123 @@ void main() {
         );
       });
     });
+
+    group('grouping with parens', () {
+      test('outer parens around a single AND group are stripped', () {
+        expect(
+          DependsOnEvaluator.evaluate("eval:(doc.a == 'X' && doc.b == 'Y')", {
+            'a': 'X',
+            'b': 'Y',
+          }),
+          isTrue,
+        );
+        expect(
+          DependsOnEvaluator.evaluate("eval:(doc.a == 'X' && doc.b == 'Y')", {
+            'a': 'X',
+            'b': 'Z',
+          }),
+          isFalse,
+        );
+      });
+
+      test('two AND groups joined by || — first true', () {
+        expect(
+          DependsOnEvaluator.evaluate(
+            "eval:(doc.a == 'X' && doc.b == 'Y') || (doc.c == 'Z' && doc.d == 'W')",
+            {'a': 'X', 'b': 'Y'},
+          ),
+          isTrue,
+        );
+      });
+
+      test('two AND groups joined by || — second true', () {
+        expect(
+          DependsOnEvaluator.evaluate(
+            "eval:(doc.a == 'X' && doc.b == 'Y') || (doc.c == 'Z' && doc.d == 'W')",
+            {'c': 'Z', 'd': 'W'},
+          ),
+          isTrue,
+        );
+      });
+
+      test('two AND groups joined by || — both false', () {
+        expect(
+          DependsOnEvaluator.evaluate(
+            "eval:(doc.a == 'X' && doc.b == 'Y') || (doc.c == 'Z' && doc.d == 'W')",
+            {'a': 'X', 'b': 'NO', 'c': 'Z', 'd': 'NO'},
+          ),
+          isFalse,
+        );
+      });
+
+      test('paren group containing .includes mixed with == ', () {
+        expect(
+          DependsOnEvaluator.evaluate(
+            "eval:(['A','B'].includes(doc.cat) && doc.flag == 'Yes')",
+            {'cat': 'A', 'flag': 'Yes'},
+          ),
+          isTrue,
+        );
+        expect(
+          DependsOnEvaluator.evaluate(
+            "eval:(['A','B'].includes(doc.cat) && doc.flag == 'Yes')",
+            {'cat': 'C', 'flag': 'Yes'},
+          ),
+          isFalse,
+        );
+      });
+
+      test('Frappe section_break_presence regression', () {
+        // Verbatim from snf household_survey_family_member.json — was hidden
+        // on mobile because parens grouping was not respected.
+        const expr =
+            "eval:(['5 Years to Less than 15 Years','15 Years and Above'].includes(doc.age_grup) && doc.study == 'No')"
+            " || (doc.age_grup == '15 Years and Above' && doc.study == 'Yes' && doc.study_cont == 'No' && ['Anganwadi','Primary 1 to 2','Primary 3 to 5'].includes(doc.lst_pssd_clss))";
+
+        // Branch 1: 15+ and study=No → section visible.
+        expect(
+          DependsOnEvaluator.evaluate(expr, {
+            'age_grup': '15 Years and Above',
+            'study': 'No',
+          }),
+          isTrue,
+        );
+
+        // Branch 2: 15+, study=Yes, dropped out at primary → section visible.
+        expect(
+          DependsOnEvaluator.evaluate(expr, {
+            'age_grup': '15 Years and Above',
+            'study': 'Yes',
+            'study_cont': 'No',
+            'lst_pssd_clss': 'Primary 3 to 5',
+          }),
+          isTrue,
+        );
+
+        // Neither branch matches → section hidden.
+        expect(
+          DependsOnEvaluator.evaluate(expr, {
+            'age_grup': 'Less than 5 Years',
+            'study': 'No',
+          }),
+          isFalse,
+        );
+        expect(
+          DependsOnEvaluator.evaluate(expr, {
+            'age_grup': '15 Years and Above',
+            'study': 'Yes',
+            'study_cont': 'Yes',
+          }),
+          isFalse,
+        );
+      });
+
+      test('nested parens flatten correctly', () {
+        expect(
+          DependsOnEvaluator.evaluate("eval:((doc.a == 'X'))", {'a': 'X'}),
+          isTrue,
+        );
+      });
+    });
   });
 }

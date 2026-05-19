@@ -80,8 +80,9 @@ class ImageField extends BaseField {
           onChanged?.call(url);
         }
         // On upload failure or empty response, do not store local path (server expects file_url)
-      } catch (_) {
+      } catch (e, st) {
         // Do not fall back to local path; leave field unchanged so wrong URL is never sent
+        debugPrint('ImageField: uploadFile failed — $e\n$st');
       }
     } else {
       fieldState.didChange(file.path);

@@ -1,4 +1,6 @@
 // ignore_for_file: use_build_context_synchronously
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import '../models/link_filter_result.dart';
 import '../sdk/frappe_sdk.dart';
@@ -28,11 +30,17 @@ class MobileHomeScreen extends StatefulWidget {
 
   /// Optional builder to replace the default doctype tile.
   /// Renders as a child in a Column with dividers (no need to add dividers).
+  ///
+  /// `errorCount` is the number of stuck outbox rows for this doctype
+  /// (failed/blocked/conflict). Apps customizing the tile should
+  /// surface it visibly — the default tile renders a red `⚠ N error`
+  /// segment when `errorCount > 0`.
   final Widget Function(
     BuildContext context,
     String doctype,
     int count,
     int dirtyCount,
+    int errorCount,
   )?
   tileBuilder;
 
@@ -49,7 +57,7 @@ class MobileHomeScreen extends StatefulWidget {
 
   /// Optional builder for runtime link filters. Called during link option resolution.
   final LinkFilterBuilder? Function(String doctype, String fieldname)?
-      getLinkFilterBuilder;
+  getLinkFilterBuilder;
 
   const MobileHomeScreen({
     super.key,
@@ -72,10 +80,13 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
   Map<String, List<String>> _groups = {};
   Map<String, int> _counts = {};
   Map<String, int> _dirtyCounts = {};
+  Map<String, int> _errorCounts = {};
   bool _loading = true;
   bool _isSyncing = false;
+  bool _isForceSyncing = false;
   bool _isOnline = false;
 
+  StreamSubscription<void>? _syncSub;
   late final AnimationController _syncIconController;
 
   @override
@@ -85,19 +96,32 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
       vsync: this,
       duration: const Duration(seconds: 1),
     );
+    _syncSub = widget.sdk.syncComplete$?.listen((_) {
+      if (mounted) _load();
+    });
     _load();
   }
 
   @override
   void dispose() {
+    _syncSub?.cancel();
     _syncIconController.dispose();
     super.dispose();
   }
 
   int get _totalDirty => _dirtyCounts.values.fold(0, (a, b) => a + b);
+  int get _totalErrors => _errorCounts.values.fold(0, (a, b) => a + b);
 
   Future<void> _load() async {
-    setState(() => _loading = true);
+    // Only flash the full-screen spinner when there's nothing on screen yet
+    // (first paint, or after a wipe). Background reloads triggered by
+    // `syncComplete$` keep the existing list visible while counts refresh —
+    // otherwise every completed sync wipes the screen to a spinner before
+    // re-rendering, which reads as a jarring "whole screen refresh once".
+    final isFirstPaint = _groups.isEmpty;
+    if (isFirstPaint) {
+      setState(() => _loading = true);
+    }
     try {
       // Fire connectivity check without blocking — update UI when it resolves
       widget.sdk.sync
@@ -115,14 +139,33 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
 
       for (final doctype in groups.values.expand((l) => l)) {
         try {
-          final docs = await widget.sdk.repository.getDocumentsByDoctype(
-            doctype,
-          );
-          counts[doctype] = docs.length;
-          dirtyCounts[doctype] = docs.where((d) => d.status == 'dirty').length;
-        } catch (_) {
+          final results = await Future.wait([
+            widget.sdk.resolver.count(doctype),
+            widget.sdk.resolver.count(doctype, dirtyOnly: true),
+          ]);
+          counts[doctype] = results[0];
+          dirtyCounts[doctype] = results[1];
+        } catch (e, st) {
+          // ignore: avoid_print
+          print('MobileHomeScreen: count load for $doctype failed — $e\n$st');
           counts[doctype] = 0;
           dirtyCounts[doctype] = 0;
+        }
+      }
+
+      // One pendingErrors() call covers every doctype — bucket by
+      // doctype so each tile can surface its own error count.
+      final errorCounts = <String, int>{};
+      final controller = widget.sdk.syncController;
+      if (controller != null) {
+        try {
+          final rows = await controller.pendingErrors();
+          for (final r in rows) {
+            errorCounts[r.doctype] = (errorCounts[r.doctype] ?? 0) + 1;
+          }
+        } catch (e, st) {
+          // ignore: avoid_print
+          print('MobileHomeScreen: pendingErrors load failed — $e\n$st');
         }
       }
 
@@ -131,10 +174,13 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
           _groups = groups;
           _counts = counts;
           _dirtyCounts = dirtyCounts;
+          _errorCounts = errorCounts;
           _loading = false;
         });
       }
-    } catch (_) {
+    } catch (e, st) {
+      // ignore: avoid_print
+      print('MobileHomeScreen: _load failed — $e\n$st');
       if (mounted) setState(() => _loading = false);
     }
   }
@@ -149,12 +195,18 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
       } else {
         try {
           await widget.sdk.sync.pushSync();
-        } catch (_) {}
+        } catch (e, st) {
+          // ignore: avoid_print
+          print('MobileHomeScreen: manual pushSync failed — $e\n$st');
+        }
         final doctypes = await widget.sdk.meta.getMobileFormDoctypeNames();
         for (final dt in doctypes) {
           try {
             await widget.sdk.sync.pullSync(doctype: dt);
-          } catch (_) {}
+          } catch (e, st) {
+            // ignore: avoid_print
+            print('MobileHomeScreen: manual pullSync($dt) failed — $e\n$st');
+          }
         }
       }
       await _load();
@@ -185,6 +237,41 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
           ],
         ),
         actions: [
+          if (_totalErrors > 0)
+            Padding(
+              padding: const EdgeInsets.only(right: 4),
+              child: Center(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 3,
+                  ),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFFEBEE),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(
+                        Icons.error_outline,
+                        size: 12,
+                        color: Color(0xFFC62828),
+                      ),
+                      const SizedBox(width: 2),
+                      Text(
+                        '$_totalErrors',
+                        style: const TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          color: Color(0xFFC62828),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
           if (_totalDirty > 0)
             Padding(
               padding: const EdgeInsets.only(right: 4),
@@ -296,6 +383,7 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
             doctypes: entry.value,
             counts: _counts,
             dirtyCounts: _dirtyCounts,
+            errorCounts: _errorCounts,
             onDoctypeTap: _navigateToDoctype,
             groupHeaderBuilder: widget.groupHeaderBuilder,
             tileBuilder: widget.tileBuilder,
@@ -378,6 +466,17 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
               const SizedBox(height: 12),
               const Divider(height: 1),
               ListTile(
+                leading: const Icon(Icons.cloud_download_outlined),
+                title: const Text('Force Re-Sync All'),
+                subtitle: const Text('Re-download reference & master data'),
+                enabled: !_isForceSyncing,
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  _handleForcePullAll();
+                },
+              ),
+              const Divider(height: 1),
+              ListTile(
                 leading: const Icon(Icons.logout, color: Color(0xFFD32F2F)),
                 title: const Text(
                   'Logout',
@@ -431,7 +530,9 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
 
     try {
       await widget.sdk.logout();
-    } catch (e) {
+    } catch (e, st) {
+      // ignore: avoid_print
+      print('MobileHomeScreen: logout failed — $e\n$st');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -452,6 +553,62 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
     }
   }
 
+  Future<void> _handleForcePullAll() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Force Re-Sync All?'),
+        content: const Text(
+          'This re-downloads all reference and master data from scratch. '
+          'Your unsynced form entries are not affected.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Re-Sync'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _isForceSyncing = true);
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const Center(child: CircularProgressIndicator()),
+    );
+
+    try {
+      await widget.sdk.forcePullAll();
+    } catch (e, st) {
+      // ignore: avoid_print
+      print('MobileHomeScreen: forcePullAll failed — $e\n$st');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Re-sync failed: ${e.toString().split(':').last.trim()}',
+            ),
+            backgroundColor: const Color(0xFFE65100),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        Navigator.of(context).pop(); // dismiss loading
+        setState(() => _isForceSyncing = false);
+      }
+    }
+
+    await _load();
+  }
+
   Future<void> _navigateToDoctype(String doctype) async {
     if (!mounted) return;
     ScaffoldMessenger.of(
@@ -459,10 +616,12 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
     ).showSnackBar(const SnackBar(content: Text('Loading...')));
     try {
       final meta = await widget.sdk.meta.getMeta(doctype);
-      final docs = await widget.sdk.repository.getDocumentsByDoctype(doctype);
       try {
         await widget.sdk.sync.pullSync(doctype: doctype);
-      } catch (_) {}
+      } catch (e, st) {
+        // ignore: avoid_print
+        print('MobileHomeScreen: navigate pullSync($doctype) failed — $e\n$st');
+      }
 
       if (mounted) {
         ScaffoldMessenger.of(context).hideCurrentSnackBar();
@@ -473,23 +632,26 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
               doctype: doctype,
               meta: meta,
               repository: widget.sdk.repository,
+              resolver: widget.sdk.resolver,
               syncService: widget.sdk.sync,
               metaService: widget.sdk.meta,
               linkOptionService: widget.sdk.linkOptions,
               api: widget.sdk.api,
               getMobileUuid: () async => '',
-              initialDocuments: docs,
               userRoles: widget.sdk.roles,
               permissionService: widget.sdk.permissions,
               translate: (s) => widget.sdk.translations.translate(s),
               onFieldChange: widget.getFieldChangeHandler?.call(doctype),
               getLinkFilterBuilder: widget.getLinkFilterBuilder,
+              syncController: widget.sdk.syncController,
             ),
           ),
         );
         _load();
       }
-    } catch (e) {
+    } catch (e, st) {
+      // ignore: avoid_print
+      print('MobileHomeScreen: _navigateToDoctype failed — $e\n$st');
       if (mounted) {
         ScaffoldMessenger.of(context).hideCurrentSnackBar();
         ScaffoldMessenger.of(context).showSnackBar(
@@ -508,15 +670,17 @@ class _GroupCard extends StatefulWidget {
   final List<String> doctypes;
   final Map<String, int> counts;
   final Map<String, int> dirtyCounts;
+  final Map<String, int> errorCounts;
   final void Function(String doctype) onDoctypeTap;
   final Widget Function(BuildContext, String, int)? groupHeaderBuilder;
-  final Widget Function(BuildContext, String, int, int)? tileBuilder;
+  final Widget Function(BuildContext, String, int, int, int)? tileBuilder;
 
   const _GroupCard({
     required this.groupName,
     required this.doctypes,
     required this.counts,
     required this.dirtyCounts,
+    required this.errorCounts,
     required this.onDoctypeTap,
     this.groupHeaderBuilder,
     this.tileBuilder,
@@ -634,12 +798,16 @@ class _GroupCardState extends State<_GroupCard> {
                                   widget.doctypes[i],
                                   widget.counts[widget.doctypes[i]] ?? 0,
                                   widget.dirtyCounts[widget.doctypes[i]] ?? 0,
+                                  widget.errorCounts[widget.doctypes[i]] ?? 0,
                                 )
                               : _DoctypeTile(
                                   doctype: widget.doctypes[i],
                                   count: widget.counts[widget.doctypes[i]] ?? 0,
                                   dirtyCount:
                                       widget.dirtyCounts[widget.doctypes[i]] ??
+                                      0,
+                                  errorCount:
+                                      widget.errorCounts[widget.doctypes[i]] ??
                                       0,
                                   onTap: () =>
                                       widget.onDoctypeTap(widget.doctypes[i]),
@@ -672,12 +840,14 @@ class _DoctypeTile extends StatelessWidget {
   final String doctype;
   final int count;
   final int dirtyCount;
+  final int errorCount;
   final VoidCallback onTap;
 
   const _DoctypeTile({
     required this.doctype,
     required this.count,
     required this.dirtyCount,
+    required this.errorCount,
     required this.onTap,
   });
 
@@ -685,24 +855,17 @@ class _DoctypeTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
 
-    final String subtitle;
-    final Color subtitleColor;
-    if (dirtyCount > 0) {
-      subtitle = '\u2191 $dirtyCount unsynced';
-      subtitleColor = const Color(0xFFE65100);
-    } else if (count > 0) {
-      subtitle = '\u2713 all synced';
-      subtitleColor = const Color(0xFF388E3C);
-    } else {
-      subtitle = 'No records yet';
-      subtitleColor = const Color(0xFF9E9E9E);
-    }
-
+    final bool hasError = errorCount > 0;
     final bool hasUnsynced = dirtyCount > 0;
-    final chipColor = hasUnsynced
+
+    final chipColor = hasError
+        ? const Color(0xFFFFEBEE)
+        : hasUnsynced
         ? const Color(0xFFFFF3E0)
         : cs.surfaceContainerHighest;
-    final chipTextColor = hasUnsynced
+    final chipTextColor = hasError
+        ? const Color(0xFFC62828)
+        : hasUnsynced
         ? const Color(0xFFE65100)
         : count > 0
         ? cs.onSurface
@@ -727,13 +890,10 @@ class _DoctypeTile extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 2),
-                  Text(
-                    subtitle,
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: subtitleColor,
-                      fontWeight: FontWeight.w500,
-                    ),
+                  _Subtitle(
+                    count: count,
+                    dirtyCount: dirtyCount,
+                    errorCount: errorCount,
                   ),
                 ],
               ),
@@ -764,6 +924,91 @@ class _DoctypeTile extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Tile subtitle that composes up to three coloured segments \u2014 error
+/// count, unsynced count, "all synced" / "no records yet" \u2014 separated
+/// by middots. Error always wins as the dominant signal.
+class _Subtitle extends StatelessWidget {
+  final int count;
+  final int dirtyCount;
+  final int errorCount;
+
+  const _Subtitle({
+    required this.count,
+    required this.dirtyCount,
+    required this.errorCount,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final segments = <_TextSegment>[];
+    if (errorCount > 0) {
+      segments.add(
+        _TextSegment(
+          '\u26a0 $errorCount error${errorCount == 1 ? '' : 's'}',
+          const Color(0xFFC62828),
+          FontWeight.w600,
+        ),
+      );
+    }
+    if (dirtyCount > 0) {
+      segments.add(
+        _TextSegment(
+          '\u2191 $dirtyCount unsynced',
+          const Color(0xFFE65100),
+          FontWeight.w500,
+        ),
+      );
+    }
+    if (segments.isEmpty) {
+      if (count > 0) {
+        segments.add(
+          const _TextSegment(
+            '\u2713 all synced',
+            Color(0xFF388E3C),
+            FontWeight.w500,
+          ),
+        );
+      } else {
+        segments.add(
+          const _TextSegment(
+            'No records yet',
+            Color(0xFF9E9E9E),
+            FontWeight.w500,
+          ),
+        );
+      }
+    }
+    return RichText(
+      text: TextSpan(
+        children: [
+          for (var i = 0; i < segments.length; i++) ...[
+            if (i > 0)
+              const TextSpan(
+                text: ' \u00b7 ',
+                style: TextStyle(fontSize: 11, color: Color(0xFFBDBDBD)),
+              ),
+            TextSpan(
+              text: segments[i].text,
+              style: TextStyle(
+                fontSize: 11,
+                color: segments[i].color,
+                fontWeight: segments[i].weight,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _TextSegment {
+  final String text;
+  final Color color;
+  final FontWeight weight;
+  const _TextSegment(this.text, this.color, this.weight);
 }
 
 class _ConnectivityBadge extends StatelessWidget {

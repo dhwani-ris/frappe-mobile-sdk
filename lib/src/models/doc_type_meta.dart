@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart';
+
 import 'doc_field.dart';
 
 /// Represents Frappe DocType metadata
@@ -17,6 +19,17 @@ class DocTypeMeta {
   /// Default sort order: 'asc' or 'desc' (from Frappe sort_order)
   final String? sortOrder;
 
+  /// Comma-separated list of fieldnames used for search in list view
+  /// (from Frappe `search_fields`). May be null.
+  final List<String>? searchFields;
+
+  /// Frappe's naming rule. Examples:
+  /// - `field:mobile_uuid` (used by L1 idempotency — name = mobile_uuid)
+  /// - `naming_series:` (used with naming_series field)
+  /// - `Prompt`, `hash`, `format:...` etc.
+  /// Null when not configured. See spec §5.7.
+  final String? autoname;
+
   /// True if this doctype supports submit/cancel workflow (Frappe is_submittable)
   bool get isSubmittable {
     final v = metaData?['is_submittable'];
@@ -32,6 +45,8 @@ class DocTypeMeta {
     this.titleField,
     this.sortField,
     this.sortOrder,
+    this.searchFields,
+    this.autoname,
   });
 
   factory DocTypeMeta.fromJson(Map<String, dynamic> json) {
@@ -39,7 +54,10 @@ class DocTypeMeta {
     final fields = fieldsJson.map((field) {
       try {
         return DocField.fromJson(field as Map<String, dynamic>);
-      } catch (e) {
+      } catch (e, st) {
+        debugPrint(
+          'DocTypeMeta.fromJson: DocField parse failed (${field is Map ? field['fieldname'] : 'unknown'}) — $e\n$st',
+        );
         return DocField(
           fieldname: field['fieldname'] as String?,
           fieldtype: field['fieldtype'] as String? ?? 'Data',
@@ -67,6 +85,17 @@ class DocTypeMeta {
     final sortField = json['sort_field'] as String?;
     final sortOrder = json['sort_order'] as String?;
 
+    final searchFieldsRaw = json['search_fields'] as String?;
+    final searchFields = searchFieldsRaw == null || searchFieldsRaw.isEmpty
+        ? null
+        : searchFieldsRaw
+              .split(',')
+              .map((s) => s.trim())
+              .where((s) => s.isNotEmpty)
+              .toList();
+
+    final autoname = json['autoname'] as String?;
+
     return DocTypeMeta(
       name: json['name'] as String? ?? json['doctype'] as String? ?? '',
       label: json['label'] as String?,
@@ -78,6 +107,8 @@ class DocTypeMeta {
       sortOrder: sortOrder?.toLowerCase() == 'desc'
           ? 'desc'
           : (sortOrder?.isNotEmpty == true ? 'asc' : null),
+      searchFields: searchFields,
+      autoname: autoname?.isNotEmpty == true ? autoname : null,
     );
   }
 
@@ -91,6 +122,9 @@ class DocTypeMeta {
       if (titleField != null) 'title_field': titleField,
       if (sortField != null) 'sort_field': sortField,
       if (sortOrder != null) 'sort_order': sortOrder,
+      if (searchFields != null && searchFields!.isNotEmpty)
+        'search_fields': searchFields!.join(','),
+      if (autoname != null) 'autoname': autoname,
     };
   }
 
@@ -136,11 +170,10 @@ class DocTypeMeta {
 
   /// Get field by fieldname
   DocField? getField(String fieldname) {
-    try {
-      return fields.firstWhere((f) => f.fieldname == fieldname);
-    } catch (e) {
-      return null;
+    for (final f in fields) {
+      if (f.fieldname == fieldname) return f;
     }
+    return null;
   }
 
   /// Get all data fields (excluding layout fields)
@@ -179,5 +212,18 @@ class DocTypeMeta {
     if (first is! Map<String, dynamic>) return null;
     final v = first['workflow_state_field'];
     return v is String && v.isNotEmpty ? v : null;
+  }
+
+  /// Field names that participate in normalized search — title field plus
+  /// every entry in `search_fields`. Schema, form-save, and pull-apply all
+  /// use this set to decide which TEXT columns get a `__norm` mirror column.
+  /// Centralized here so the three writers can't drift apart.
+  Set<String> get normFieldNames {
+    final out = <String>{};
+    if (titleField != null) out.add(titleField!);
+    for (final sf in (searchFields ?? const <String>[])) {
+      out.add(sf);
+    }
+    return out;
   }
 }

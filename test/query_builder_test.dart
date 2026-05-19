@@ -23,6 +23,7 @@ class _FakeDoctypeService extends DoctypeService {
     String doctype, {
     List<String>? fields,
     List<List<dynamic>>? filters,
+    List<List<dynamic>>? orFilters,
     int limitStart = 0,
     int limitPageLength = 20,
     String? orderBy,

@@ -2,6 +2,7 @@
 // For license information, please see license.txt
 
 import 'package:flutter/material.dart';
+import '../models/document.dart';
 import '../sdk/frappe_sdk.dart';
 import 'widgets/form_builder.dart'
     show
@@ -61,11 +62,11 @@ class FrappeFormRenderer {
   }) async {
     final meta = await sdk.meta.getMeta(doctype);
 
+    // Build a Document from initialData when present so FormScreen opens
+    // in edit mode. Otherwise the form opens in create mode (document
+    // null → isNew=true).
     final document = initialData != null && initialData['name'] != null
-        ? await sdk.repository.getDocumentByServerId(
-            initialData['name'],
-            doctype,
-          )
+        ? Document.fromResolverRow(doctype, initialData)
         : null;
 
     if (!context.mounted) return;
