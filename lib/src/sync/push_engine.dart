@@ -490,10 +490,17 @@ class PushEngine {
     // Slim outbox no longer carries `retry_count` or `payload`; the
     // retry counter lives on docs__.sync_attempts (already incremented
     // in `_dispatchOnce`) and the merge base lives on
-    // docs__.push_base_payload. Just flip the row back to pending so
-    // PushEngine.runOnce picks it up on the next drain.
+    // docs__.push_base_payload.
+    //
+    // Write `in_flight` directly (PR#36 round-2 M2) — NOT `pending`.
+    // We recurse into `_process` below, which immediately calls
+    // `markInFlight`, but the gap between this txn's commit and that
+    // `markInFlight` is observable: a concurrent `runOnce` could see
+    // `state='pending'` via `findByState(pending)` and double-dispatch
+    // the same row. Going straight to `in_flight` closes the window;
+    // the recursive `markInFlight` becomes an idempotent no-op.
     final outboxUpdate = <String, Object?>{
-      'state': OutboxState.pending.wireName,
+      'state': OutboxState.inFlight.wireName,
     };
 
     // Route both writes through the per-doctype WriteQueue when wired so

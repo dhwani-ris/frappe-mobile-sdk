@@ -25,20 +25,43 @@ class MetaMigration {
       'isLocal=${diff.addedIsLocalFor.length}, '
       'norm=${diff.addedNormFor.length}',
     );
+    if (diff.typeChanged.isNotEmpty) {
+      // SQLite type changes can't be applied via simple ALTER — they
+      // need a table-rebuild via CREATE…AS SELECT + RENAME. That's not
+      // implemented yet (PR#36 round-2 M5 partial); log the drift so a
+      // schema mismatch becomes visible during a migration audit instead
+      // of being silently dropped on the floor.
+      debugPrint(
+        'MetaMigration[$tableName] WARNING: typeChanged columns are not '
+        'migrated yet — affected fields will keep their old SQLite '
+        'column type: ${diff.typeChanged.join(", ")}',
+      );
+    }
     await db.transaction((txn) async {
       for (final ix in diff.indexesToDrop) {
         try {
           await txn.execute('DROP INDEX $ix');
           debugPrint('MetaMigration[$tableName] dropped index $ix');
         } on DatabaseException catch (e) {
-          // Silently no-op if the index never existed, but log so the
-          // distinction between "no-op" and "unexpected SQL error" is
-          // visible during a migration failure investigation.
+          // Only swallow the benign "index never existed" case. Any
+          // other DatabaseException (locked DB, malformed identifier,
+          // disk full, etc.) MUST propagate — silently committing the
+          // rest of the migration on a real failure leaves the DB in
+          // an inconsistent state (PR#36 round-2 M4).
+          if (!e.toString().toLowerCase().contains('no such index')) {
+            rethrow;
+          }
           debugPrint('MetaMigration[$tableName] DROP INDEX $ix skipped — $e');
         }
       }
 
       for (final af in diff.addedFields) {
+        // Mirrors the `addedIsLocalFor` / `addedNormFor` guards below —
+        // a resumed migration after an earlier crash would otherwise
+        // throw "duplicate column" and roll back, undoing any sibling
+        // adds that had already succeeded on the second pass.
+        final exists = await _columnExists(txn, tableName, af.name);
+        if (exists) continue;
         await txn.execute(
           'ALTER TABLE $tableName ADD COLUMN ${af.name} ${af.sqlType}',
         );

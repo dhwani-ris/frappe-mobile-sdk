@@ -42,6 +42,19 @@ class OutboxDao {
     required OutboxOperation operation,
     DateTime? createdAt,
   }) async {
+    // recordSave reads existing outbox rows and conditionally writes
+    // INSERT/DELETE updates. The collapse rules only hold if the read
+    // and the writes are in the same transaction — otherwise a
+    // concurrent push or save could interleave between the SELECT and
+    // the DELETE/INSERT and corrupt the "no two pending rows per uuid"
+    // invariant. Debug-only assert (PR#36 round-2 M6); production
+    // callers all wrap in `db.transaction` today.
+    assert(
+      _db is Transaction,
+      'OutboxDao.recordSave must be called via a Transaction. '
+      'Wrap the call site in `db.transaction((txn) async { ... })` '
+      'and pass `OutboxDao(txn)`.',
+    );
     final ts = (createdAt ?? DateTime.now().toUtc()).millisecondsSinceEpoch;
     final existing = await _db.query(
       'outbox',

@@ -149,6 +149,40 @@ void main() {
     },
   );
 
+  test('backoff uses indices 0..N-2 for N attempts (not 1..N-1)', () async {
+    // Regression for PR#36 round-2 M1. Original code did
+    // `backoff[attempt + 1]`, so with 3 attempts the second delay
+    // reached index 2 — the would-be-30-seconds slot below. After the
+    // fix the delays come from indices 0 and 1 only, both zero. We
+    // give the call a 3-second timeout: before the fix this trips
+    // (we'd sleep 30s); after the fix the call completes in ms.
+    await dao.enqueue(
+      parentDoctype: 'O',
+      parentUuid: 'P',
+      parentFieldname: 'a',
+      topParentUuid: 'P',
+      topParentDoctype: 'O',
+      localPath: '/tmp/fail.jpg',
+    );
+    var attempts = 0;
+    final pipeline = AttachmentPipeline(
+      dao: dao,
+      uploader: (file, {doctype, docname, isPrivate = true, fileName}) async {
+        attempts++;
+        throw Exception('network');
+      },
+      backoff: const [Duration.zero, Duration.zero, Duration(seconds: 30)],
+      fileFromPath: (p) => _FakeFile(p),
+    );
+    await expectLater(
+      pipeline
+          .uploadPendingForTopParent('P')
+          .timeout(const Duration(seconds: 3)),
+      throwsA(isA<BlockedByUpstream>()),
+    );
+    expect(attempts, 3);
+  });
+
   test('inlinePayload rewrites pending:<id> markers with file_url', () async {
     final payload = <String, Object?>{
       'doctype': 'O',

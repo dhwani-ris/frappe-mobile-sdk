@@ -182,6 +182,62 @@ void main() {
     },
   );
 
+  test('deleteDocument rolls back when pending_attachments cleanup fails — '
+      'docs__ row + outbox row must remain', () async {
+    // Regression for PR#36 B4: previously the inner `on DatabaseException`
+    // catch swallowed pending_attachments cleanup failures, then the
+    // outer `txn.delete(tableName)` still committed. That left the
+    // docs__ row hard-deleted with orphan pending_attachments rows
+    // whose `top_parent_uuid` no longer resolves. The uploader would
+    // retry those orphans forever.
+    //
+    // After the fix: the failure escapes the txn boundary, sqflite
+    // rolls back, and the caller sees the underlying error.
+    final uuid = await repo.saveDocument(
+      doctype: 'Customer',
+      data: {'customer_name': 'Acme'},
+    );
+
+    // Force the in-txn DELETE FROM pending_attachments to throw a
+    // no-such-table DatabaseException.
+    await appDb.rawDatabase.execute('DROP TABLE pending_attachments');
+
+    Object? caught;
+    try {
+      await repo.deleteDocument(doctype: 'Customer', mobileUuid: uuid);
+    } catch (e) {
+      caught = e;
+    }
+
+    expect(
+      caught,
+      isNotNull,
+      reason:
+          'deleteDocument must surface the pending_attachments delete '
+          'failure, not swallow it.',
+    );
+
+    // Rollback witness: the cancel-INSERT path would have hard-deleted
+    // the docs__ row AND removed the outbox INSERT row. After rollback
+    // both must be exactly as saveDocument left them.
+    final docs = await appDb.rawDatabase.query(
+      normalizeDoctypeTableName('Customer'),
+      where: 'mobile_uuid = ?',
+      whereArgs: [uuid],
+    );
+    expect(docs, hasLength(1), reason: 'docs__ row must be rolled back');
+    expect(docs.first['sync_status'], 'dirty');
+    expect(docs.first['sync_op'], 'INSERT');
+
+    final outbox = await appDb.rawDatabase.query(
+      'outbox',
+      where: 'mobile_uuid = ?',
+      whereArgs: [uuid],
+    );
+    expect(outbox, hasLength(1), reason: 'outbox row must be rolled back');
+    expect(outbox.first['operation'], 'INSERT');
+  });
+
   test(
     'deleteDocument on never-pushed doc also clears its pending_attachments',
     () async {
@@ -220,6 +276,67 @@ void main() {
       );
     },
   );
+
+  test('deleteDocument on synced doc also clears its pending_attachments '
+      '(tombstone branch)', () async {
+    // Regression for PR#36 B4 second half: previously the tombstone
+    // branch had no `pending_attachments` cleanup at all, so any
+    // attachments queued against a synced parent leaked forever
+    // (uploader kept trying to upload files for a doc that was about
+    // to be DELETEd server-side).
+    final uuid = await repo.saveDocument(
+      doctype: 'Customer',
+      data: {'customer_name': 'Acme'},
+    );
+    // Promote to synced so deleteDocument takes the tombstone branch.
+    await appDb.rawDatabase.update(
+      normalizeDoctypeTableName('Customer'),
+      {'sync_status': 'synced', 'server_name': 'CUST-001'},
+      where: 'mobile_uuid = ?',
+      whereArgs: [uuid],
+    );
+    await appDb.rawDatabase.delete('outbox');
+
+    await appDb.rawDatabase.insert('pending_attachments', <String, Object?>{
+      'parent_doctype': 'Customer',
+      'parent_uuid': uuid,
+      'parent_fieldname': 'image',
+      'top_parent_uuid': uuid,
+      'top_parent_doctype': 'Customer',
+      'local_path': '/tmp/fake.png',
+      'is_private': 1,
+      'state': 'pending',
+      'retry_count': 0,
+      'created_at': DateTime.now().toUtc().millisecondsSinceEpoch,
+    });
+
+    await repo.deleteDocument(doctype: 'Customer', mobileUuid: uuid);
+
+    // docs__ row is tombstoned (not hard-deleted — this is the
+    // tombstone branch).
+    final docs = await appDb.rawDatabase.query(
+      normalizeDoctypeTableName('Customer'),
+      where: 'mobile_uuid = ?',
+      whereArgs: [uuid],
+    );
+    expect(docs, hasLength(1));
+    expect(docs.first['sync_status'], 'deleted');
+
+    // The attachment must have been swept too.
+    final attachments = await appDb.rawDatabase.query(
+      'pending_attachments',
+      where: 'top_parent_uuid = ?',
+      whereArgs: [uuid],
+    );
+    expect(
+      attachments,
+      isEmpty,
+      reason:
+          'tombstone branch must clear pending_attachments so the '
+          'uploader does not keep trying against a doc that is queued '
+          'for server-side DELETE.',
+    );
+  });
 
   test(
     'getDirtyDocuments surfaces dirty + deleted rows after offline saves',

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../api/utils.dart';
 import '../../sync/sync_state.dart';
 import '../../sync/sync_state_notifier.dart';
 
@@ -55,11 +56,11 @@ class SyncProgressScreen extends StatelessWidget {
                   mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                   children: [
                     OutlinedButton(
-                      onPressed: onPause,
+                      onPressed: () => _runAndSurface(ctx, onPause, 'Pause'),
                       child: const Text('Pause'),
                     ),
                     TextButton(
-                      onPressed: onCancel,
+                      onPressed: () => _runAndSurface(ctx, onCancel, 'Cancel'),
                       style: TextButton.styleFrom(foregroundColor: Colors.red),
                       child: const Text('Cancel'),
                     ),
@@ -78,5 +79,29 @@ class SyncProgressScreen extends StatelessWidget {
     if (totalDoc == 0) return null;
     final done = s.perDoctype.values.where((d) => d.completedAt != null).length;
     return done / totalDoc;
+  }
+}
+
+/// Awaits an async button action and surfaces any error via SnackBar.
+/// Without this, `onPressed: someFutureFn` lets Dart silently discard
+/// the returned Future, turning async exceptions into uncaught zone
+/// errors that never reach the user (PR#36 round-2 M12).
+Future<void> _runAndSurface(
+  BuildContext context,
+  Future<void> Function() action,
+  String label,
+) async {
+  try {
+    await action();
+  } catch (e, st) {
+    debugPrint('SyncProgressScreen: $label failed — $e\n$st');
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('$label failed: ${toUserFriendlyMessage(e)}'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
   }
 }

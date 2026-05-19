@@ -225,9 +225,16 @@ class SyncEngineBuilder {
       final tableName =
           await metaDao.getTableName(doctype) ??
           normalizeDoctypeTableName(doctype);
+      // Flip to `synced` (not `dirty`) — the caller (resolveConflict's
+      // empty-serverName branch) is about to delete the outbox row, so
+      // there is no pending work to push. Setting `dirty` here would
+      // leave the row visually stuck-unsynced with nothing in the
+      // outbox to drive a push. The next user edit will re-route as
+      // INSERT (server_name is still NULL) and enqueue a fresh outbox
+      // row. PR#36 round-2 H2 fix.
       await rawDb.update(
         tableName,
-        <String, Object?>{'sync_status': 'dirty', 'sync_error': null},
+        <String, Object?>{'sync_status': 'synced', 'sync_error': null},
         where: 'mobile_uuid = ? AND sync_status = ?',
         whereArgs: [mobileUuid, 'conflict'],
       );
@@ -278,45 +285,49 @@ Future<String?> _resolveServerNameFor(
 ) async {
   final tableName = normalizeDoctypeTableName(targetDoctype);
   if (!await sqliteTableExists(db, tableName)) {
-    // ignore: avoid_print
-    print(
-      '[DIAG resolveServerName] table_missing target=$targetDoctype '
-      'table=$tableName uuid=$mobileUuid',
-    );
+    if (kDebugMode) {
+      debugPrint(
+        '[DIAG resolveServerName] table_missing target=$targetDoctype '
+        'table=$tableName uuid=$mobileUuid',
+      );
+    }
     return null;
   }
-  // Diagnostic: dump every row matching this uuid. Use SELECT * so it works
-  // for both parent and child docs__ tables (child has parent_uuid/idx, parent
-  // doesn't). Wrap in try/catch so a diag failure never breaks the resolver.
-  try {
-    final allRows = await db.query(
-      tableName,
-      where: 'mobile_uuid = ?',
-      whereArgs: [mobileUuid],
-    );
-    final summary = allRows
-        .map(
-          (r) => {
-            'mobile_uuid': r['mobile_uuid'],
-            'server_name': r['server_name'],
-            if (r.containsKey('parent_uuid')) 'parent_uuid': r['parent_uuid'],
-            if (r.containsKey('parentfield')) 'parentfield': r['parentfield'],
-            if (r.containsKey('idx')) 'idx': r['idx'],
-            if (r.containsKey('sync_status')) 'sync_status': r['sync_status'],
-          },
-        )
-        .toList();
-    // ignore: avoid_print
-    print(
-      '[DIAG resolveServerName] target=$targetDoctype uuid=$mobileUuid '
-      'matchingRows=${allRows.length} rows=$summary',
-    );
-  } catch (e, st) {
-    // ignore: avoid_print
-    print(
-      '[DIAG resolveServerName] dump_failed target=$targetDoctype '
-      'uuid=$mobileUuid err=$e\n$st',
-    );
+  // Diagnostic dump (debug builds only — the extra `SELECT *` would
+  // double the query cost per resolve in release, and these `[DIAG …]`
+  // lines would flood production logs on every resolve). Use SELECT *
+  // so it works for both parent and child docs__ tables (child has
+  // parent_uuid/idx, parent doesn't). Wrap in try/catch so a diag
+  // failure never breaks the resolver. PR#36 round-2 M8.
+  if (kDebugMode) {
+    try {
+      final allRows = await db.query(
+        tableName,
+        where: 'mobile_uuid = ?',
+        whereArgs: [mobileUuid],
+      );
+      final summary = allRows
+          .map(
+            (r) => {
+              'mobile_uuid': r['mobile_uuid'],
+              'server_name': r['server_name'],
+              if (r.containsKey('parent_uuid')) 'parent_uuid': r['parent_uuid'],
+              if (r.containsKey('parentfield')) 'parentfield': r['parentfield'],
+              if (r.containsKey('idx')) 'idx': r['idx'],
+              if (r.containsKey('sync_status')) 'sync_status': r['sync_status'],
+            },
+          )
+          .toList();
+      debugPrint(
+        '[DIAG resolveServerName] target=$targetDoctype uuid=$mobileUuid '
+        'matchingRows=${allRows.length} rows=$summary',
+      );
+    } catch (e, st) {
+      debugPrint(
+        '[DIAG resolveServerName] dump_failed target=$targetDoctype '
+        'uuid=$mobileUuid err=$e\n$st',
+      );
+    }
   }
   final rows = await db.query(
     tableName,
@@ -326,18 +337,20 @@ Future<String?> _resolveServerNameFor(
     limit: 1,
   );
   if (rows.isEmpty) {
-    // ignore: avoid_print
-    print(
-      '[DIAG resolveServerName] returning_null target=$targetDoctype '
-      'uuid=$mobileUuid (no row with non-null server_name)',
-    );
+    if (kDebugMode) {
+      debugPrint(
+        '[DIAG resolveServerName] returning_null target=$targetDoctype '
+        'uuid=$mobileUuid (no row with non-null server_name)',
+      );
+    }
     return null;
   }
   final result = rows.first['server_name'] as String?;
-  // ignore: avoid_print
-  print(
-    '[DIAG resolveServerName] resolved target=$targetDoctype '
-    'uuid=$mobileUuid → $result',
-  );
+  if (kDebugMode) {
+    debugPrint(
+      '[DIAG resolveServerName] resolved target=$targetDoctype '
+      'uuid=$mobileUuid → $result',
+    );
+  }
   return result;
 }

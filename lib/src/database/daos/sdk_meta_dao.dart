@@ -21,25 +21,38 @@ class SdkMetaDao {
   }
 
   /// Persists the offline-mode value with the given epoch-ms timestamp.
-  /// Single-statement upsert on the singleton `id = 1` row: inserts when
-  /// missing, updates the offline-mode columns when present. Columns not
-  /// named in the SET clause (`schema_version`, `bootstrap_done`,
-  /// `session_user_json`) are preserved.
+  /// UPDATE-then-INSERT-OR-IGNORE on the singleton `id = 1` row: updates
+  /// the offline-mode columns when the row exists, inserts it when missing.
+  /// Columns not named in the UPDATE's SET clause (`schema_version`,
+  /// `bootstrap_done`, `session_user_json`) are preserved.
   ///
   /// IMPORTANT: never use `INSERT OR REPLACE` here. That is `DELETE +
-  /// INSERT` in SQLite and would zero out the unrelated columns. The
-  /// `ON CONFLICT(id) DO UPDATE` form is the surgical upsert.
+  /// INSERT` in SQLite and would zero out the unrelated columns.
+  ///
+  /// IMPORTANT: do not use `INSERT … ON CONFLICT … DO UPDATE` either —
+  /// that UPSERT syntax requires SQLite ≥ 3.24 (June 2018). Android 8.0
+  /// (API 26) and older ship with SQLite < 3.24, so the statement fails
+  /// to compile and offline-mode never persists on those devices.
   Future<void> writeOfflineMode({
     required bool enabled,
     required int setAtMs,
   }) async {
-    await _db.rawInsert(
-      'INSERT INTO sdk_meta (id, offline_enabled, offline_enabled_set_at) '
-      'VALUES (1, ?1, ?2) '
-      'ON CONFLICT(id) DO UPDATE SET '
-      '  offline_enabled = ?1, '
-      '  offline_enabled_set_at = ?2',
-      [enabled ? 1 : 0, setAtMs],
-    );
+    final enabledInt = enabled ? 1 : 0;
+    await _db.transaction((txn) async {
+      final updated = await txn.rawUpdate(
+        'UPDATE sdk_meta '
+        'SET offline_enabled = ?, offline_enabled_set_at = ? '
+        'WHERE id = 1',
+        [enabledInt, setAtMs],
+      );
+      if (updated == 0) {
+        await txn.rawInsert(
+          'INSERT OR IGNORE INTO sdk_meta '
+          '(id, offline_enabled, offline_enabled_set_at) '
+          'VALUES (1, ?, ?)',
+          [enabledInt, setAtMs],
+        );
+      }
+    });
   }
 }

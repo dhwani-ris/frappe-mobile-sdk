@@ -183,8 +183,20 @@ class AppDatabase {
   /// Fresh-install path. Builds every table in its final v3 shape.
   /// Post-condition is identical to running [_migrateV2ToV3] on a v2 DB —
   /// see `app_database_fresh_vs_upgraded_test.dart`.
-  static Future<void> _onCreate(Database db, int version) async {
-    await db.execute('''
+  ///
+  /// Thin wrapper over [_onCreateBody] so sqflite's `onCreate` callback
+  /// can keep its `Database` signature. [_clearAllDataInternal] calls
+  /// [_onCreateBody] directly with a [Transaction] so the wipe + rebuild
+  /// happen atomically.
+  static Future<void> _onCreate(Database db, int version) =>
+      _onCreateBody(db, version);
+
+  /// Builds the base schema. Accepts any [DatabaseExecutor] so it can run
+  /// either on a fresh `Database` (sqflite's `onCreate` path) or inside
+  /// a `Transaction` (the `clearAllData` rebuild path that needs to be
+  /// atomic with the preceding DROP loop).
+  static Future<void> _onCreateBody(DatabaseExecutor exec, int version) async {
+    await exec.execute('''
       CREATE TABLE doctype_meta (
         doctype TEXT PRIMARY KEY,
         modified TEXT,
@@ -195,7 +207,7 @@ class AppDatabase {
         sortOrder INTEGER
       )
     ''');
-    await db.execute(
+    await exec.execute(
       'CREATE INDEX idx_doctype_meta_isMobileForm ON doctype_meta(isMobileForm)',
     );
 
@@ -206,10 +218,10 @@ class AppDatabase {
       ...doctypeMetaExtensionsDDL(),
       ...doctypeMetaV4ExtensionsDDL(),
     ]) {
-      await db.execute(stmt);
+      await exec.execute(stmt);
     }
 
-    await db.execute('''
+    await exec.execute('''
       CREATE TABLE link_options (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         doctype TEXT NOT NULL,
@@ -219,14 +231,14 @@ class AppDatabase {
         lastUpdated INTEGER NOT NULL
       )
     ''');
-    await db.execute(
+    await exec.execute(
       'CREATE INDEX idx_link_options_doctype ON link_options(doctype)',
     );
-    await db.execute(
+    await exec.execute(
       'CREATE INDEX idx_link_options_lastUpdated ON link_options(lastUpdated)',
     );
 
-    await db.execute('''
+    await exec.execute('''
       CREATE TABLE auth_tokens (
         id INTEGER PRIMARY KEY,
         accessToken TEXT NOT NULL,
@@ -237,23 +249,25 @@ class AppDatabase {
       )
     ''');
 
-    await _createDoctypePermissionTable(db);
+    await _createDoctypePermissionTable(exec);
 
     // System tables (outbox, pending_attachments, sdk_meta) in final shape.
     for (final stmt in systemTablesDDL()) {
-      await db.execute(stmt);
+      await exec.execute(stmt);
     }
 
     // Singleton upsert — same shape as the migration to keep _onCreate
     // and _onUpgrade post-conditions identical.
-    await db.insert('sdk_meta', <String, Object?>{
+    await exec.insert('sdk_meta', <String, Object?>{
       'id': 1,
       'schema_version': 3,
     }, conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
-  static Future<void> _createDoctypePermissionTable(Database db) async {
-    await db.execute('''
+  static Future<void> _createDoctypePermissionTable(
+    DatabaseExecutor exec,
+  ) async {
+    await exec.execute('''
       CREATE TABLE IF NOT EXISTS doctype_permission (
         doctype TEXT PRIMARY KEY,
         can_read INTEGER NOT NULL DEFAULT 0,
@@ -326,8 +340,8 @@ class AppDatabase {
   Future<void> clearAllDataForTesting() => _clearAllDataInternal(_db);
 
   /// Drops every application-owned table (anything not in SQLite's
-  /// internal namespace) and rebuilds the base schema by re-running
-  /// [_onCreate]. SQLite internals (`sqlite_master`, `sqlite_sequence`,
+  /// internal namespace) and rebuilds the base schema by running
+  /// [_onCreateBody]. SQLite internals (`sqlite_master`, `sqlite_sequence`,
   /// `sqlite_stat*`) are preserved.
   ///
   /// Tables wiped include — non-exhaustively —
@@ -335,6 +349,12 @@ class AppDatabase {
   /// `outbox`, `pending_attachments`, `sdk_meta`, every `docs__*` mirror
   /// table, and any future SDK-owned table. The contract is `NOT LIKE
   /// 'sqlite_%'`: if it's not a SQLite internal, it gets dropped.
+  ///
+  /// DROP loop + rebuild run in ONE transaction. Otherwise a process
+  /// kill between the two would leave application tables dropped but
+  /// `PRAGMA user_version` untouched — the next `openDatabase(version:3)`
+  /// would skip both `onCreate` and `onUpgrade` and hard-brick the DB
+  /// until the user clears app data manually (PR#36 round-2 H4).
   static Future<void> _clearAllDataInternal(Database db) async {
     await db.transaction((txn) async {
       final tables = await txn.rawQuery(
@@ -346,16 +366,14 @@ class AppDatabase {
         final tableName = r['name'] as String;
         await txn.execute('DROP TABLE IF EXISTS "$tableName"');
       }
+      // Recreate the base schema inside the same txn. _onCreateBody
+      // brings back doctype_meta (with v3+v4 extensions), link_options,
+      // auth_tokens, doctype_permission, outbox, pending_attachments,
+      // sdk_meta, plus all associated indexes. Per-doctype docs__*
+      // tables are NOT recreated here — they are rebuilt lazily on the
+      // next pull via OfflineRepository.ensureSchemaForClosure.
+      await _onCreateBody(txn, _version);
     });
-
-    // Recreate the base schema. _onCreate brings back: doctype_meta
-    // (with v3+v4 extensions), link_options, auth_tokens,
-    // doctype_permission, outbox, pending_attachments, sdk_meta, plus
-    // all associated indexes. Per-doctype docs__* tables are NOT
-    // recreated here — they are rebuilt lazily on the next pull via
-    // OfflineRepository.ensureSchemaForClosure. _onCreate already
-    // INSERT-OR-REPLACEs sdk_meta with schema_version=3.
-    await _onCreate(db, _version);
   }
 }
 

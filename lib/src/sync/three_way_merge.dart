@@ -63,9 +63,28 @@ class ThreeWayMerge {
     return out;
   }
 
+  /// Deep equality. Dart's default `Object.==` is identity for `List`
+  /// and `Map`, which would treat every decoded-JSON list/map field as
+  /// locally-changed and silently discard server updates (PR#36 round-2
+  /// H7). Scalars still use `==`; container types recurse.
   static bool _eq(Object? a, Object? b) {
-    if (a == null && b == null) return true;
+    if (identical(a, b)) return true;
     if (a == null || b == null) return false;
+    if (a is List && b is List) {
+      if (a.length != b.length) return false;
+      for (var i = 0; i < a.length; i++) {
+        if (!_eq(a[i], b[i])) return false;
+      }
+      return true;
+    }
+    if (a is Map && b is Map) {
+      if (a.length != b.length) return false;
+      for (final k in a.keys) {
+        if (!b.containsKey(k)) return false;
+        if (!_eq(a[k], b[k])) return false;
+      }
+      return true;
+    }
     return a == b;
   }
 }

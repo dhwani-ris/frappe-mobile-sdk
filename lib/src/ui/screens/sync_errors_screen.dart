@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../api/utils.dart';
 import '../../models/outbox_row.dart';
 
 /// List of currently-erroring outbox rows, grouped by doctype with
@@ -42,10 +43,15 @@ class SyncErrorsScreen extends StatelessWidget {
         title: const Text('Sync errors'),
         actions: [
           if (retryAllRunning)
-            TextButton(onPressed: onStop, child: const Text('Stop'))
+            TextButton(
+              onPressed: () => _runAndSurface(context, onStop, 'Stop'),
+              child: const Text('Stop'),
+            )
           else
             TextButton(
-              onPressed: rows.isEmpty ? null : onRetryAll,
+              onPressed: rows.isEmpty
+                  ? null
+                  : () => _runAndSurface(context, onRetryAll, 'Retry all'),
               child: const Text('Retry all'),
             ),
         ],
@@ -69,7 +75,11 @@ class SyncErrorsScreen extends StatelessWidget {
                           OutlinedButton(
                             onPressed: retryAllRunning
                                 ? null
-                                : () => onRetry(r.id),
+                                : () => _runAndSurface(
+                                    context,
+                                    () => onRetry(r.id),
+                                    'Retry',
+                                  ),
                             child: const Text('Retry'),
                           ),
                           const SizedBox(width: 4),
@@ -91,6 +101,30 @@ class SyncErrorsScreen extends StatelessWidget {
               }).toList(),
             ),
     );
+  }
+
+  /// Awaits an async button action and surfaces any error via SnackBar.
+  /// Without this, `onPressed: someFutureFn` lets Dart silently discard
+  /// the returned Future, turning async exceptions into uncaught zone
+  /// errors that never reach the user (PR#36 round-2 M12).
+  Future<void> _runAndSurface(
+    BuildContext context,
+    Future<void> Function() action,
+    String label,
+  ) async {
+    try {
+      await action();
+    } catch (e, st) {
+      debugPrint('SyncErrorsScreen: $label failed — $e\n$st');
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('$label failed: ${toUserFriendlyMessage(e)}'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
   }
 
   Widget _buildEmptyState(BuildContext context) {

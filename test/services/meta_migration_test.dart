@@ -66,6 +66,35 @@ void main() {
     expect(cols.any((r) => r['name'] == 'age'), isTrue);
   });
 
+  test(
+    'addedFields applied twice is idempotent (resumed migration safety)',
+    () async {
+      // Regression for PR#36 round-2 M3. Without the `_columnExists`
+      // guard, an interrupted-and-resumed migration would throw
+      // "duplicate column" on the second pass and roll the whole txn
+      // back, undoing any sibling adds that succeeded the second time.
+      final diff = const MetaDiff(
+        doctype: 'Cust',
+        addedFields: [
+          AddedField(name: 'age', sqlType: 'INTEGER'),
+          AddedField(name: 'city', sqlType: 'TEXT'),
+        ],
+        removedFields: [],
+        typeChanged: [],
+        addedIsLocalFor: [],
+        addedNormFor: [],
+        indexesToDrop: [],
+      );
+      await MetaMigration.apply(db, diff, tableName: 'docs__cust');
+      // Second pass — must not throw "duplicate column".
+      await MetaMigration.apply(db, diff, tableName: 'docs__cust');
+
+      final cols = await db.rawQuery('PRAGMA table_info(docs__cust)');
+      final names = cols.map((r) => r['name']).toSet();
+      expect(names, containsAll(<String>{'age', 'city'}));
+    },
+  );
+
   test('added Link → adds both column and __is_local', () async {
     final diff = const MetaDiff(
       doctype: 'Cust',
@@ -106,6 +135,30 @@ void main() {
       whereArgs: ['u1'],
     );
     expect(row.first['name__norm'], 'cafe ankit');
+  });
+
+  test('DROP INDEX rethrows non-"no such index" failures', () async {
+    // Regression for PR#36 round-2 M4. The broad
+    // `on DatabaseException catch` previously swallowed every DROP
+    // INDEX failure — including locked-DB / malformed-SQL errors.
+    // Now only the benign "no such index" case is swallowed; anything
+    // else propagates so a real failure does not go unnoticed.
+    //
+    // Force a parser-level syntax error by passing an empty index
+    // name. `DROP INDEX ` → SQLite's parser raises near ';' / "".
+    final diff = const MetaDiff(
+      doctype: 'Cust',
+      addedFields: [],
+      removedFields: [],
+      typeChanged: [],
+      addedIsLocalFor: [],
+      addedNormFor: [],
+      indexesToDrop: [''],
+    );
+    await expectLater(
+      MetaMigration.apply(db, diff, tableName: 'docs__cust'),
+      throwsA(isA<DatabaseException>()),
+    );
   });
 
   test('indexesToDrop — silently no-ops when missing', () async {
@@ -259,19 +312,23 @@ void main() {
   );
 
   test('wrapped in a transaction (rollback on failure)', () async {
-    // Pre-create a column so a duplicate ADD COLUMN forces failure.
+    // Pre-create a column to assert it survives the rollback.
     await db.execute('ALTER TABLE docs__cust ADD COLUMN pre_exists TEXT');
     final diff = const MetaDiff(
       doctype: 'Cust',
       addedFields: [
+        // Succeeds — runs first in the migration sequence.
         AddedField(name: 'safe_addition', sqlType: 'TEXT'),
-        // Second add reuses an existing column → SQLite throws.
-        AddedField(name: 'pre_exists', sqlType: 'TEXT'),
       ],
       removedFields: [],
       typeChanged: [],
       addedIsLocalFor: [],
-      addedNormFor: [],
+      // Failure vector: __norm backfill issues
+      // `SELECT mobile_uuid, no_such_base FROM docs__cust` → no such column.
+      // We previously used a duplicate ADD COLUMN; that path is now
+      // guarded by `_columnExists` (PR#36 round-2 M3) so we needed a
+      // new vector that still exercises rollback semantics.
+      addedNormFor: ['no_such_base'],
       indexesToDrop: [],
     );
     await expectLater(
@@ -281,10 +338,16 @@ void main() {
     final cols = await db.rawQuery('PRAGMA table_info(docs__cust)');
     final names = cols.map((r) => r['name']).toSet();
     // Confirms full transaction rollback: even the earlier successful
-    // `safe_addition` was undone when the second ADD COLUMN failed. (sqflite
-    // wraps the block in BEGIN/ROLLBACK, and the SQLite engine handles
-    // ALTER TABLE inside transactions on modern versions.)
+    // `safe_addition` ALTER was undone when the __norm backfill query
+    // failed. (sqflite wraps the block in BEGIN/ROLLBACK, and the
+    // SQLite engine handles ALTER TABLE inside transactions on modern
+    // versions.)
     expect(names, isNot(contains('safe_addition')));
+    expect(
+      names,
+      isNot(contains('no_such_base__norm')),
+      reason: 'failed __norm ALTER must also have rolled back',
+    );
     expect(
       names,
       contains('pre_exists'),

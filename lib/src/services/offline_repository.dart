@@ -540,19 +540,16 @@ class OfflineRepository {
         // Any queued attachments are orphans — without this cleanup the
         // uploader would keep retrying against a top_parent_uuid that no
         // longer has a docs__ row (review minor #1).
-        try {
-          await txn.delete(
-            'pending_attachments',
-            where: 'top_parent_uuid = ?',
-            whereArgs: [mobileUuid],
-          );
-        } on DatabaseException catch (e, st) {
-          // ignore: avoid_print
-          print(
-            'OfflineRepository.deleteDocument: attachment cleanup failed '
-            'for $doctype/$mobileUuid — $e\n$st',
-          );
-        }
+        //
+        // No `on DatabaseException catch` here: if attachment cleanup
+        // fails the txn must roll back, otherwise we'd commit a
+        // hard-deleted docs__ row alongside orphan pending_attachments
+        // whose `top_parent_uuid` no longer resolves.
+        await txn.delete(
+          'pending_attachments',
+          where: 'top_parent_uuid = ?',
+          whereArgs: [mobileUuid],
+        );
         try {
           await txn.delete(
             tableName,
@@ -594,7 +591,16 @@ class OfflineRepository {
         return;
       }
 
-      // Otherwise: tombstone the docs__ row.
+      // Otherwise: tombstone the docs__ row. Sweep any queued
+      // pending_attachments first — once the DELETE outbox row pushes,
+      // the server-side doc is gone, so uploading attachments against
+      // it would either fail (parent missing) or land orphan File rows
+      // that the server then cascade-deletes. Cleaner to drop them now.
+      await txn.delete(
+        'pending_attachments',
+        where: 'top_parent_uuid = ?',
+        whereArgs: [mobileUuid],
+      );
       try {
         await txn.update(
           tableName,

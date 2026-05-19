@@ -53,7 +53,93 @@ void main() {
       ours: {'x': null},
       theirs: {'x': 'set'},
     );
-    expect(merged['x'], 'set',
-        reason: 'ours==base==null → not a local change → takes theirs');
+    expect(
+      merged['x'],
+      'set',
+      reason: 'ours==base==null → not a local change → takes theirs',
+    );
+  });
+
+  // Regression for PR#36 round-2 H7: `_eq` used `a == b` for all values,
+  // which for List/Map is identity equality in Dart. Two decoded-JSON
+  // lists with the same contents always compared as unequal, so the
+  // merge treated every list field as locally-changed and silently
+  // discarded server updates.
+
+  test('equal-content List: server changes win when local is unchanged', () {
+    final merged = ThreeWayMerge.mergeFields(
+      base: {
+        'tags': ['a', 'b'],
+      },
+      ours: {
+        'tags': ['a', 'b'],
+      },
+      theirs: {
+        'tags': ['a', 'b', 'c'],
+      },
+    );
+    expect(
+      merged['tags'],
+      ['a', 'b', 'c'],
+      reason:
+          'ours == base by deep equality → not a local change → takes theirs',
+    );
+  });
+
+  test('different-content List: local changes win', () {
+    final merged = ThreeWayMerge.mergeFields(
+      base: {
+        'tags': ['a', 'b'],
+      },
+      ours: {
+        'tags': ['a', 'b', 'local'],
+      },
+      theirs: {
+        'tags': ['a', 'b', 'server'],
+      },
+    );
+    expect(merged['tags'], [
+      'a',
+      'b',
+      'local',
+    ], reason: 'genuine local-vs-base diff → keeps ours');
+  });
+
+  test('equal-content Map: server changes win when local is unchanged', () {
+    final merged = ThreeWayMerge.mergeFields(
+      base: {
+        'meta': {'k': 1},
+      },
+      ours: {
+        'meta': {'k': 1},
+      },
+      theirs: {
+        'meta': {'k': 1, 'new': 2},
+      },
+    );
+    expect(merged['meta'], {'k': 1, 'new': 2});
+  });
+
+  test('nested List inside Map compared by deep equality', () {
+    final merged = ThreeWayMerge.mergeFields(
+      base: {
+        'meta': {
+          'list': [1, 2],
+        },
+      },
+      ours: {
+        'meta': {
+          'list': [1, 2],
+        },
+      },
+      theirs: {
+        'meta': {
+          'list': [1, 2, 3],
+        },
+      },
+    );
+    expect(merged['meta'], {
+      'list': [1, 2, 3],
+    });
   });
 }

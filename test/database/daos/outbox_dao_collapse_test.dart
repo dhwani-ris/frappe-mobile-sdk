@@ -35,8 +35,25 @@ void main() {
     return db.query('outbox', orderBy: 'created_at ASC, id ASC');
   }
 
+  // PR#36 round-2 M6: recordSave now asserts its DAO is bound to a
+  // Transaction so the SELECT-then-collapse race is closed. Production
+  // callers (OfflineRepository.saveDocument/.deleteDocument) all run
+  // inside `db.transaction`. Mirror that here through a helper instead
+  // of widening the production guard.
+  Future<RecordSaveResult> recordSave({
+    required String doctype,
+    required String mobileUuid,
+    required OutboxOperation operation,
+  }) => db.transaction(
+    (txn) => OutboxDao(txn).recordSave(
+      doctype: doctype,
+      mobileUuid: mobileUuid,
+      operation: operation,
+    ),
+  );
+
   test('insert with no existing → fresh INSERT row', () async {
-    await dao.recordSave(
+    await recordSave(
       doctype: 'Customer',
       mobileUuid: 'u1',
       operation: OutboxOperation.insert,
@@ -48,12 +65,12 @@ void main() {
   });
 
   test('INSERT then INSERT → keeps one row', () async {
-    await dao.recordSave(
+    await recordSave(
       doctype: 'Customer',
       mobileUuid: 'u1',
       operation: OutboxOperation.insert,
     );
-    await dao.recordSave(
+    await recordSave(
       doctype: 'Customer',
       mobileUuid: 'u1',
       operation: OutboxOperation.insert,
@@ -63,13 +80,13 @@ void main() {
   });
 
   test('INSERT then UPDATE → keeps INSERT, resets to pending', () async {
-    await dao.recordSave(
+    await recordSave(
       doctype: 'Customer',
       mobileUuid: 'u1',
       operation: OutboxOperation.insert,
     );
     await dao.markFailed(1, errorCode: ErrorCode.NETWORK, errorMessage: 'y');
-    await dao.recordSave(
+    await recordSave(
       doctype: 'Customer',
       mobileUuid: 'u1',
       operation: OutboxOperation.update,
@@ -83,13 +100,13 @@ void main() {
   });
 
   test('UPDATE then UPDATE → collapses, resets to pending', () async {
-    await dao.recordSave(
+    await recordSave(
       doctype: 'Customer',
       mobileUuid: 'u1',
       operation: OutboxOperation.update,
     );
     await dao.markFailed(1, errorCode: ErrorCode.NETWORK, errorMessage: 'y');
-    await dao.recordSave(
+    await recordSave(
       doctype: 'Customer',
       mobileUuid: 'u1',
       operation: OutboxOperation.update,
@@ -101,12 +118,12 @@ void main() {
   });
 
   test('INSERT then DELETE → cancels INSERT, no DELETE row', () async {
-    await dao.recordSave(
+    await recordSave(
       doctype: 'Customer',
       mobileUuid: 'u1',
       operation: OutboxOperation.insert,
     );
-    final result = await dao.recordSave(
+    final result = await recordSave(
       doctype: 'Customer',
       mobileUuid: 'u1',
       operation: OutboxOperation.delete,
@@ -117,12 +134,12 @@ void main() {
   });
 
   test('UPDATE then DELETE → cancels UPDATE, enqueues DELETE', () async {
-    await dao.recordSave(
+    await recordSave(
       doctype: 'Customer',
       mobileUuid: 'u1',
       operation: OutboxOperation.update,
     );
-    final result = await dao.recordSave(
+    final result = await recordSave(
       doctype: 'Customer',
       mobileUuid: 'u1',
       operation: OutboxOperation.delete,
@@ -134,13 +151,13 @@ void main() {
   });
 
   test('in_flight UPDATE then save → does not collapse, fresh row', () async {
-    await dao.recordSave(
+    await recordSave(
       doctype: 'Customer',
       mobileUuid: 'u1',
       operation: OutboxOperation.update,
     );
     await dao.markInFlight(1);
-    await dao.recordSave(
+    await recordSave(
       doctype: 'Customer',
       mobileUuid: 'u1',
       operation: OutboxOperation.update,
@@ -152,13 +169,13 @@ void main() {
   });
 
   test('SUBMIT after INSERT enqueues both ordered', () async {
-    await dao.recordSave(
+    await recordSave(
       doctype: 'Customer',
       mobileUuid: 'u1',
       operation: OutboxOperation.insert,
     );
     await Future<void>.delayed(const Duration(milliseconds: 2));
-    await dao.recordSave(
+    await recordSave(
       doctype: 'Customer',
       mobileUuid: 'u1',
       operation: OutboxOperation.submit,
@@ -171,12 +188,12 @@ void main() {
   });
 
   test('cancelPendingFor wipes all collapsable rows for uuid', () async {
-    await dao.recordSave(
+    await recordSave(
       doctype: 'Customer',
       mobileUuid: 'u1',
       operation: OutboxOperation.update,
     );
-    await dao.recordSave(
+    await recordSave(
       doctype: 'Customer',
       mobileUuid: 'u1',
       operation: OutboxOperation.submit,
@@ -187,7 +204,7 @@ void main() {
   });
 
   test('cancelPendingFor leaves in_flight rows alone', () async {
-    await dao.recordSave(
+    await recordSave(
       doctype: 'Customer',
       mobileUuid: 'u1',
       operation: OutboxOperation.update,

@@ -1,10 +1,16 @@
 // Pins the wiring between SyncController.resolveConflict (empty-serverName
 // branch) and the builder-supplied clearLocalConflict closure that flips
-// `docs__<doctype>.sync_status` from 'conflict' back to 'dirty'.
+// `docs__<doctype>.sync_status` from 'conflict' to 'synced'.
 //
-// This is the PR#36 fix path — without the hook, a conflicting INSERT that
-// never reached the server would leave the local row visually stuck in
-// "conflict" forever even though the outbox row gets closed.
+// Two-round fix history:
+//   Round 1 (PR#36 v1): without the hook, a conflicting INSERT that never
+//     reached the server left the local row visually stuck in "conflict"
+//     forever even though the outbox row was closed.
+//   Round 2 (PR#36 H2): the original fix flipped to 'dirty' which left the
+//     row stuck-unsynced — sync_status said pending but the outbox row had
+//     already been deleted, so no push would ever drain it. The state is
+//     now 'synced'; the row has no server counterpart, but the next user
+//     edit re-routes as INSERT and enqueues a fresh outbox row.
 import 'package:flutter_test/flutter_test.dart';
 import 'package:frappe_mobile_sdk/src/api/client.dart';
 import 'package:frappe_mobile_sdk/src/database/app_database.dart';
@@ -30,7 +36,7 @@ void main() {
   });
 
   test(
-    'resolveConflict(pullAndOverwrite, serverName="") flips docs__ row from conflict → dirty',
+    'resolveConflict(pullAndOverwrite, serverName="") flips docs__ row from conflict → synced',
     () async {
       final appDb = await AppDatabase.inMemoryDatabase();
       // Stand up a Customer docs__ table so clearLocalConflict has a target.
@@ -79,14 +85,21 @@ void main() {
       // Outbox row closed.
       expect(await outbox.findById(outboxId), isNull);
 
-      // docs__ row flipped back to dirty, sync_error cleared. PR#36 fix.
+      // docs__ row flipped to synced, sync_error cleared. PR#36 round-2
+      // H2 fix: 'dirty' here would have been stuck-unsynced (no outbox
+      // row to drive a push).
       final row = (await appDb.rawDatabase.query(
         'docs__customer',
         where: 'mobile_uuid = ?',
         whereArgs: [uuid],
       )).first;
-      expect(row['sync_status'], 'dirty');
+      expect(row['sync_status'], 'synced');
       expect(row['sync_error'], isNull);
+
+      // Witness for the round-2 fix: there must be no outbox row left
+      // behind. If sync_status were 'dirty' with no outbox row, a push
+      // sweep would do nothing — the textbook stuck-unsynced state.
+      expect(await outbox.findById(outboxId), isNull);
 
       await appDb.close();
     },

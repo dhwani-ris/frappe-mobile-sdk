@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:flutter/foundation.dart';
 
 typedef OnRestoreCallback = void Function();
 
@@ -37,9 +38,24 @@ class ConnectivityWatcher {
 
   static Future<ConnectivityWatcher> production() async {
     final connectivity = Connectivity();
-    final initial = !(await connectivity.checkConnectivity()).contains(
-      ConnectivityResult.none,
-    );
+    // connectivity_plus throws PlatformException on some Android
+    // variants (typically older OEM ROMs missing the network info
+    // permission). Letting that propagate would abort FrappeSDK.initialize
+    // before any UI is built — a connectivity probe failure must not
+    // brick the app. Default to "offline" so the rest of the SDK comes
+    // up with safe assumptions; the connectivity stream will still
+    // flip to online if a real edge arrives later. (PR#36 round-2 M7)
+    var initial = false;
+    try {
+      initial = !(await connectivity.checkConnectivity()).contains(
+        ConnectivityResult.none,
+      );
+    } catch (e, st) {
+      debugPrint(
+        'ConnectivityWatcher.production: initial probe failed, '
+        'assuming offline — $e\n$st',
+      );
+    }
     final stream = connectivity.onConnectivityChanged.map(
       (results) => !results.contains(ConnectivityResult.none),
     );

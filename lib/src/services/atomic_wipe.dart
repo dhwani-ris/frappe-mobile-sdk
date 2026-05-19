@@ -25,8 +25,18 @@ class AtomicWipe {
           await file.delete();
         }
       } catch (e, st) {
-        // best-effort: -wal / -shm may already be gone, or the OS may
-        // hold a transient lock. Continue rather than abort the wipe.
+        // Primary `.db` failure means the wipe could not happen — we'd
+        // otherwise reopen the un-deleted database and run onCreate
+        // against existing tables, surfacing a misleading
+        // "table already exists" instead of the real delete error.
+        // Re-throw to abort the wipe and let the caller see the cause.
+        if (suffix == '') {
+          debugPrint('AtomicWipe.wipe: delete($dbPath) failed — $e\n$st');
+          rethrow;
+        }
+        // -wal / -shm: best-effort. They may already be gone or the OS
+        // may hold a transient lock. Continue — the primary DB delete
+        // already succeeded, so the wipe is effectively complete.
         debugPrint('AtomicWipe.wipe: delete($dbPath$suffix) failed — $e\n$st');
       }
     }

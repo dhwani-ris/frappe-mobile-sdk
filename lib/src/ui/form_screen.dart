@@ -225,9 +225,17 @@ class _FormScreenState extends State<FormScreen> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
-      _loadSyncErrors();
-    }
+    if (state != AppLifecycleState.resumed) return;
+    // Every mounted FormScreen subscribed to WidgetsBindingObserver
+    // receives this callback on app resume — including off-screen
+    // IndexedStack / PageView siblings that stay mounted by design.
+    // Without this gate, an N-tab form host hits the outbox DAO N
+    // times per foreground. Cap to the form the user is actually
+    // looking at. (PR#36 round-2 M14)
+    if (!mounted) return;
+    final route = ModalRoute.of(context);
+    if (route != null && !route.isCurrent) return;
+    _loadSyncErrors();
   }
 
   @override
@@ -280,6 +288,14 @@ class _FormScreenState extends State<FormScreen> with WidgetsBindingObserver {
     } catch (e, st) {
       // ignore: avoid_print
       print('FormScreen: retry($outboxId) failed — $e\n$st');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Retry failed: ${toUserFriendlyMessage(e)}'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
     await _loadSyncErrors();
   }
@@ -751,15 +767,19 @@ class _FormScreenState extends State<FormScreen> with WidgetsBindingObserver {
       }
     } catch (e, st) {
       debugPrint('FormScreen.save (server-first/offline) failed — $e\n$st');
-      setState(() {
-        _errorMessage = e is FrappeException
-            ? e.message
-            : toUserFriendlyMessage(e);
-      });
+      if (mounted) {
+        setState(() {
+          _errorMessage = e is FrappeException
+              ? e.message
+              : toUserFriendlyMessage(e);
+        });
+      }
     } finally {
-      setState(() {
-        _isSaving = false;
-      });
+      if (mounted) {
+        setState(() {
+          _isSaving = false;
+        });
+      }
       // Either branch above may have queued a fresh outbox row or
       // resolved an existing one; refresh the persistent banner.
       _loadSyncErrors();
@@ -821,15 +841,19 @@ class _FormScreenState extends State<FormScreen> with WidgetsBindingObserver {
       }
     } catch (e, st) {
       debugPrint('FormScreen.delete failed — $e\n$st');
-      setState(() {
-        _errorMessage = e is FrappeException
-            ? e.message
-            : toUserFriendlyMessage(e);
-      });
+      if (mounted) {
+        setState(() {
+          _errorMessage = e is FrappeException
+              ? e.message
+              : toUserFriendlyMessage(e);
+        });
+      }
     } finally {
-      setState(() {
-        _isSaving = false;
-      });
+      if (mounted) {
+        setState(() {
+          _isSaving = false;
+        });
+      }
     }
   }
 

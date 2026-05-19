@@ -234,6 +234,16 @@ class FrappeSDK {
       await _doInitialize(autoRestoreAndSync);
       completer.complete();
     } catch (e, st) {
+      // _doInitialize creates `_syncCompleteController` mid-flight and
+      // may throw after that line. `dispose()` only runs against a
+      // fully-initialized SDK, so without this cleanup the orphan
+      // StreamController leaks (subscribers never see done, GC can't
+      // reach it). PR#36 round-2 M9.
+      final ctrl = _syncCompleteController;
+      if (ctrl != null && !ctrl.isClosed) {
+        await ctrl.close();
+      }
+      _syncCompleteController = null;
       completer.completeError(e, st);
       rethrow;
     } finally {

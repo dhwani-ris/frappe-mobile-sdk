@@ -26,9 +26,12 @@ class AttachmentUploadResult {
 /// Uploads any `pending_attachments` rows queued for a given parent doc
 /// before the parent itself is pushed. Spec §5.3.
 ///
-/// Each upload retries with backoff (default 2s/5s/10s, 3 attempts). On
-/// terminal failure throws [BlockedByUpstream] so the caller flips the
-/// outbox row to `blocked` until the user reattaches or retries.
+/// Each upload retries with backoff: with the default [backoff] of
+/// `[2s, 5s, 10s]` and 3 attempts, the engine waits 2s before retry 1
+/// and 5s before retry 2; the third slot is the cap for a hypothetical
+/// fourth attempt and is unused at 3 attempts. On terminal failure
+/// throws [BlockedByUpstream] so the caller flips the outbox row to
+/// `blocked` until the user reattaches or retries.
 ///
 /// Once attachments are uploaded, [inlinePayload] walks the assembled
 /// payload and rewrites every `pending:<id>` marker (left there by
@@ -106,8 +109,12 @@ class AttachmentPipeline {
           'AttachmentPipeline.upload(${p.id}) attempt $attempt failed — $e\n$st',
         );
         lastError = e;
+        // Delay BEFORE the next attempt (the last attempt has no
+        // "next", so no delay). Indices 0..N-2 are consumed across N
+        // attempts; the last backoff entry is reserved for a future
+        // attempt count and intentionally unused at the default of 3.
         if (attempt < backoff.length - 1) {
-          await Future<void>.delayed(backoff[attempt + 1]);
+          await Future<void>.delayed(backoff[attempt]);
         }
       }
     }

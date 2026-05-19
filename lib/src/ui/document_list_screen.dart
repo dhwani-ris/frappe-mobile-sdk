@@ -4,6 +4,7 @@
 import 'package:flutter/material.dart';
 
 import '../api/client.dart';
+import '../api/utils.dart';
 import '../models/doc_type_meta.dart';
 import '../models/document.dart';
 import '../models/link_filter_result.dart';
@@ -270,6 +271,14 @@ class _DocumentListScreenState extends State<DocumentListScreen> {
           print(
             'DocumentListScreen: pullSync(${widget.doctype}) failed — $e\n$st',
           );
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Sync failed: ${toUserFriendlyMessage(e)}'),
+                backgroundColor: Colors.red,
+              ),
+            );
+          }
         }
       }
       final docs = await _fetchViaResolver();
@@ -278,6 +287,16 @@ class _DocumentListScreenState extends State<DocumentListScreen> {
     } catch (e, st) {
       // ignore: avoid_print
       print('DocumentListScreen: _pullDocuments failed — $e\n$st');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Failed to load documents: ${toUserFriendlyMessage(e)}',
+            ),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     } finally {
       if (mounted) setState(() => _isSyncing = false);
     }
