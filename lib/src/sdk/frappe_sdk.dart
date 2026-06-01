@@ -139,7 +139,25 @@ class FrappeSDK {
     _modeNotifier?.value = next;
   }
 
-  FrappeSDK({required this.baseUrl, this.databaseAppName});
+  FrappeSDK({
+    required this.baseUrl,
+    this.databaseAppName,
+    this.isOnlineOverride,
+  });
+
+  /// Optional override for the SDK's connectivity probe (see
+  /// [SyncService.isOnline]). When set, the platform's
+  /// `connectivity_plus` check is replaced — the override decides whether
+  /// `pullSync`/`pullSyncMany`/`pushSync` see the device as online.
+  ///
+  /// Production wiring should leave this null. The legitimate dev use is
+  /// the emulator+`adb reverse` workflow, where the platform classifies
+  /// the network as `none` despite HTTP working fine. Setting
+  /// `isOnlineOverride: () async => true` in dev keeps sync running.
+  ///
+  /// If the override throws, [SyncService.isOnline] falls back to the
+  /// platform probe.
+  final Future<bool> Function()? isOnlineOverride;
 
   /// Test-only constructor: accepts a pre-built [AppDatabase] (e.g. in-memory).
   /// Wires all services directly without calling [initialize()].
@@ -157,7 +175,8 @@ class FrappeSDK {
       enabled: true,
       isPersisted: true,
     ),
-  }) : databaseAppName = null {
+  }) : databaseAppName = null,
+       isOnlineOverride = null {
     _database = database;
     _modeNotifier = OfflineModeNotifier(offlineMode);
     _syncCompleteController = StreamController<void>.broadcast();
@@ -341,6 +360,7 @@ class FrappeSDK {
       getMobileUuid: _resolveMobileUuid,
       offlineModeNotifier: _modeNotifier!,
       pushRunner: () => _pushEngine!.runOnce(),
+      isOnlineOverride: isOnlineOverride,
     );
     // Build UnifiedResolver — single read path for all offline queries.
     // Probe connectivity once here AND subscribe to the platform
