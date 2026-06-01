@@ -64,15 +64,45 @@ class SyncService {
     ),
     OfflineModeNotifier? offlineModeNotifier,
     Future<void> Function()? pushRunner,
+    Future<bool> Function()? isOnlineOverride,
   }) : _getMobileUuid = getMobileUuid,
        _modeNotifier = offlineModeNotifier ?? OfflineModeNotifier(offlineMode),
-       _pushRunner = pushRunner;
+       _pushRunner = pushRunner,
+       _isOnlineOverride = isOnlineOverride;
+
+  /// Optional override for the connectivity probe.
+  ///
+  /// When supplied, [isOnline] calls this instead of `connectivity_plus`.
+  /// The override returning `true` lets [pullSync] / [pullSyncMany] /
+  /// [pushSync] proceed past their connectivity guard even on transports
+  /// the platform plugin doesn't classify as `mobile | wifi | ethernet`
+  /// (notably `adb reverse` tunnels during emulator development, where
+  /// the link reads as `none` despite HTTP being fully functional).
+  ///
+  /// Production callers should leave this null and rely on the platform
+  /// probe. Dev/test wiring is the legitimate use case.
+  ///
+  /// If the override throws, [isOnline] logs the failure and falls
+  /// through to the platform probe — a buggy override won't brick sync.
+  final Future<bool> Function()? _isOnlineOverride;
 
   /// Check if device is online.
   /// Returns false when offline mode is disabled, regardless of connectivity,
   /// so callers can use this method without a separate mode guard.
   Future<bool> isOnline() async {
     if (!offlineMode.enabled) return false;
+    final override = _isOnlineOverride;
+    if (override != null) {
+      try {
+        return await override();
+      } catch (e, st) {
+        // ignore: avoid_print
+        print(
+          'SyncService.isOnline: isOnlineOverride threw, '
+          'falling back to platform probe — $e\n$st',
+        );
+      }
+    }
     final connectivityResult = await Connectivity().checkConnectivity();
     return connectivityResult.contains(ConnectivityResult.mobile) ||
         connectivityResult.contains(ConnectivityResult.wifi) ||
