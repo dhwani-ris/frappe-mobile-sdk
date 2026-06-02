@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -12,6 +13,7 @@ import '../database/daos/outbox_dao.dart';
 import '../database/daos/pending_attachment_dao.dart';
 import '../database/sqlite_utils.dart';
 import '../database/table_name.dart';
+import '../models/doc_type_meta.dart';
 import '../models/meta_resolver.dart';
 import '../sync/idempotency_strategy.dart';
 import '../sync/pull_engine.dart';
@@ -190,18 +192,52 @@ class SyncEngineBuilder {
     // PullEngine is built but not auto-invoked. The list-http callback
     // wraps client.doctype.list; PullPageFetcher uses it when the engine
     // eventually runs.
+    //
+    // SWF-eligibility-empty (2026-06-02): when the parent has any
+    // Table / Table MultiSelect field, the bare `frappe.client.get_list`
+    // response returns child fields as CSV-of-names strings — NOT the
+    // nested child rows PullApply needs. Without this branch, every
+    // parent pulled via PullEngine (closure pull, _runUpgradeClosurePull,
+    // forcePullAll) drops its children silently. SyncService's
+    // _pullOneInternal already had this needsFullDoc check; this
+    // mirrors it into the PullEngine callback path so the closure
+    // pull no longer ships parents without their child tables.
+    Future<bool> hasTableFields(String doctype) async {
+      final raw = await metaDao.getMetaJson(doctype);
+      if (raw == null || raw.isEmpty || raw == '{}') return false;
+      try {
+        final parsed = jsonDecode(raw) as Map<String, dynamic>;
+        final meta = DocTypeMeta.fromJson(parsed);
+        for (final f in meta.fields) {
+          if (f.fieldtype == 'Table' || f.fieldtype == 'Table MultiSelect') {
+            return true;
+          }
+        }
+      } catch (_) {/* fall through to false */}
+      return false;
+    }
+
     Future<List<Map<String, dynamic>>> listHttp(
       String doctype,
       Map<String, Object?> params,
     ) async {
-      final result = await client.doctype.list(
-        doctype,
-        filters: (params['filters'] as List?)?.cast<List<dynamic>>(),
-        fields: (params['fields'] as List?)?.cast<String>(),
-        orderBy: params['order_by'] as String?,
-        limitPageLength: params['limit_page_length'] as int? ?? 500,
-        limitStart: params['limit_start'] as int? ?? 0,
-      );
+      final needsFullDoc = await hasTableFields(doctype);
+      final result = needsFullDoc
+          ? await client.doctype.listFullDocs(
+              doctype,
+              filters: (params['filters'] as List?)?.cast<List<dynamic>>(),
+              orderBy: params['order_by'] as String?,
+              limitPageLength: params['limit_page_length'] as int? ?? 500,
+              limitStart: params['limit_start'] as int? ?? 0,
+            )
+          : await client.doctype.list(
+              doctype,
+              filters: (params['filters'] as List?)?.cast<List<dynamic>>(),
+              fields: (params['fields'] as List?)?.cast<String>(),
+              orderBy: params['order_by'] as String?,
+              limitPageLength: params['limit_page_length'] as int? ?? 500,
+              limitStart: params['limit_start'] as int? ?? 0,
+            );
       return result
           .whereType<Map>()
           .map((e) => Map<String, dynamic>.from(e))
