@@ -214,8 +214,33 @@ class LocalWriter {
         whereArgs: [mobileUuid, fieldname],
       );
 
-      final list = data[fieldname];
-      if (list is! List) continue;
+      // Accept two input shapes for Table / Table MultiSelect fields:
+      //   1. `List<Map>` — already in the Frappe wire shape, used by
+      //      callers that have pre-converted (e.g. swasti_flutter's
+      //      `_toTableMultiSelect` helper).
+      //   2. `String` (comma-separated) — raw multi-select controller
+      //      text. The previous behaviour silently dropped this case,
+      //      causing Frappe-side `MandatoryError` on push when the
+      //      parent field was `reqd: 1`. The single-Link/Select-child
+      //      shape that Frappe enforces on Table MultiSelect children
+      //      means we can resolve the target fieldname from the child
+      //      meta and wrap each CSV value as `{<childField>: value}`.
+      List? list;
+      final raw = data[fieldname];
+      if (raw is List) {
+        list = raw;
+      } else if (raw is String && raw.trim().isNotEmpty) {
+        final childField = _firstWritableChildFieldname(childInfo.meta);
+        if (childField != null) {
+          list = raw
+              .split(',')
+              .map((s) => s.trim())
+              .where((s) => s.isNotEmpty)
+              .map((v) => <String, dynamic>{childField: v})
+              .toList();
+        }
+      }
+      if (list == null) continue;
 
       for (var idx = 0; idx < list.length; idx++) {
         final raw = list[idx];
@@ -306,5 +331,25 @@ class LocalWriter {
     final s = v.toString().trim();
     if (s.isEmpty) return null;
     return int.tryParse(s);
+  }
+
+  /// First non-system writable fieldname on a child meta — used by the
+  /// CSV → List<Map> autoconversion in [writeParentInTxn] to figure out
+  /// which child field to assign each parsed CSV value to. Frappe's
+  /// Table MultiSelect convention is exactly one user-visible field on
+  /// the child (a Link or Select), so we just return the first match
+  /// after skipping system columns and nested Tables. Returns null if
+  /// the meta is malformed; caller falls through and skips the field.
+  String? _firstWritableChildFieldname(DocTypeMeta childMeta) {
+    for (final f in childMeta.fields) {
+      final fn = f.fieldname;
+      final ft = f.fieldtype;
+      if (fn == null) continue;
+      if (ft == 'Table' || ft == 'Table MultiSelect') continue;
+      if (sqliteColumnTypeFor(ft) == null) continue;
+      if (_systemChildColumns.contains(fn)) continue;
+      return fn;
+    }
+    return null;
   }
 }
