@@ -10,6 +10,15 @@ class TranslationService {
   /// In-memory cache: lang -> (source -> translated)
   final Map<String, Map<String, String>> _cache = {};
 
+  /// Lowercased-source index: lang -> (source.toLowerCase() -> translated).
+  /// Frappe's Translation table collates source_text case-INSENSITIVELY
+  /// (MariaDB utf8mb4_general_ci), so 'HB value' and 'HB Value' are ONE
+  /// row server-side — whichever casing seeded first owns source_text.
+  /// An exact Dart map lookup then misses for every other casing the
+  /// app uses. [translate] falls back to this index on exact-miss so
+  /// lookup semantics match the server's collation.
+  final Map<String, Map<String, String>> _ciCache = {};
+
   /// Current locale for [translate]. Default "en".
   String _currentLang = 'en';
 
@@ -51,6 +60,9 @@ class TranslationService {
         (k, v) => MapEntry(k.toString(), v?.toString() ?? k.toString()),
       );
       _cache[lang] = map;
+      _ciCache[lang] = {
+        for (final e in map.entries) e.key.toLowerCase(): e.value,
+      };
       return map;
     } catch (e, st) {
       debugPrint('TranslationService.loadTranslations($lang) failed — $e\n$st');
@@ -68,7 +80,9 @@ class TranslationService {
   String translate(String source, [List<Object>? args]) {
     if (source.isEmpty) return source;
     final map = _cache[_currentLang];
-    String text = (map != null ? map[source] : null) ?? source;
+    String text = (map != null ? map[source] : null) ??
+        _ciCache[_currentLang]?[source.toLowerCase()] ??
+        source;
     if (args != null && args.isNotEmpty) {
       for (var i = 0; i < args.length; i++) {
         text = text.replaceAll('{$i}', args[i].toString());
