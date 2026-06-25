@@ -508,6 +508,91 @@ class OfflineRepository {
     return mobileUuid;
   }
 
+  /// Local-only save: writes the `docs__` mirror WITHOUT enqueuing an outbox
+  /// row, so the record is **never pushed** to the server.
+  ///
+  /// Used for work-in-progress drafts that must stay device-local until the
+  /// user finalises them: the draft is editable/resumable offline, and only on
+  /// the final save (a normal [saveDocument]) does a single INSERT outbox row
+  /// get enqueued. This deliberately sidesteps the optimistic-locking
+  /// `TimestampMismatchError` that occurs when a record is pushed as a draft
+  /// and then UPDATEd — there is no first push, so there is no stale `modified`
+  /// base to conflict on.
+  ///
+  /// The row lands with `sync_status='dirty'` (honest: unsynced local data);
+  /// push is strictly outbox-driven, so it stays put until [saveDocument] runs.
+  /// Returns the `mobile_uuid`.
+  Future<String> saveDocumentLocalOnly({
+    required String doctype,
+    required Map<String, dynamic> data,
+  }) async {
+    if (!offlineMode.enabled) {
+      throw StateError(
+        'OfflineRepository.saveDocumentLocalOnly requires offline mode',
+      );
+    }
+    if (_localWriter == null) {
+      throw StateError(
+        'OfflineRepository.saveDocumentLocalOnly: offline mode requires '
+        'localWriter',
+      );
+    }
+
+    final rawUuid = data['mobile_uuid'] as String?;
+    final mobileUuid = (rawUuid != null && rawUuid.isNotEmpty)
+        ? rawUuid
+        : _uuid.v4();
+    final dataWithUuid = <String, dynamic>{...data, 'mobile_uuid': mobileUuid};
+
+    // Pre-resolve metas outside the write txn (deadlock guard — see
+    // saveDocument).
+    final parentMeta = await _loadMeta(doctype);
+    final childMetasByDoctype = <String, DocTypeMeta>{};
+    if (parentMeta != null) {
+      for (final f in parentMeta.fields) {
+        final opt = f.options;
+        if ((f.fieldtype == 'Table' || f.fieldtype == 'Table MultiSelect') &&
+            opt != null &&
+            opt.isNotEmpty) {
+          final cm = await _loadMeta(opt);
+          if (cm != null) childMetasByDoctype[opt] = cm;
+        }
+      }
+    }
+
+    final tableName = normalizeDoctypeTableName(doctype);
+    Map<String, Object?>? existing;
+    try {
+      final rows = await _database.rawDatabase.query(
+        tableName,
+        where: 'mobile_uuid = ?',
+        whereArgs: [mobileUuid],
+        limit: 1,
+      );
+      existing = rows.isEmpty ? null : rows.first;
+    } on DatabaseException {
+      existing = null;
+    }
+    final existingServerName = existing?['server_name'] as String?;
+
+    await _database.rawDatabase.transaction((txn) async {
+      await _localWriter.writeParentInTxn(
+        txn: txn,
+        parentDoctype: doctype,
+        mobileUuid: mobileUuid,
+        data: dataWithUuid,
+        serverName: existingServerName,
+        syncOp: OutboxOperation.insert.wireName,
+        pushBasePayload: null,
+        parentMeta: parentMeta,
+        childMetasByDoctype: childMetasByDoctype,
+      );
+      // NB: no OutboxDao.recordSave — that's the whole point.
+    });
+
+    return mobileUuid;
+  }
+
   /// Tombstones the docs__ row and enqueues a DELETE outbox row. If a
   /// pending INSERT existed (the doc never reached the server), cancels
   /// it and hard-deletes the docs__ row instead — there is nothing to
