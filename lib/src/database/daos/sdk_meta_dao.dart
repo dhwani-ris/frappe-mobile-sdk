@@ -55,4 +55,55 @@ class SdkMetaDao {
       }
     });
   }
+
+  /// Dedicated table holding closure-dependency doctypes that returned a
+  /// hard HTTP 403 / PermissionError during a pull. Kept OUT of the
+  /// fixed-column singleton `sdk_meta` row so no `ALTER TABLE` + schema-
+  /// version bump is needed — created lazily via `CREATE TABLE IF NOT
+  /// EXISTS`, which works on every install regardless of the DB version
+  /// it was first opened at.
+  static const String _skipTable = 'permission_skip_doctypes';
+
+  Future<void> _ensureSkipTable() async {
+    await _db.execute(
+      'CREATE TABLE IF NOT EXISTS $_skipTable '
+      '(doctype TEXT PRIMARY KEY NOT NULL)',
+    );
+  }
+
+  /// Doctypes recorded as permission-denied (HTTP 403) during a prior
+  /// closure pull. The closure-pull filter excludes these so the app
+  /// stops re-attempting framework/system doctypes the surveyor has no
+  /// read access to on every sync. Only ever contains doctypes that
+  /// genuinely returned 403 — never mobile-form entry points or readable
+  /// masters (those return 200 and so never land here).
+  Future<Set<String>> readSkippedDoctypes() async {
+    await _ensureSkipTable();
+    final rows = await _db.rawQuery('SELECT doctype FROM $_skipTable');
+    return rows
+        .map((r) => r['doctype'] as String?)
+        .whereType<String>()
+        .toSet();
+  }
+
+  /// Records [doctype] in the permission-skip set. Idempotent
+  /// (`INSERT OR IGNORE`). Call ONLY for a genuine HTTP 403 —
+  /// never for timeouts, SocketException, 5xx, or "no such table",
+  /// which must remain retryable.
+  Future<void> addSkippedDoctype(String doctype) async {
+    if (doctype.isEmpty) return;
+    await _ensureSkipTable();
+    await _db.rawInsert(
+      'INSERT OR IGNORE INTO $_skipTable (doctype) VALUES (?)',
+      [doctype],
+    );
+  }
+
+  /// Clears the permission-skip set. Called on genuine login and on
+  /// logout because read permissions can change per user / session, so a
+  /// skip earned under one session must not suppress a pull under another.
+  Future<void> clearSkippedDoctypes() async {
+    await _ensureSkipTable();
+    await _db.rawDelete('DELETE FROM $_skipTable');
+  }
 }

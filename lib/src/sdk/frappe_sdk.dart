@@ -73,6 +73,13 @@ class FrappeSDK {
   /// Wire into [SyncStatusBar] to surface pull/push activity in the UI.
   SyncStateNotifier? get syncStateNotifier => _syncStateNotifier;
 
+  /// Completes when the deferred boot-time meta + data sync settles.
+  /// Null until [initialize] fires it for a restored (returning-user)
+  /// session. The future never throws — failures surface via
+  /// [syncStateNotifier]. Exposed for observability + tests so callers
+  /// can await the initial sync without re-blocking `initialize()`.
+  Future<void>? get initialSyncFuture => _initialSyncFuture;
+
   bool _initialized = false;
 
   /// One-shot lock for [initialize]. Set to a non-null Completer for the
@@ -88,6 +95,12 @@ class FrappeSDK {
   /// `wipeOfflineDocumentTables()` cannot drop a table mid-pull. Cleared
   /// once the drain settles.
   Future<void>? _pendingDrain;
+
+  /// Tracks the fire-and-forget initial meta + data sync kicked off from
+  /// [_doInitialize] for a restored session. Held so [initialSyncFuture]
+  /// can expose it for observability + tests. Non-null only after a
+  /// returning-user cold start that successfully restored a session.
+  Future<void>? _initialSyncFuture;
 
   /// Cached synchronous online state — seeded from
   /// [ConnectivityWatcher.production] at init and kept fresh by the
@@ -454,16 +467,39 @@ class FrappeSDK {
               .whenComplete(() => _pendingDrain = null);
           unawaited(_pendingDrain!);
         }
-        // Awaited intentionally — keeps the boot pipeline sequential
-        // with the host app's own post-init sync, avoiding two
-        // concurrent invocations of `checkAndSyncDoctypes` /
-        // `resyncMobileConfiguration` that would otherwise race.
+        // Deferred intentionally — do NOT await. `initialize()` runs
+        // BEFORE the host's `runApp()` mounts any widgets, so awaiting
+        // the full initial meta + data sync here (permissions refresh,
+        // meta reconcile, config resync, and the offline closure pull —
+        // tens of seconds for a returning user) blocks the first frame
+        // and leaves a blank white screen until the sync settles. Firing
+        // it unawaited lets `initialize()` return immediately so the UI
+        // mounts right away; the sync then streams progress via
+        // [syncStateNotifier] (`isInitialSync` drives a non-blocking
+        // "Syncing…" banner over live content instead of a splash).
         //
-        // The splash-hang concern (wrong / unresponsive server) is
-        // addressed inside [_initialMetaAndDataSync] by a short-timeout
-        // permissions probe that bails fast and surfaces the failure
-        // on [syncStateNotifier.value.lastError].
-        await _initialMetaAndDataSync();
+        // Safe to defer: nothing after this line in [_doInitialize]
+        // depends on the sync having completed (the method ends here),
+        // and `restoreSession()` above already ran awaited so
+        // `isAuthenticated` is set — the host can route to the authed
+        // shell without waiting. The splash-hang concern (wrong /
+        // unresponsive server) remains handled inside
+        // [_initialMetaAndDataSync] by a short-timeout permissions probe.
+        // Tracked in [_initialSyncFuture] / [initialSyncFuture] for
+        // observability + tests.
+        _initialSyncFuture = _initialMetaAndDataSync().catchError(
+          (Object e, StackTrace st) {
+            // Deferred + unawaited: nothing downstream awaits this future,
+            // so any error it throws (a closure-pull failure, or the
+            // sync-complete controller being closed mid-boot during
+            // dispose) would otherwise surface as an UNHANDLED async
+            // exception now that we no longer await it. Swallow + log —
+            // the UI is already mounted and the surveyor can re-trigger
+            // via the Home sync pill.
+            debugPrint('FrappeSDK: deferred initial sync failed — $e\n$st');
+          },
+        );
+        unawaited(_initialSyncFuture!);
       }
     }
   }
@@ -568,6 +604,9 @@ class FrappeSDK {
     if (!_initialized) await initialize();
     final response = await _authService!.login(username, password);
     await _permissionService!.saveFromLoginResponse(response['permissions']);
+    // New login = fresh permissions; drop any prior session's 403 skips
+    // so the closure pull re-evaluates every doctype for this user.
+    await _clearPermissionSkipSet();
     final lang = response['language'] as String?;
     if (lang != null && lang.isNotEmpty) {
       await _translationService?.setLocale(lang);
@@ -593,6 +632,9 @@ class FrappeSDK {
     if (!_initialized) await initialize();
     final response = await _authService!.verifyLoginOtp(tmpId, otp);
     await _permissionService!.saveFromLoginResponse(response['permissions']);
+    // New login = fresh permissions; drop any prior session's 403 skips
+    // so the closure pull re-evaluates every doctype for this user.
+    await _clearPermissionSkipSet();
     final lang = response['language'] as String?;
     if (lang != null && lang.isNotEmpty) {
       await _translationService?.setLocale(lang);
@@ -698,6 +740,27 @@ class FrappeSDK {
     // banner so the next login doesn't inherit the previous session's
     // unreachable-server state.
     _syncStateNotifier?.clearLastError();
+
+    // Permissions are per user/session — a permission-skip earned this
+    // session must not suppress a pull for whoever logs in next.
+    await _clearPermissionSkipSet();
+  }
+
+  /// Clears the persistent permission-skip set (closure-dependency
+  /// doctypes that returned a hard 403 during a prior pull). Called on
+  /// genuine login and on logout only — NOT on the every-boot permission
+  /// refresh ([_initialMetaAndDataSync] → [PermissionService.syncFromApi]),
+  /// so the skip set survives cold starts and keeps pruning the 403 storm.
+  /// Best-effort: a failure here is logged, never thrown.
+  Future<void> _clearPermissionSkipSet() async {
+    final db = _database;
+    if (db == null) return;
+    try {
+      await SdkMetaDao(db.rawDatabase).clearSkippedDoctypes();
+    } catch (e, st) {
+      // ignore: avoid_print
+      print('FrappeSDK: clearPermissionSkipSet failed — $e\n$st');
+    }
   }
 
   /// Get Frappe API client (for direct API calls)
@@ -901,6 +964,9 @@ class FrappeSDK {
     final userInfo = await _authService!.fetchUserInfo();
     if (userInfo == null) return;
     await _permissionService!.saveFromLoginResponse(userInfo['permissions']);
+    // New login = fresh permissions; drop any prior session's 403 skips
+    // so the closure pull re-evaluates every doctype for this user.
+    await _clearPermissionSkipSet();
     final lang = userInfo['language'] as String?;
     if (lang != null && lang.isNotEmpty) {
       await _translationService?.setLocale(lang);
@@ -1217,9 +1283,27 @@ class FrappeSDK {
         }
       }
 
+      // Doctypes that returned a hard 403 on a prior pull. Excluded below
+      // so the app stops re-attempting framework/system doctypes the
+      // surveyor cannot read on every sync. `canRead` alone can't catch
+      // these — it returns `true` by default for any doctype with no
+      // cached permission row (which is exactly the framework doctypes),
+      // so they'd otherwise pass the filter and 403 again each sync.
+      final entryPointSet = entryPoints.toSet();
+      final skipped = _database != null
+          ? await SdkMetaDao(_database!.rawDatabase).readSkippedDoctypes()
+          : const <String>{};
+
       final pullable = <String>{};
       for (final doctype in closure.doctypes) {
         if (closure.childDoctypes.contains(doctype)) continue;
+        // GUARDRAIL: never prune a mobile-form / manifest entry point via
+        // the skip set — those are the surveyor's actual forms and must
+        // always be attempted. The skip set only prunes closure-only
+        // (Link-target) dependency doctypes.
+        if (!entryPointSet.contains(doctype) && skipped.contains(doctype)) {
+          continue;
+        }
         if (_permissionService != null &&
             !await _permissionService!.canRead(doctype)) {
           continue;
@@ -1238,7 +1322,11 @@ class FrappeSDK {
       print('FrappeSDK: closure pull failed — $e\n$st');
       return const <String>{};
     } finally {
-      _syncCompleteController?.add(null);
+      // Guard against the controller being closed mid-boot (dispose): now
+      // that the boot sync is unawaited, a StateError here would escape as
+      // an unhandled async error.
+      final ctrl = _syncCompleteController;
+      if (ctrl != null && !ctrl.isClosed) ctrl.add(null);
     }
   }
 
@@ -1266,6 +1354,21 @@ class FrappeSDK {
   @visibleForTesting
   void overrideIsOnlineForTesting(Future<bool> Function() fn) {
     _isOnlineOverrideForTesting = fn;
+  }
+
+  /// Test seam. Reproduces the exact fire-and-forget shape [_doInitialize]
+  /// uses to defer the boot-time initial sync — assigns the result of
+  /// [syncFn] to [_initialSyncFuture] / [initialSyncFuture] and marks it
+  /// `unawaited` — but takes an injectable [syncFn] instead of hard-wiring
+  /// the real (network + platform-channel bound) [_initialMetaAndDataSync].
+  /// This lets tests assert the non-blocking ordering deterministically
+  /// (via a caller-controlled Completer) without needing FlutterSecureStorage
+  /// / AppDatabase.getInstance / ConnectivityWatcher.production test doubles,
+  /// none of which exist in this SDK today.
+  @visibleForTesting
+  void deferInitialSyncForTesting(Future<void> Function() syncFn) {
+    _initialSyncFuture = syncFn();
+    unawaited(_initialSyncFuture!);
   }
 
   /// Re-pulls every helper, master, and reference doctype in the closure from

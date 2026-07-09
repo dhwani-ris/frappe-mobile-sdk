@@ -93,4 +93,78 @@ void main() {
       await db.close();
     },
   );
+
+  group('permission skip-set (403 closure prune)', () {
+    test('readSkippedDoctypes is empty on a fresh install', () async {
+      final db = await _freshDb();
+      final dao = SdkMetaDao(db);
+      final skipped = await dao.readSkippedDoctypes();
+      expect(skipped, isEmpty);
+      await db.close();
+    });
+
+    test('addSkippedDoctype then readSkippedDoctypes returns it', () async {
+      final db = await _freshDb();
+      final dao = SdkMetaDao(db);
+      await dao.addSkippedDoctype('User');
+      final skipped = await dao.readSkippedDoctypes();
+      expect(skipped, {'User'});
+      await db.close();
+    });
+
+    test('addSkippedDoctype accumulates distinct doctypes', () async {
+      final db = await _freshDb();
+      final dao = SdkMetaDao(db);
+      await dao.addSkippedDoctype('User');
+      await dao.addSkippedDoctype('Role');
+      final skipped = await dao.readSkippedDoctypes();
+      expect(skipped, {'User', 'Role'});
+      await db.close();
+    });
+
+    test('addSkippedDoctype is idempotent — no throw, no duplicate row', () async {
+      final db = await _freshDb();
+      final dao = SdkMetaDao(db);
+      await dao.addSkippedDoctype('User');
+      // Second add of the SAME doctype must not throw (INSERT OR IGNORE)
+      // and must not create a second row.
+      await dao.addSkippedDoctype('User');
+      final rows = await db.query('permission_skip_doctypes');
+      expect(rows, hasLength(1));
+      final skipped = await dao.readSkippedDoctypes();
+      expect(skipped, {'User'});
+      await db.close();
+    });
+
+    test('addSkippedDoctype ignores an empty doctype name', () async {
+      final db = await _freshDb();
+      final dao = SdkMetaDao(db);
+      await dao.addSkippedDoctype('');
+      final skipped = await dao.readSkippedDoctypes();
+      expect(skipped, isEmpty);
+      await db.close();
+    });
+
+    test('clearSkippedDoctypes empties a populated skip-set', () async {
+      final db = await _freshDb();
+      final dao = SdkMetaDao(db);
+      await dao.addSkippedDoctype('User');
+      await dao.addSkippedDoctype('Role');
+      expect(await dao.readSkippedDoctypes(), isNotEmpty);
+
+      await dao.clearSkippedDoctypes();
+
+      expect(await dao.readSkippedDoctypes(), isEmpty);
+      await db.close();
+    });
+
+    test('clearSkippedDoctypes on an already-empty set is a no-op', () async {
+      final db = await _freshDb();
+      final dao = SdkMetaDao(db);
+      // Never populated — table not even created yet. Must not throw.
+      await dao.clearSkippedDoctypes();
+      expect(await dao.readSkippedDoctypes(), isEmpty);
+      await db.close();
+    });
+  });
 }

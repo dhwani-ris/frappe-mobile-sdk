@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:sqflite/sqflite.dart';
 
+import '../api/exceptions.dart';
 import '../concurrency/concurrency_pool.dart';
 import '../concurrency/write_queue.dart';
 import '../database/daos/doctype_meta_dao.dart';
@@ -77,6 +78,16 @@ class PullEngine {
   /// exist on the table.
   final SchemaReconcilerFn? schemaReconciler;
 
+  /// Optional. Invoked with the doctype name when a per-doctype pull
+  /// fails specifically with a hard HTTP 403 / PermissionError — i.e. the
+  /// user cannot read this closure-dependency doctype. Wired by
+  /// [SyncEngineBuilder] to persist the doctype into the permission-skip
+  /// set so the closure-pull filter drops it on subsequent syncs. NEVER
+  /// fired for timeouts, SocketException, 5xx, or "no such table", which
+  /// stay retryable. Failure inside the callback is caught and logged —
+  /// it never aborts the pull.
+  final Future<void> Function(String doctype)? onPermissionDenied;
+
   PullEngine({
     required this.db,
     required this.metaDao,
@@ -88,6 +99,7 @@ class PullEngine {
     required this.metaResolver,
     this.writeQueueResolver,
     this.schemaReconciler,
+    this.onPermissionDenied,
   });
 
   /// Returns the set of doctypes that were deferred (skipped because a
@@ -294,13 +306,40 @@ class PullEngine {
       // current progress so the UI can show partial counts; full retry
       // happens on next pull cycle.
       debugPrint('PullEngine.pull($doctype) failed mid-pull — $e\n$st');
+
+      // Reactive permission-skip: a genuine HTTP 403 / PermissionError
+      // means the surveyor cannot read this closure-dependency doctype
+      // (a Frappe framework/system table dragged in only as a Link
+      // target). Record it via [onPermissionDenied] so the closure-pull
+      // filter drops it on future syncs — one 403 instead of one per
+      // sync forever. STRICTLY 403 only: timeouts, SocketException, 5xx,
+      // and "no such table" all fall through untouched so they stay
+      // retryable. Entry-point (manifest) doctypes CAN reach this path,
+      // but the closure-pull filter never excludes manifest doctypes from
+      // a pull, so recording one here is harmless — it is always
+      // re-attempted regardless of the skip-set. Child doctypes never
+      // reach `_runDoctype` (skipped in `run`).
+      final isPermissionDenied = e is FrappeException && e.statusCode == 403;
+      if (isPermissionDenied && onPermissionDenied != null) {
+        try {
+          await onPermissionDenied!(doctype);
+        } catch (skipErr, skipSt) {
+          debugPrint(
+            'PullEngine.pull($doctype): recording permission-skip failed '
+            '— $skipErr\n$skipSt',
+          );
+        }
+      }
+
       notifier.value = notifier.value.updatePerDoctype(
         doctype,
         DoctypeSyncState(
           pulledCount: pulledCount,
           lastPageSize: lastPageSize,
           startedAt: startedAt,
-          note: 'failed: $e',
+          note: isPermissionDenied
+              ? 'skipped: permission denied (403)'
+              : 'failed: $e',
         ),
       );
     }

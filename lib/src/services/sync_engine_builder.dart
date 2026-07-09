@@ -11,6 +11,7 @@ import '../concurrency/write_queue.dart';
 import '../database/app_database.dart';
 import '../database/daos/outbox_dao.dart';
 import '../database/daos/pending_attachment_dao.dart';
+import '../database/daos/sdk_meta_dao.dart';
 import '../database/sqlite_utils.dart';
 import '../database/table_name.dart';
 import '../models/doc_type_meta.dart';
@@ -255,6 +256,12 @@ class SyncEngineBuilder {
       metaResolver: metaResolver,
       writeQueueResolver: writeQueueResolver,
       schemaReconciler: schemaReconciler,
+      // Persist a hard-403 closure-dependency doctype into the
+      // permission-skip set so future closure pulls prune it (see
+      // FrappeSDK._runUpgradeClosurePull) instead of re-attempting a
+      // guaranteed 403 on every sync.
+      onPermissionDenied: (doctype) =>
+          SdkMetaDao(rawDb).addSkippedDoctype(doctype),
     );
 
     Future<void> clearLocalConflict(String doctype, String mobileUuid) async {
