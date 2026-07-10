@@ -602,7 +602,12 @@ class FrappeSDK {
   /// Login with username and password (stateless, returns user info)
   Future<Map<String, dynamic>> login(String username, String password) async {
     if (!_initialized) await initialize();
+    // Capture the device's last-authenticated identity BEFORE _authService
+    // overwrites the auth-token row with the incoming user — see
+    // [_wipeIfUserSwitched] for why the previous identity must be read first.
+    final previousUser = await _persistedDeviceUser();
     final response = await _authService!.login(username, password);
+    await _wipeIfUserSwitched(previousUser, response);
     await _permissionService!.saveFromLoginResponse(response['permissions']);
     // New login = fresh permissions; drop any prior session's 403 skips
     // so the closure pull re-evaluates every doctype for this user.
@@ -630,7 +635,12 @@ class FrappeSDK {
   /// Verify OTP and complete login. Returns same shape as [login].
   Future<Map<String, dynamic>> verifyLoginOtp(String tmpId, String otp) async {
     if (!_initialized) await initialize();
+    // Capture the device's last-authenticated identity BEFORE _authService
+    // overwrites the auth-token row with the incoming user — see
+    // [_wipeIfUserSwitched].
+    final previousUser = await _persistedDeviceUser();
     final response = await _authService!.verifyLoginOtp(tmpId, otp);
+    await _wipeIfUserSwitched(previousUser, response);
     await _permissionService!.saveFromLoginResponse(response['permissions']);
     // New login = fresh permissions; drop any prior session's 403 skips
     // so the closure pull re-evaluates every doctype for this user.
@@ -645,6 +655,82 @@ class FrappeSDK {
     // also gets fresh field definitions / configuration.
     unawaited(_initialMetaAndDataSync());
     return response;
+  }
+
+  /// Reads the device's last-authenticated user identity from persistent
+  /// storage. Prefers the auth-token row (the credential the device last
+  /// held); falls back to the persisted session user. MUST be called BEFORE
+  /// [AuthService.login] / [AuthService.verifyLoginOtp], which overwrite the
+  /// auth-token row with the incoming user. Best-effort — never throws.
+  Future<String?> _persistedDeviceUser() async {
+    final db = _database;
+    if (db != null) {
+      try {
+        final token = await db.authTokenDao.getCurrentToken();
+        final u = token?.user.trim();
+        if (u != null && u.isNotEmpty) return u;
+      } catch (e, st) {
+        // ignore: avoid_print
+        print('FrappeSDK: _persistedDeviceUser token read failed — $e\n$st');
+      }
+    }
+    final sessionName = _sessionUserService?.current?.name.trim();
+    if (sessionName != null && sessionName.isNotEmpty) return sessionName;
+    return null;
+  }
+
+  /// True when a persisted [previous] identity exists AND differs from the
+  /// [incoming] login identity (case-insensitive). A null/empty [previous]
+  /// means a clean slate (fresh install, or a clean logout already wiped),
+  /// so no wipe is needed. A null/empty [incoming] means we cannot tell who
+  /// is logging in — we do NOT wipe, so a legitimate same-user session's
+  /// offline drafts/outbox are never destroyed.
+  bool _isDifferentUser(String? previous, String? incoming) {
+    if (previous == null || previous.isEmpty) return false;
+    if (incoming == null || incoming.isEmpty) return false;
+    return previous.toLowerCase() != incoming.toLowerCase();
+  }
+
+  /// Data-isolation guard for shared devices (SWF-2026-64870). When the
+  /// [response]'s user differs from the device's [previousUser] — a genuine
+  /// account switch, or a prior UNCLEAN session end (token-refresh failure,
+  /// crash, or swallowed logout) that never ran the logout wipe — drop the
+  /// previous user's entire local SQLite mirror BEFORE persisting the new
+  /// session or running any meta/data sync. This resets delta cursors so the
+  /// initial sync does a clean FULL pull and the next user never inherits
+  /// leftover rows / name.
+  ///
+  /// Same-user re-login is a no-op here, so offline drafts + the outbox
+  /// survive a returning surveyor (offline-first contract).
+  Future<void> _wipeIfUserSwitched(
+    String? previousUser,
+    Map<String, dynamic> response,
+  ) async {
+    final incomingUser = (response['user'] as String?)?.trim();
+    if (!_isDifferentUser(previousUser, incomingUser)) return;
+
+    // Queue behind any in-flight push/pull (e.g. a still-running boot sync
+    // from the previous session) so clearAllData doesn't drop a table
+    // mid-write — the same protection logout() uses.
+    await _syncService!.protect(() async {
+      await AppDatabase.clearAllData();
+    });
+
+    // clearAllData drops+recreates every table, including the auth-token row
+    // and the mobile-form doctype-meta flags the just-completed login wrote.
+    // Replay them onto the clean DB (no network) so restoreSession() works
+    // on the next cold start and the closure pull has its mobile-form metas.
+    await _authService!.reapplyLoginResponse(response);
+
+    // In-memory mirrors of the now-dropped DB state (identical teardown to
+    // logout()) so the closure pull doesn't short-circuit against a cache
+    // that still remembers dropped tables.
+    _repository?.invalidateMetaCache();
+    _metaService?.clearCache();
+
+    // A permission-skip earned by the previous user must not suppress the
+    // new user's closure pull.
+    await _clearPermissionSkipSet();
   }
 
   /// Login with API key
@@ -1094,8 +1180,15 @@ class FrappeSDK {
   /// Builds a [SessionUser] from a login/OTP response and persists it.
   /// The login response uses `user` (not `name`) for the username.
   void _setSessionUserFromLoginResponse(Map<String, dynamic> response) {
-    final name = response['user'] as String?;
-    if (name == null || name.isEmpty) return;
+    final name = (response['user'] as String?)?.trim();
+    if (name == null || name.isEmpty) {
+      // The response carries no user identity. Do NOT silently retain the
+      // previously-persisted session user — that is how a partial/new login
+      // could keep showing the prior account's name (SWF-2026-64870). Clear
+      // it so the UI shows nothing rather than a stale different user.
+      unawaited(_sessionUserService?.clear() ?? Future<void>.value());
+      return;
+    }
     _sessionUserService?.set(
       SessionUser(
         name: name,

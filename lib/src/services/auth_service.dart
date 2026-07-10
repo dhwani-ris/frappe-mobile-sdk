@@ -339,6 +339,40 @@ class AuthService {
     _cachedUserInfo = (email: user, fullName: fullName ?? user);
   }
 
+  /// Re-persists an already-completed login/OTP [response] onto the local
+  /// database. No network call — it only replays what [login] /
+  /// [verifyLoginOtp] already fetched.
+  ///
+  /// Used by the SDK's user-switch data-isolation guard: when a *different*
+  /// user logs in on a shared device, the previous user's entire local
+  /// mirror is wiped ([AppDatabase.clearAllData]) AFTER authentication
+  /// succeeds. That wipe also drops the freshly-written auth-token row and
+  /// the mobile-form doctype-meta flags this method rewrites, so
+  /// [restoreSession] works on the next cold start and the closure pull has
+  /// its mobile-form metas on the clean DB.
+  Future<void> reapplyLoginResponse(Map<String, dynamic> response) async {
+    if (_database == null) return;
+    final accessToken = response['access_token'] as String?;
+    final refreshToken = response['refresh_token'] as String?;
+    final user = response['user'] as String?;
+    if (accessToken == null ||
+        accessToken.isEmpty ||
+        refreshToken == null ||
+        refreshToken.isEmpty ||
+        user == null ||
+        user.isEmpty) {
+      return;
+    }
+    await _processLoginResponse(
+      response,
+      accessToken,
+      refreshToken,
+      user,
+      response['full_name'] as String?,
+      response['mobile_form_names'] as List<dynamic>?,
+    );
+  }
+
   /// Authenticates with API key and secret.
   ///
   /// Throws if not initialized or credentials are invalid.
