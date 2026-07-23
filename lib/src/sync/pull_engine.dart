@@ -123,7 +123,21 @@ class PullEngine {
     ClosureResult closure, {
     Set<String>? allowedDoctypes,
   }) async {
-    notifier.value = notifier.value.copyWith(isPulling: true);
+    // Compute the effective pullable set ONCE (post child-exclusion +
+    // `allowedDoctypes` filter) — this is both the work list for this round
+    // and the "of N" denominator emitted on [SyncState.plannedPullDoctypes]
+    // so a bootstrap progress bar has its total before any per-doctype state
+    // lands. Emitted alongside `isPulling: true` in a single copyWith.
+    final planned = <String>{};
+    for (final dt in closure.doctypes) {
+      if (closure.childDoctypes.contains(dt)) continue;
+      if (allowedDoctypes != null && !allowedDoctypes.contains(dt)) continue;
+      planned.add(dt);
+    }
+    notifier.value = notifier.value.copyWith(
+      isPulling: true,
+      plannedPullDoctypes: planned,
+    );
     final deferred = <String>{};
     // Round-local set of doctypes that hard-403'd this pull. Populated by
     // the workers (single-isolate → shared-Set add is safe, same as
@@ -133,9 +147,7 @@ class PullEngine {
     final denied403 = <String>{};
     try {
       final futures = <Future<void>>[];
-      for (final dt in closure.doctypes) {
-        if (closure.childDoctypes.contains(dt)) continue;
-        if (allowedDoctypes != null && !allowedDoctypes.contains(dt)) continue;
+      for (final dt in planned) {
         futures.add(
           pool.submit<void>(() => _runDoctype(dt, closure, deferred, denied403)),
         );

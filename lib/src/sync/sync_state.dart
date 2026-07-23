@@ -1,4 +1,4 @@
-import 'package:flutter/foundation.dart' show mapEquals;
+import 'package:flutter/foundation.dart' show mapEquals, setEquals;
 
 import 'cursor.dart';
 
@@ -136,6 +136,13 @@ class SyncState {
   /// affected.
   final Map<String, String> failedMetaSyncs;
 
+  /// The effective set of (non-child, allowed) doctypes a pull round is
+  /// about to drain. Emitted ONCE by [PullEngine.run] at the start of a
+  /// round so a progress UI has the "of N" denominator before any
+  /// per-doctype [DoctypeSyncState] arrives. Empty until the first round
+  /// starts (and outside any pull it holds the last round's planned set).
+  final Set<String> plannedPullDoctypes;
+
   const SyncState({
     required this.isOnline,
     required this.isInitialSync,
@@ -148,6 +155,7 @@ class SyncState {
     this.lastError,
     this.lastSyncAt,
     this.failedMetaSyncs = const <String, String>{},
+    this.plannedPullDoctypes = const <String>{},
   });
 
   static const SyncState initial = SyncState(
@@ -173,6 +181,7 @@ class SyncState {
     SyncErrorSummary? lastError,
     DateTime? lastSyncAt,
     Map<String, String>? failedMetaSyncs,
+    Set<String>? plannedPullDoctypes,
   }) {
     return SyncState(
       isOnline: isOnline ?? this.isOnline,
@@ -186,6 +195,7 @@ class SyncState {
       lastError: lastError ?? this.lastError,
       lastSyncAt: lastSyncAt ?? this.lastSyncAt,
       failedMetaSyncs: failedMetaSyncs ?? this.failedMetaSyncs,
+      plannedPullDoctypes: plannedPullDoctypes ?? this.plannedPullDoctypes,
     );
   }
 
@@ -209,7 +219,8 @@ class SyncState {
           queue == other.queue &&
           lastError == other.lastError &&
           lastSyncAt == other.lastSyncAt &&
-          mapEquals(failedMetaSyncs, other.failedMetaSyncs);
+          mapEquals(failedMetaSyncs, other.failedMetaSyncs) &&
+          setEquals(plannedPullDoctypes, other.plannedPullDoctypes);
 
   @override
   int get hashCode => Object.hash(
@@ -227,5 +238,6 @@ class SyncState {
     lastError,
     lastSyncAt,
     Object.hashAllUnordered(failedMetaSyncs.keys),
+    Object.hashAllUnordered(plannedPullDoctypes),
   );
 }

@@ -167,4 +167,69 @@ void main() {
     );
     expect(a, isNot(equals(c)));
   });
+
+  // ── plannedPullDoctypes (Fix 4 / SWF-00533) ────────────────────────────────
+  // The "of N" denominator PullEngine.run emits at the start of a pull round.
+  // Additive field on SyncState — must round-trip through copyWith and be
+  // compared BY VALUE (setEquals), or the SyncStateNotifier's equality
+  // short-circuit would swallow the emission and the bootstrap bar would show
+  // "of 0".
+
+  test('plannedPullDoctypes defaults to empty on SyncState.initial', () {
+    const s = SyncState.initial;
+    expect(s.plannedPullDoctypes, isEmpty);
+  });
+
+  test('copyWith sets plannedPullDoctypes and leaves the original unchanged',
+      () {
+    const s = SyncState.initial;
+    final s2 = s.copyWith(plannedPullDoctypes: {'Member', 'State'});
+    expect(s2.plannedPullDoctypes, {'Member', 'State'});
+    expect(s.plannedPullDoctypes, isEmpty, reason: 'original unchanged');
+  });
+
+  test('copyWith without plannedPullDoctypes preserves the existing set', () {
+    final s = SyncState.initial.copyWith(plannedPullDoctypes: {'Member'});
+    // A later copyWith that touches an unrelated flag must NOT drop the set.
+    final s2 = s.copyWith(isPulling: true);
+    expect(s2.plannedPullDoctypes, {'Member'});
+  });
+
+  test('SyncState equality treats plannedPullDoctypes by value (setEquals)',
+      () {
+    final a = SyncState.initial.copyWith(
+      plannedPullDoctypes: {'Member', 'State', 'District'},
+    );
+    // Same members, different insertion order → still equal by value.
+    final b = SyncState.initial.copyWith(
+      plannedPullDoctypes: {'District', 'Member', 'State'},
+    );
+    expect(a, equals(b));
+    expect(a.hashCode, b.hashCode, reason: 'unordered hash — order-independent');
+
+    final c = a.copyWith(plannedPullDoctypes: {'Member', 'State'});
+    expect(a, isNot(equals(c)), reason: 'a different set is a distinct state');
+  });
+
+  test(
+    'notifier short-circuits an identical plannedPullDoctypes re-assignment',
+    () async {
+      final n = SyncStateNotifier();
+      n.value = n.value.copyWith(plannedPullDoctypes: {'Member', 'State'});
+      final seen = <SyncState>[];
+      final sub = n.stream.listen(seen.add);
+      // Re-assign a value-equal set (new Set instance, same members) → the
+      // ValueNotifier-style equality gate must suppress it.
+      n.value = n.value.copyWith(plannedPullDoctypes: {'State', 'Member'});
+      await Future<void>.delayed(Duration.zero);
+      expect(seen, isEmpty, reason: 'value-equal planned set must not emit');
+      // A genuinely different set still fires.
+      n.value = n.value.copyWith(plannedPullDoctypes: {'Member'});
+      await Future<void>.delayed(Duration.zero);
+      expect(seen.length, 1);
+      expect(seen.last.plannedPullDoctypes, {'Member'});
+      await sub.cancel();
+      await n.close();
+    },
+  );
 }

@@ -599,6 +599,26 @@ class FrappeSDK {
   Future<OfflineMode> resolveBootModeForTesting(OfflineMode persisted) =>
       _resolveBootMode(persisted);
 
+  /// Fires the deferred boot/login meta + data sync and TRACKS it in
+  /// [_initialSyncFuture] (surfaced via [initialSyncFuture]) so a caller can
+  /// `await (sdk.initialSyncFuture ?? sdk.runClosurePull())` and observe the
+  /// login-fired pull instead of starting a SECOND concurrent one — a second
+  /// pull under the sync mutex roughly doubles first-sync wall time.
+  ///
+  /// Uses the SAME `.catchError` swallow as the restored-session path in
+  /// [_doInitialize]: the future is unawaited, so any error it throws (a
+  /// closure-pull failure, or the sync-complete controller being closed
+  /// mid-boot during dispose) would otherwise surface as an UNHANDLED async
+  /// exception. The UI observes progress/failures via [syncStateNotifier].
+  void _fireInitialSyncTracked() {
+    _initialSyncFuture = _initialMetaAndDataSync().catchError(
+      (Object e, StackTrace st) {
+        debugPrint('FrappeSDK: login-fired initial sync failed — $e\n$st');
+      },
+    );
+    unawaited(_initialSyncFuture!);
+  }
+
   /// Login with username and password (stateless, returns user info)
   Future<Map<String, dynamic>> login(String username, String password) async {
     if (!_initialized) await initialize();
@@ -622,7 +642,9 @@ class FrappeSDK {
     // offline_enabled. Online mode still needs accurate doctype meta for
     // form rendering, list view fields, and Link pickers. The closure pull
     // inside _initialMetaAndDataSync short-circuits when offline is false.
-    unawaited(_initialMetaAndDataSync());
+    // Tracked in [_initialSyncFuture] so the app bootstrap can await THIS
+    // pull rather than starting a second concurrent one.
+    _fireInitialSyncTracked();
     return response;
   }
 
@@ -652,8 +674,9 @@ class FrappeSDK {
     _setSessionUserFromLoginResponse(response);
     await _persistOfflineFlagFromLogin(response);
     // See login() — full meta sync runs unconditionally so online mode
-    // also gets fresh field definitions / configuration.
-    unawaited(_initialMetaAndDataSync());
+    // also gets fresh field definitions / configuration. Tracked in
+    // [_initialSyncFuture] so the bootstrap awaits it (no double-pull).
+    _fireInitialSyncTracked();
     return response;
   }
 
@@ -1059,8 +1082,9 @@ class FrappeSDK {
     }
     await _persistOfflineFlagFromLogin(userInfo);
     // See login() — full meta sync runs unconditionally so online mode
-    // also gets fresh field definitions / configuration.
-    unawaited(_initialMetaAndDataSync());
+    // also gets fresh field definitions / configuration. Tracked in
+    // [_initialSyncFuture] so the bootstrap awaits it (no double-pull).
+    _fireInitialSyncTracked();
     // mobile_auth.me returns a Frappe user document — 'name' is the user email.
     final name = userInfo['name'] as String?;
     if (name != null && name.isNotEmpty) {
@@ -1438,6 +1462,23 @@ class FrappeSDK {
     if (doctypes.isEmpty) return;
     await _syncService?.pullSyncMany(doctypes: doctypes.toList());
   }
+
+  /// Public, awaitable entrypoint to the closure pull that the login paths
+  /// fire in the background. Delegates to the SAME [_runUpgradeClosurePull]
+  /// body, so a bootstrap screen can
+  /// `await (sdk.initialSyncFuture ?? sdk.runClosurePull())`:
+  /// - if a login-fired sync is in flight, [initialSyncFuture] is awaited and
+  ///   NO second pull starts (avoids a mutex double-pull that would ~2x
+  ///   first-sync time);
+  /// - otherwise (e.g. Retry, or a path that never fired one) a fresh pull
+  ///   starts here, resuming cheaply from the per-page keyset cursors.
+  ///
+  /// Do NOT substitute [forcePullAll] for this: that helper EXCLUDES entry
+  /// points and CLEARS cursors (a from-scratch master/helper refresh), which
+  /// is the wrong shape for a first-run bootstrap that must pull Member +
+  /// geo masters WITH resume. Returns the SIG-2 deferred set (push active
+  /// during pull); never throws.
+  Future<Set<String>> runClosurePull() => _runUpgradeClosurePull();
 
   @visibleForTesting
   Future<Set<String>> runUpgradeClosurePullForTesting() =>

@@ -1,7 +1,9 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart' show setEquals;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:frappe_mobile_sdk/src/sync/pull_engine.dart';
+import 'package:frappe_mobile_sdk/src/sync/sync_state.dart';
 import 'package:frappe_mobile_sdk/src/sync/sync_state_notifier.dart';
 import 'package:frappe_mobile_sdk/src/sync/pull_page_fetcher.dart';
 import 'package:frappe_mobile_sdk/src/concurrency/concurrency_pool.dart';
@@ -1134,5 +1136,111 @@ void main() {
       expect(done['name'], 'C-05');
     },
     timeout: const Timeout(Duration(seconds: 15)),
+  );
+
+  // ── Fix 4 / SWF-00533: plannedPullDoctypes = the "of N" denominator ────────
+  test(
+    'run emits plannedPullDoctypes ONCE with the effective pullable set '
+    '(children + allowedDoctypes-excluded removed) matching the doctypes '
+    'actually pulled',
+    () async {
+      // A plain second parent alongside Customer so `planned` has >1 member.
+      final orderMeta = DocTypeMeta(name: 'Order', fields: [f('ref', 'Data')]);
+      for (final s in buildParentSchemaDDL(orderMeta, tableName: 'docs__order')) {
+        await db.execute(s);
+      }
+      await db.insert('doctype_meta', {
+        'doctype': 'Order',
+        'metaJson': '{}',
+        'isMobileForm': 0,
+        'table_name': 'docs__order',
+      });
+
+      final fetched = <String>[];
+      final fetcher = PullPageFetcher(
+        listHttp: (doctype, params) async {
+          fetched.add(doctype);
+          return const <Map<String, dynamic>>[]; // empty page → drains at once
+        },
+      );
+
+      // Universe of four: Customer + Order pull; 'Order Item' is a child (rides
+      // its parent → excluded); 'Lead' is not in allowedDoctypes (excluded).
+      const closure = ClosureResult(
+        doctypes: ['Customer', 'Order', 'Order Item', 'Lead'],
+        graph: {
+          'Customer':
+              DepGraph(doctype: 'Customer', tier: 0, outgoing: [], incoming: []),
+          'Order':
+              DepGraph(doctype: 'Order', tier: 0, outgoing: [], incoming: []),
+          'Order Item': DepGraph(
+              doctype: 'Order Item', tier: 1, outgoing: [], incoming: []),
+          'Lead': DepGraph(doctype: 'Lead', tier: 0, outgoing: [], incoming: []),
+        },
+        childDoctypes: {'Order Item'},
+        warnings: [],
+      );
+
+      final notifier = SyncStateNotifier();
+      final emissions = <SyncState>[];
+      final sub = notifier.stream.listen(emissions.add);
+
+      final engine = PullEngine(
+        db: db,
+        metaDao: metaDao,
+        outboxDao: OutboxDao(db),
+        pool: ConcurrencyPool(maxConcurrent: 2),
+        fetcher: fetcher,
+        pageSize: 500,
+        notifier: notifier,
+        metaResolver: (dt) async => dt == 'Order'
+            ? orderMeta
+            : DocTypeMeta(name: dt, fields: [f('customer_name', 'Data')]),
+      );
+
+      // 'Order Item' would be excluded by the child rule anyway; also drop
+      // 'Lead' via allowedDoctypes so BOTH exclusion paths are exercised.
+      await engine.run(
+        closure,
+        allowedDoctypes: {'Customer', 'Order', 'Order Item'},
+      );
+      await sub.cancel();
+
+      const expected = <String>{'Customer', 'Order'};
+
+      // (i) Final planned set = effective pullable set (post exclusions).
+      expect(notifier.value.plannedPullDoctypes, unorderedEquals(expected));
+
+      // (ii) It matches the doctypes actually pulled (fetcher was driven for
+      // exactly Customer + Order — never the child or the disallowed Lead).
+      expect(fetched.toSet(), unorderedEquals(expected));
+
+      // (iii) The FIRST stream event already carries the full denominator, so
+      // a progress bar has "of N" before any per-doctype row lands.
+      expect(
+        emissions.first.plannedPullDoctypes,
+        unorderedEquals(expected),
+        reason: 'planned emitted up front, alongside isPulling:true',
+      );
+      expect(emissions.first.isPulling, isTrue);
+
+      // (iv) plannedPullDoctypes was assigned exactly ONCE across the round —
+      // it transitions empty → {expected} and never changes again (the final
+      // isPulling:false copyWith must preserve it).
+      var changes = 0;
+      Set<String> prev = const <String>{};
+      for (final e in emissions) {
+        if (!setEquals(e.plannedPullDoctypes, prev)) {
+          changes++;
+          prev = e.plannedPullDoctypes;
+        }
+      }
+      expect(
+        changes,
+        1,
+        reason: 'plannedPullDoctypes emitted once; later copyWiths preserve it',
+      );
+      expect(prev, unorderedEquals(expected));
+    },
   );
 }
