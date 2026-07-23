@@ -131,34 +131,50 @@ class OfflineRepository {
       final tableName = normalizeDoctypeTableName(doctype);
       if (_ensuredTables.contains(tableName)) continue;
 
-      final exists = await sqliteTableExists(db, tableName);
-      final isChild = childDoctypes.contains(doctype) || meta.isTable;
-      if (!exists) {
-        final ddls = isChild
-            ? buildChildSchemaDDL(meta, tableName: tableName)
-            : buildParentSchemaDDL(meta, tableName: tableName);
-        await db.transaction((txn) async {
-          for (final stmt in ddls) {
-            await txn.execute(stmt);
+      // Fault-isolate each doctype's schema creation. Without this, ONE
+      // bad DDL (e.g. a closure-dragged framework doctype whose generated
+      // CREATE throws) aborted the entire loop, so every doctype after it
+      // got no table — the observed `no such table: docs__report /
+      // docs__country / docs__dashboard_chart` collateral. On failure we
+      // log + continue WITHOUT adding to `_ensuredTables`, so the doctype
+      // is re-attempted on the next call.
+      try {
+        final exists = await sqliteTableExists(db, tableName);
+        final isChild = childDoctypes.contains(doctype) || meta.isTable;
+        if (!exists) {
+          final ddls = isChild
+              ? buildChildSchemaDDL(meta, tableName: tableName)
+              : buildParentSchemaDDL(meta, tableName: tableName);
+          await db.transaction((txn) async {
+            for (final stmt in ddls) {
+              await txn.execute(stmt);
+            }
+          });
+          try {
+            await _database.doctypeMetaDao.setTableName(doctype, tableName);
+          } catch (e, st) {
+            // setTableName may not be available on older schemas; harmless.
+            developer.log(
+              'OfflineRepository.ensureSchemaForClosure: setTableName($doctype) skipped — $e\n$st',
+              name: 'OfflineRepository',
+            );
           }
-        });
-        try {
-          await _database.doctypeMetaDao.setTableName(doctype, tableName);
-        } catch (e, st) {
-          // setTableName may not be available on older schemas; harmless.
-          developer.log(
-            'OfflineRepository.ensureSchemaForClosure: setTableName($doctype) skipped — $e\n$st',
-            name: 'OfflineRepository',
-          );
+        } else if (!isChild) {
+          // Heal an existing parent table whose meta has evolved (e.g. a new
+          // title_field whose `__norm` column never got ALTER-added). Child
+          // tables don't carry `__norm` columns, so skip them here.
+          await _reconcileParentTableSchema(doctype, tableName, meta);
         }
-      } else if (!isChild) {
-        // Heal an existing parent table whose meta has evolved (e.g. a new
-        // title_field whose `__norm` column never got ALTER-added). Child
-        // tables don't carry `__norm` columns, so skip them here.
-        await _reconcileParentTableSchema(doctype, tableName, meta);
+        _ensuredTables.add(tableName);
+        _metaCache[doctype] = meta;
+      } catch (e, st) {
+        developer.log(
+          'OfflineRepository.ensureSchemaForClosure: DDL failed for '
+          '$doctype — skipping (retried next call) — $e\n$st',
+          name: 'OfflineRepository',
+        );
+        continue;
       }
-      _ensuredTables.add(tableName);
-      _metaCache[doctype] = meta;
     }
 
     // Build the parent → fieldname → child-meta registry. We do this in

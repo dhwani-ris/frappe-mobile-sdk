@@ -105,10 +105,14 @@ void main() {
       addTearDown(() => built.db.close());
 
       // Wrongly seed the skip-set with the ENTRY-POINT doctype. Production
-      // code should never do this itself (onPermissionDenied is only wired
-      // for closure-dependency pulls), but the closure filter must be
-      // defensive regardless of how the skip-set got populated.
-      await SdkMetaDao(built.db.rawDatabase).addSkippedDoctype('Sales Order');
+      // code should never do this itself (the skip-set is only ever
+      // populated for closure-dependency pulls), but the closure filter must
+      // be defensive regardless of how the skip-set got populated. Stamp it
+      // NOW so it is an ACTIVE skip (within the revisit TTL).
+      await SdkMetaDao(built.db.rawDatabase).addSkippedDoctype(
+        'Sales Order',
+        deniedAtMs: DateTime.now().toUtc().millisecondsSinceEpoch,
+      );
 
       await built.sdk.runUpgradeClosurePullForTesting();
 
@@ -130,7 +134,11 @@ void main() {
 
       // 'Customer' is a Link-target dependency, never an entry point —
       // this is exactly the kind of doctype the skip-set exists to prune.
-      await SdkMetaDao(built.db.rawDatabase).addSkippedDoctype('Customer');
+      // Stamp it NOW so it is an ACTIVE skip (within the revisit TTL).
+      await SdkMetaDao(built.db.rawDatabase).addSkippedDoctype(
+        'Customer',
+        deniedAtMs: DateTime.now().toUtc().millisecondsSinceEpoch,
+      );
 
       await built.sdk.runUpgradeClosurePullForTesting();
 

@@ -1383,8 +1383,12 @@ class FrappeSDK {
       // cached permission row (which is exactly the framework doctypes),
       // so they'd otherwise pass the filter and 403 again each sync.
       final entryPointSet = entryPoints.toSet();
+      // Only ACTIVE skips (within their revisit TTL) are excluded — an
+      // expired skip falls out so a transient-403 doctype gets retried.
       final skipped = _database != null
-          ? await SdkMetaDao(_database!.rawDatabase).readSkippedDoctypes()
+          ? await SdkMetaDao(_database!.rawDatabase).readActiveSkippedDoctypes(
+              nowMs: DateTime.now().toUtc().millisecondsSinceEpoch,
+            )
           : const <String>{};
 
       final pullable = <String>{};

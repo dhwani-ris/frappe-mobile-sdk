@@ -1,12 +1,16 @@
-// Regression coverage for the reactive permission-skip closure prune.
+// Regression coverage for the reactive permission-skip closure prune,
+// reworked for the ROUND-based callback API introduced by Fix 2.
 //
-// `PullEngine._runDoctype` must invoke `onPermissionDenied` ONLY when a
-// per-doctype pull fails with a genuine HTTP 403 (`FrappeException` whose
-// `statusCode == 403`). Every other failure mode — 5xx, timeout,
-// SocketException, or a sqflite "no such table" DatabaseException — must
-// stay silently retryable: the callback must NOT fire for those, otherwise
-// a transient outage would get permanently pruned from future closure
-// pulls exactly like a real permission denial.
+// `PullEngine.run` now defers the skip/auth-event decision to the END of a
+// pull round: it collects every doctype that hard-403'd (`FrappeException`
+// whose `statusCode == 403`) into a round-local set and fires
+// `onPermissionDeniedRound(Set<String>)` exactly ONCE per `run()`. Every
+// other failure mode — 5xx, timeout, SocketException, a sqflite "no such
+// table" DatabaseException, or a plain Exception — must leave that set
+// EMPTY: the doctype stays silently retryable, exactly as before.
+//
+// A doctype that FULLY drains with a 200 fires `onDoctypePullOk(doctype)`
+// so a previously-denied-then-granted doctype self-heals immediately.
 
 import 'dart:async';
 import 'dart:io';
@@ -93,9 +97,14 @@ void main() {
         warnings: [],
       );
 
+  /// Builds an engine that records:
+  ///  - [rounds]: every `denied403` Set handed to `onPermissionDeniedRound`
+  ///    (fired exactly once per `run()`).
+  ///  - [okCalls]: every doctype handed to `onDoctypePullOk`.
   PullEngine buildEngine({
     required PullPageFetcher fetcher,
-    required List<String> recordedSkips,
+    required List<Set<String>> rounds,
+    List<String>? okCalls,
   }) {
     return PullEngine(
       db: db,
@@ -107,29 +116,35 @@ void main() {
       notifier: SyncStateNotifier(),
       metaResolver: (dt) async =>
           DocTypeMeta(name: dt, fields: [f('customer_name', 'Data')]),
-      onPermissionDenied: (doctype) async {
-        recordedSkips.add(doctype);
+      onPermissionDeniedRound: (denied) async {
+        rounds.add(Set<String>.from(denied));
       },
+      onDoctypePullOk: (dt) async => okCalls?.add(dt),
     );
   }
 
   test(
-    '403 (FrappeException.statusCode == 403) records the doctype via onPermissionDenied',
+    '403 (FrappeException.statusCode == 403) surfaces the doctype in the round set',
     () async {
-      final recordedSkips = <String>[];
+      final rounds = <Set<String>>[];
       final fetcher = PullPageFetcher(
         listHttp: (doctype, params) async {
           throw FrappeException('Not permitted', 403);
         },
       );
-      final engine = buildEngine(fetcher: fetcher, recordedSkips: recordedSkips);
+      final engine = buildEngine(fetcher: fetcher, rounds: rounds);
 
       await engine.run(customerClosure());
 
       expect(
-        recordedSkips,
-        ['Customer'],
-        reason: 'a genuine 403 must be recorded exactly once',
+        rounds,
+        hasLength(1),
+        reason: 'onPermissionDeniedRound fires exactly once per run()',
+      );
+      expect(
+        rounds.single,
+        {'Customer'},
+        reason: 'a genuine 403 must appear in the round denied-set',
       );
       expect(
         await metaDao.getLastOkCursor('Customer'),
@@ -140,77 +155,97 @@ void main() {
   );
 
   test(
-    'ApiException with statusCode 403 also records — subclass of FrappeException',
+    'ApiException with statusCode 403 also surfaces — subclass of FrappeException',
     () async {
-      final recordedSkips = <String>[];
+      final rounds = <Set<String>>[];
       final fetcher = PullPageFetcher(
         listHttp: (doctype, params) async {
           throw ApiException('Forbidden', 403, {'detail': 'no read perm'});
         },
       );
-      final engine = buildEngine(fetcher: fetcher, recordedSkips: recordedSkips);
+      final engine = buildEngine(fetcher: fetcher, rounds: rounds);
 
       await engine.run(customerClosure());
 
-      expect(recordedSkips, ['Customer']);
+      expect(rounds.single, {'Customer'});
     },
   );
 
   test(
-    '500 (server error) does NOT record — must stay retryable',
+    'AuthException with statusCode 403 also surfaces — real REST-layer 403',
     () async {
-      final recordedSkips = <String>[];
+      // A real 403 from RestHelper is an AuthException (extends
+      // FrappeException). The classifier is `e is FrappeException &&
+      // statusCode == 403`, so this must be counted too.
+      final rounds = <Set<String>>[];
+      final fetcher = PullPageFetcher(
+        listHttp: (doctype, params) async {
+          throw AuthException('You do not have read permission', 403);
+        },
+      );
+      final engine = buildEngine(fetcher: fetcher, rounds: rounds);
+
+      await engine.run(customerClosure());
+
+      expect(rounds.single, {'Customer'});
+    },
+  );
+
+  test(
+    '500 (server error) leaves the round set empty — must stay retryable',
+    () async {
+      final rounds = <Set<String>>[];
       final fetcher = PullPageFetcher(
         listHttp: (doctype, params) async {
           throw ApiException('Internal Server Error', 500);
         },
       );
-      final engine = buildEngine(fetcher: fetcher, recordedSkips: recordedSkips);
+      final engine = buildEngine(fetcher: fetcher, rounds: rounds);
 
       await engine.run(customerClosure());
 
-      expect(recordedSkips, isEmpty);
+      expect(rounds.single, isEmpty);
     },
   );
 
   test(
-    'a timeout (TimeoutException) does NOT record — must stay retryable',
+    'a timeout (TimeoutException) leaves the round set empty — retryable',
     () async {
-      final recordedSkips = <String>[];
+      final rounds = <Set<String>>[];
       final fetcher = PullPageFetcher(
         listHttp: (doctype, params) async {
           throw TimeoutException('request timed out');
         },
       );
-      final engine = buildEngine(fetcher: fetcher, recordedSkips: recordedSkips);
+      final engine = buildEngine(fetcher: fetcher, rounds: rounds);
 
       await engine.run(customerClosure());
 
-      expect(recordedSkips, isEmpty);
+      expect(rounds.single, isEmpty);
     },
   );
 
   test(
-    'a SocketException does NOT record — must stay retryable',
+    'a SocketException leaves the round set empty — retryable',
     () async {
-      final recordedSkips = <String>[];
+      final rounds = <Set<String>>[];
       final fetcher = PullPageFetcher(
         listHttp: (doctype, params) async {
           throw const SocketException('Connection refused');
         },
       );
-      final engine = buildEngine(fetcher: fetcher, recordedSkips: recordedSkips);
+      final engine = buildEngine(fetcher: fetcher, rounds: rounds);
 
       await engine.run(customerClosure());
 
-      expect(recordedSkips, isEmpty);
+      expect(rounds.single, isEmpty);
     },
   );
 
   test(
-    'a "no such table" DatabaseException does NOT record — must stay retryable',
+    'a "no such table" DatabaseException leaves the round set empty — retryable',
     () async {
-      final recordedSkips = <String>[];
+      final rounds = <Set<String>>[];
       final fetcher = PullPageFetcher(
         listHttp: (doctype, params) async {
           throw SqfliteDatabaseException(
@@ -219,33 +254,62 @@ void main() {
           );
         },
       );
-      final engine = buildEngine(fetcher: fetcher, recordedSkips: recordedSkips);
+      final engine = buildEngine(fetcher: fetcher, rounds: rounds);
 
       await engine.run(customerClosure());
 
-      expect(recordedSkips, isEmpty);
+      expect(rounds.single, isEmpty);
     },
   );
 
   test(
-    'a plain non-FrappeException with no statusCode does NOT record',
+    'a plain non-FrappeException with no statusCode leaves the round set empty',
     () async {
-      final recordedSkips = <String>[];
+      final rounds = <Set<String>>[];
       final fetcher = PullPageFetcher(
         listHttp: (doctype, params) async {
           throw Exception('boom');
         },
       );
-      final engine = buildEngine(fetcher: fetcher, recordedSkips: recordedSkips);
+      final engine = buildEngine(fetcher: fetcher, rounds: rounds);
 
       await engine.run(customerClosure());
 
-      expect(recordedSkips, isEmpty);
+      expect(rounds.single, isEmpty);
     },
   );
 
   test(
-    'onPermissionDenied throwing does not crash the pull (caught + logged)',
+    'a full 200 drain fires onDoctypePullOk and reports an empty round set',
+    () async {
+      final rounds = <Set<String>>[];
+      final okCalls = <String>[];
+      final fetcher = PullPageFetcher(
+        listHttp: (doctype, params) async => const <Map<String, dynamic>>[],
+      );
+      final engine = buildEngine(
+        fetcher: fetcher,
+        rounds: rounds,
+        okCalls: okCalls,
+      );
+
+      await engine.run(customerClosure());
+
+      expect(
+        okCalls,
+        ['Customer'],
+        reason: 'a fully-drained (200) doctype self-heals via onDoctypePullOk',
+      );
+      expect(
+        rounds.single,
+        isEmpty,
+        reason: 'no 403 this round → the denied-set is empty',
+      );
+    },
+  );
+
+  test(
+    'onPermissionDeniedRound throwing does not crash the pull (caught + logged)',
     () async {
       final fetcher = PullPageFetcher(
         listHttp: (doctype, params) async {
@@ -262,7 +326,7 @@ void main() {
         notifier: SyncStateNotifier(),
         metaResolver: (dt) async =>
             DocTypeMeta(name: dt, fields: [f('customer_name', 'Data')]),
-        onPermissionDenied: (doctype) async {
+        onPermissionDeniedRound: (denied) async {
           throw Exception('DB write failed');
         },
       );
@@ -273,7 +337,7 @@ void main() {
   );
 
   test(
-    'no onPermissionDenied wired (null) — a 403 does not crash the pull',
+    'no onPermissionDeniedRound wired (null) — a 403 does not crash the pull',
     () async {
       final fetcher = PullPageFetcher(
         listHttp: (doctype, params) async {

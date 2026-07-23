@@ -38,6 +38,25 @@ class DoctypeMetaDao {
     return maps.map((map) => DoctypeMetaEntity.fromDb(map)).toList();
   }
 
+  /// Doctypes that MUST NOT be permission-skip-recorded on a 403 — the
+  /// "protected set". A doctype is protected when it is a mobile-form
+  /// entry point (`isMobileForm = 1`) OR has ever applied ≥1 row on this
+  /// device (`last_ok_cursor IS NOT NULL` — the cursor only advances after
+  /// a page applied rows, so a 0-row drain never writes one). Used by the
+  /// storm-breaker: any 403 on a protected doctype is treated as a
+  /// session-level auth event, never a permanent skip. See
+  /// `SyncEngineBuilder.onPermissionDeniedRound`.
+  Future<Set<String>> protectedPullDoctypes() async {
+    final rows = await _database.rawQuery(
+      'SELECT doctype FROM doctype_meta '
+      'WHERE isMobileForm = 1 OR last_ok_cursor IS NOT NULL',
+    );
+    return rows
+        .map((r) => r['doctype'] as String?)
+        .whereType<String>()
+        .toSet();
+  }
+
   Future<List<DoctypeMetaEntity>> findMobileFormDoctypes() async {
     final maps = await _database.query(
       'doctype_meta',

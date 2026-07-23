@@ -130,7 +130,10 @@ void main() {
       final fresh = await AppDatabase.inMemoryDatabase();
       final freshSchema = await tableSchemas(fresh.rawDatabase);
 
-      // Path 2: build v2, upgrade to v3.
+      // Path 2: build v2, upgrade to v4 (current AppDatabase._version).
+      // Upgrading to the SAME version the fresh install opens at keeps the
+      // equivalence honest and exercises the v4 branch (a no-op DROP here
+      // since this v2 seed never had permission_skip_doctypes).
       final v2 = await openDatabase(
         dbPath,
         version: 2,
@@ -140,7 +143,7 @@ void main() {
       await v2.close();
       final upgraded = await openDatabase(
         dbPath,
-        version: 3,
+        version: 4,
         onUpgrade: AppDatabaseTestSeam.runOnUpgrade,
         singleInstance: false,
       );

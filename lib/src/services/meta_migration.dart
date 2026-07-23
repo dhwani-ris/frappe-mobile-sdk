@@ -63,7 +63,7 @@ class MetaMigration {
         final exists = await _columnExists(txn, tableName, af.name);
         if (exists) continue;
         await txn.execute(
-          'ALTER TABLE $tableName ADD COLUMN ${af.name} ${af.sqlType}',
+          'ALTER TABLE $tableName ADD COLUMN "${af.name}" ${af.sqlType}',
         );
         debugPrint(
           'MetaMigration[$tableName] added column ${af.name} ${af.sqlType}',
@@ -74,7 +74,7 @@ class MetaMigration {
         final exists = await _columnExists(txn, tableName, '${ln}__is_local');
         if (!exists) {
           await txn.execute(
-            'ALTER TABLE $tableName ADD COLUMN ${ln}__is_local INTEGER',
+            'ALTER TABLE $tableName ADD COLUMN "${ln}__is_local" INTEGER',
           );
           debugPrint('MetaMigration[$tableName] added ${ln}__is_local');
         }
@@ -84,7 +84,7 @@ class MetaMigration {
         final exists = await _columnExists(txn, tableName, '${nm}__norm');
         if (!exists) {
           await txn.execute(
-            'ALTER TABLE $tableName ADD COLUMN ${nm}__norm TEXT',
+            'ALTER TABLE $tableName ADD COLUMN "${nm}__norm" TEXT',
           );
           debugPrint('MetaMigration[$tableName] added ${nm}__norm');
         }

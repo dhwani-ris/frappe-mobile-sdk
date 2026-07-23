@@ -154,14 +154,14 @@ class FilterParser {
       case '=':
       case '!=':
         if (isNumeric) {
-          return ParsedQuery(sql: 'IFNULL($col, 0) $op ?', params: [value]);
+          return ParsedQuery(sql: 'IFNULL("$col", 0) $op ?', params: [value]);
         }
-        return ParsedQuery(sql: "IFNULL($col, '') $op ?", params: [value]);
+        return ParsedQuery(sql: "IFNULL(\"$col\", '') $op ?", params: [value]);
       case '<':
       case '<=':
       case '>':
       case '>=':
-        return ParsedQuery(sql: '$col $op ?', params: [value]);
+        return ParsedQuery(sql: '"$col" $op ?', params: [value]);
       case 'in':
       case 'not in':
         if (value is! List) {
@@ -173,7 +173,7 @@ class FilterParser {
         final placeholders = List.filled(value.length, '?').join(', ');
         final sqlOp = op == 'in' ? 'IN' : 'NOT IN';
         return ParsedQuery(
-          sql: '$col $sqlOp ($placeholders)',
+          sql: '"$col" $sqlOp ($placeholders)',
           params: value.cast<Object?>(),
         );
       case 'like':
@@ -181,11 +181,14 @@ class FilterParser {
         final sqlOp = op == 'like' ? 'LIKE' : 'NOT LIKE';
         if (normFields.contains(col)) {
           return ParsedQuery(
-            sql: "IFNULL(${col}__norm, '') $sqlOp ?",
+            sql: "IFNULL(\"${col}__norm\", '') $sqlOp ?",
             params: [normalizeForSearch(value?.toString())],
           );
         }
-        return ParsedQuery(sql: "IFNULL($col, '') $sqlOp ?", params: [value]);
+        return ParsedQuery(
+          sql: "IFNULL(\"$col\", '') $sqlOp ?",
+          params: [value],
+        );
       case 'between':
         if (value is! List || value.length != 2) {
           throw const FilterParseError('"between" needs a 2-element list');
@@ -201,7 +204,7 @@ class FilterParser {
           type: type,
         );
         return ParsedQuery(
-          sql: '$col >= ? AND $col <= ?',
+          sql: '"$col" >= ? AND "$col" <= ?',
           params: [start, end],
         );
       case 'timespan':
@@ -210,18 +213,24 @@ class FilterParser {
         }
         final range = FrappeTimespan.resolve(value.toString());
         return ParsedQuery(
-          sql: '$col >= ? AND $col <= ?',
+          sql: '"$col" >= ? AND "$col" <= ?',
           params: [range.start, range.end],
         );
       case 'is':
         if (value == 'set') {
-          return ParsedQuery(sql: "IFNULL($col, '') != ''", params: const []);
+          return ParsedQuery(
+            sql: "IFNULL(\"$col\", '') != ''",
+            params: const [],
+          );
         }
         if (value == 'not set') {
-          return ParsedQuery(sql: "IFNULL($col, '') = ''", params: const []);
+          return ParsedQuery(
+            sql: "IFNULL(\"$col\", '') = ''",
+            params: const [],
+          );
         }
         if (value == null) {
-          return ParsedQuery(sql: '$col IS NULL', params: const []);
+          return ParsedQuery(sql: '"$col" IS NULL', params: const []);
         }
         throw FilterParseError(
           'Unsupported "is" value: $value '
@@ -229,7 +238,7 @@ class FilterParser {
         );
       case 'is not':
         if (value == null) {
-          return ParsedQuery(sql: '$col IS NOT NULL', params: const []);
+          return ParsedQuery(sql: '"$col" IS NOT NULL', params: const []);
         }
         throw FilterParseError(
           'Unsupported "is not" value: $value (expected null)',
@@ -281,7 +290,7 @@ class FilterParser {
       if (dir != 'ASC' && dir != 'DESC') {
         throw FilterParseError('ORDER BY direction must be ASC or DESC: $dir');
       }
-      validated.add('$col $dir');
+      validated.add('"$col" $dir');
     }
     return validated.join(', ');
   }

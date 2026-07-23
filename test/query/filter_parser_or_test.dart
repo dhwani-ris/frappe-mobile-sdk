@@ -26,7 +26,7 @@ void main() {
       page: 0,
       pageSize: 10,
     );
-    expect(pq.sql, contains("IFNULL(a, '') = ?"));
+    expect(pq.sql, contains("IFNULL(\"a\", '') = ?"));
     expect(pq.sql, contains(' AND ('));
     expect(pq.sql, contains(' OR '));
     expect(pq.params, ['1', 'X', 'Y']);

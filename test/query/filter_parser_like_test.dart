@@ -20,7 +20,7 @@ void main() {
         page: 0,
         pageSize: 10,
       );
-      expect(pq.sql, contains('status IN (?, ?)'));
+      expect(pq.sql, contains('"status" IN (?, ?)'));
       expect(pq.params, ['A', 'B']);
     });
 
@@ -47,7 +47,7 @@ void main() {
         page: 0,
         pageSize: 10,
       );
-      expect(pq.sql, contains('status NOT IN (?)'));
+      expect(pq.sql, contains('"status" NOT IN (?)'));
       expect(pq.params, ['X']);
     });
 
@@ -82,7 +82,7 @@ void main() {
         page: 0,
         pageSize: 10,
       );
-      expect(pq.sql, contains("IFNULL(email, '') LIKE ?"));
+      expect(pq.sql, contains("IFNULL(\"email\", '') LIKE ?"));
       expect(pq.params, ['%@example.com']);
     });
 
@@ -96,7 +96,7 @@ void main() {
         page: 0,
         pageSize: 10,
       );
-      expect(pq.sql, contains("IFNULL(full_name__norm, '') LIKE ?"));
+      expect(pq.sql, contains("IFNULL(\"full_name__norm\", '') LIKE ?"));
       expect(pq.params, ['%ankit%']);
     });
 
@@ -123,7 +123,7 @@ void main() {
         page: 0,
         pageSize: 10,
       );
-      expect(pq.sql, contains("IFNULL(full_name__norm, '') NOT LIKE ?"));
+      expect(pq.sql, contains("IFNULL(\"full_name__norm\", '') NOT LIKE ?"));
     });
   });
 }

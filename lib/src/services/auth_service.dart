@@ -3,6 +3,7 @@ import 'dart:developer' as dev;
 import '../api/client.dart';
 import '../api/oauth2_helper.dart';
 import '../database/app_database.dart';
+import '../database/daos/sdk_meta_dao.dart';
 import '../database/entities/auth_token_entity.dart';
 import '../database/entities/doctype_meta_entity.dart';
 import '../models/mobile_form_name.dart';
@@ -723,6 +724,15 @@ class AuthService {
                   await _database!.authTokenDao.updateToken(updatedToken);
                   _client?.rest.setBearerToken(newAccessToken);
                   _isAuthenticated = true;
+                  // A successful refresh follows exactly the session-
+                  // eviction 401 that co-occurs with a 403 storm — the new
+                  // session makes any prior permission-skips stale, so clear
+                  // them here too (in addition to login/logout). Best-effort.
+                  try {
+                    await SdkMetaDao(
+                      _database!.rawDatabase,
+                    ).clearSkippedDoctypes();
+                  } catch (_) {}
                   return true;
                 }
               } catch (e, st) {
@@ -778,6 +788,14 @@ class AuthService {
         refreshed.expiresIn,
       );
       _client?.rest.setBearerToken(refreshed.accessToken);
+      // Mirror the mobile-auth path: a fresh session invalidates prior
+      // permission-skips. Best-effort; guard `_database` (OAuth path has
+      // no enclosing null-check).
+      if (_database != null) {
+        try {
+          await SdkMetaDao(_database!.rawDatabase).clearSkippedDoctypes();
+        } catch (_) {}
+      }
       return true;
     } catch (e, st) {
       dev.log(

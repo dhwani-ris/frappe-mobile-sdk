@@ -43,7 +43,7 @@ void main() {
       page: 0,
       pageSize: 10,
     );
-    expect(pq.sql, contains("IFNULL(customer_name, '') = ?"));
+    expect(pq.sql, contains("IFNULL(\"customer_name\", '') = ?"));
     expect(pq.params, ['ACME']);
   });
 
@@ -57,7 +57,7 @@ void main() {
       page: 0,
       pageSize: 10,
     );
-    expect(pq.sql, contains('IFNULL(age, 0) = ?'));
+    expect(pq.sql, contains('IFNULL("age", 0) = ?'));
     expect(pq.params, [10]);
   });
 
@@ -71,7 +71,7 @@ void main() {
       page: 0,
       pageSize: 10,
     );
-    expect(pq.sql, contains('IFNULL(is_active, 0) = ?'));
+    expect(pq.sql, contains('IFNULL("is_active", 0) = ?'));
   });
 
   test('!= operator', () {
@@ -84,7 +84,7 @@ void main() {
       page: 0,
       pageSize: 10,
     );
-    expect(pq.sql, contains("IFNULL(customer_name, '') != ?"));
+    expect(pq.sql, contains("IFNULL(\"customer_name\", '') != ?"));
   });
 
   test('< / <= / > / >= on numeric — no IFNULL wrap (null excluded)', () {
@@ -97,8 +97,8 @@ void main() {
       page: 0,
       pageSize: 10,
     );
-    expect(pq.sql, contains('age > ?'));
-    expect(pq.sql, isNot(contains('IFNULL(age')));
+    expect(pq.sql, contains('"age" > ?'));
+    expect(pq.sql, isNot(contains('IFNULL("age"')));
   });
 
   test('multiple filters combined with AND', () {
@@ -125,7 +125,7 @@ void main() {
       page: 0,
       pageSize: 10,
     );
-    expect(pq.sql, contains('ORDER BY customer_name ASC'));
+    expect(pq.sql, contains('ORDER BY "customer_name" ASC'));
   });
 
   test('order_by with explicit DESC', () {
@@ -137,7 +137,7 @@ void main() {
       page: 0,
       pageSize: 10,
     );
-    expect(pq.sql, contains('ORDER BY customer_name DESC'));
+    expect(pq.sql, contains('ORDER BY "customer_name" DESC'));
   });
 
   test('order_by column not on meta → FilterParseError', () {
@@ -163,7 +163,7 @@ void main() {
       page: 0,
       pageSize: 10,
     );
-    expect(pq.sql, contains('ORDER BY modified ASC, customer_name DESC'));
+    expect(pq.sql, contains('ORDER BY "modified" ASC, "customer_name" DESC'));
   });
 
   test('order_by multi-column rejects unknown column in any segment', () {
@@ -246,7 +246,7 @@ void main() {
       page: 0,
       pageSize: 10,
     );
-    expect(pq.sql, contains("IFNULL(sync_status, '') = ?"));
+    expect(pq.sql, contains("IFNULL(\"sync_status\", '') = ?"));
     expect(pq.params, ['dirty']);
   });
 }

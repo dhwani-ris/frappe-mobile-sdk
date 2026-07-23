@@ -19,7 +19,7 @@ void main() {
       page: 0,
       pageSize: 10,
     );
-    expect(pq.sql, contains("IFNULL(note, '') != ''"));
+    expect(pq.sql, contains("IFNULL(\"note\", '') != ''"));
     expect(pq.params, isEmpty);
   });
 
@@ -33,7 +33,7 @@ void main() {
       page: 0,
       pageSize: 10,
     );
-    expect(pq.sql, contains("IFNULL(note, '') = ''"));
+    expect(pq.sql, contains("IFNULL(\"note\", '') = ''"));
     expect(pq.params, isEmpty);
   });
 
@@ -47,7 +47,7 @@ void main() {
       page: 0,
       pageSize: 10,
     );
-    expect(pq.sql, contains('note IS NULL'));
+    expect(pq.sql, contains('"note" IS NULL'));
   });
 
   test('is not null → IS NOT NULL', () {
@@ -60,6 +60,6 @@ void main() {
       page: 0,
       pageSize: 10,
     );
-    expect(pq.sql, contains('note IS NOT NULL'));
+    expect(pq.sql, contains('"note" IS NOT NULL'));
   });
 }

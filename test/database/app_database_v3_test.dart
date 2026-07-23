@@ -37,12 +37,16 @@ void main() {
     );
   });
 
-  test('AppDatabase._version equals 3 and sdk_meta row matches', () async {
+  test('AppDatabase._version equals 4 and sdk_meta row matches', () async {
+    // Fix 2 bumped the migration/PRAGMA version to 4 (the v4 upgrade drops
+    // the poisoned permission_skip_doctypes table once, self-healing field
+    // devices). The sdk_meta.schema_version APP-level column is a separate
+    // tracking value still written as 3 by _onCreateBody — unchanged.
     final appDb = await AppDatabase.inMemoryDatabase();
-    expect(AppDatabaseTestSeam.version, 3);
+    expect(AppDatabaseTestSeam.version, 4);
     final raw = appDb.rawDatabase;
     final pragma = await raw.rawQuery('PRAGMA user_version');
-    expect(pragma.first.values.first, 3);
+    expect(pragma.first.values.first, 4);
     final meta = await raw.query('sdk_meta', where: 'id = 1');
     expect(meta, hasLength(1));
     expect(meta.first['schema_version'], 3);

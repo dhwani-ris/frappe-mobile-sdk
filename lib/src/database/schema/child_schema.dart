@@ -32,9 +32,13 @@ List<String> buildChildSchemaDDL(
     if (!seen.add(name)) continue;
     final sqlType = sqliteColumnTypeFor(type);
     if (sqlType == null) continue;
-    cols.add('$name $sqlType');
+    // Quote the column identifier — a child doctype (e.g. User Document
+    // Type) can carry SQL reserved-word columns (`read`/`write`/`create`/
+    // `delete`/…) that otherwise blow up the CREATE TABLE. `"col"` matches
+    // the repo's existing quoting style.
+    cols.add('"$name" $sqlType');
     if (isLinkFieldType(type)) {
-      cols.add('${name}__is_local INTEGER');
+      cols.add('"${name}__is_local" INTEGER');
     }
   }
 

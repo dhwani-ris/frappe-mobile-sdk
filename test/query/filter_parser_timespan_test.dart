@@ -28,7 +28,7 @@ void main() {
         page: 0,
         pageSize: 10,
       );
-      expect(pq.sql, contains('created_at >= ? AND created_at <= ?'));
+      expect(pq.sql, contains('"created_at" >= ? AND "created_at" <= ?'));
       expect(pq.params, ['2026-01-01 00:00:00', '2026-01-31 23:59:59']);
     });
 
@@ -95,7 +95,7 @@ void main() {
         page: 0,
         pageSize: 10,
       );
-      expect(pq.sql, contains('created_at >= ? AND created_at <= ?'));
+      expect(pq.sql, contains('"created_at" >= ? AND "created_at" <= ?'));
       expect(pq.params.length, 2);
     });
   });

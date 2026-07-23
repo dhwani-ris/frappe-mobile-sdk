@@ -35,9 +35,10 @@ void main() {
       final ddl =
           buildChildSchemaDDL(meta, tableName: 'docs__order_item');
       final createStmt = ddl.firstWhere((s) => s.startsWith('CREATE TABLE'));
-      expect(createStmt, contains('item_code TEXT'));
-      expect(createStmt, contains('qty INTEGER'));
-      expect(createStmt, contains('rate REAL'));
+      // Fix 3: child meta-field column identifiers are now quoted.
+      expect(createStmt, contains('"item_code" TEXT'));
+      expect(createStmt, contains('"qty" INTEGER'));
+      expect(createStmt, contains('"rate" REAL'));
     });
 
     test('emits unique partial index on server_name', () {

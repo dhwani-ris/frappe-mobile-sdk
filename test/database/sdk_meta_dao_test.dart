@@ -94,67 +94,98 @@ void main() {
     },
   );
 
-  group('permission skip-set (403 closure prune)', () {
-    test('readSkippedDoctypes is empty on a fresh install', () async {
+  group('permission skip-set (403 closure prune, TTL-scoped)', () {
+    // Fixed clock so TTL-boundary arithmetic is deterministic.
+    const nowMs = 1_800_000_000_000; // ~2027, arbitrary fixed epoch-ms
+    final ttl = SdkMetaDao.permissionSkipTtlMs;
+
+    test('readActiveSkippedDoctypes is empty on a fresh install', () async {
       final db = await _freshDb();
       final dao = SdkMetaDao(db);
-      final skipped = await dao.readSkippedDoctypes();
+      final skipped = await dao.readActiveSkippedDoctypes(nowMs: nowMs);
       expect(skipped, isEmpty);
       await db.close();
     });
 
-    test('addSkippedDoctype then readSkippedDoctypes returns it', () async {
+    test('addSkippedDoctype then readActiveSkippedDoctypes returns it', () async {
       final db = await _freshDb();
       final dao = SdkMetaDao(db);
-      await dao.addSkippedDoctype('User');
-      final skipped = await dao.readSkippedDoctypes();
+      await dao.addSkippedDoctype('User', deniedAtMs: nowMs);
+      final skipped = await dao.readActiveSkippedDoctypes(nowMs: nowMs);
       expect(skipped, {'User'});
+      await db.close();
+    });
+
+    test('addSkippedDoctype stamps denied_at_ms', () async {
+      final db = await _freshDb();
+      final dao = SdkMetaDao(db);
+      await dao.addSkippedDoctype('User', deniedAtMs: nowMs);
+      final rows = await db.query('permission_skip_doctypes');
+      expect(rows, hasLength(1));
+      expect(rows.first['doctype'], 'User');
+      expect(rows.first['denied_at_ms'], nowMs);
       await db.close();
     });
 
     test('addSkippedDoctype accumulates distinct doctypes', () async {
       final db = await _freshDb();
       final dao = SdkMetaDao(db);
-      await dao.addSkippedDoctype('User');
-      await dao.addSkippedDoctype('Role');
-      final skipped = await dao.readSkippedDoctypes();
+      await dao.addSkippedDoctype('User', deniedAtMs: nowMs);
+      await dao.addSkippedDoctype('Role', deniedAtMs: nowMs);
+      final skipped = await dao.readActiveSkippedDoctypes(nowMs: nowMs);
       expect(skipped, {'User', 'Role'});
       await db.close();
     });
 
-    test('addSkippedDoctype is idempotent — no throw, no duplicate row', () async {
-      final db = await _freshDb();
-      final dao = SdkMetaDao(db);
-      await dao.addSkippedDoctype('User');
-      // Second add of the SAME doctype must not throw (INSERT OR IGNORE)
-      // and must not create a second row.
-      await dao.addSkippedDoctype('User');
-      final rows = await db.query('permission_skip_doctypes');
-      expect(rows, hasLength(1));
-      final skipped = await dao.readSkippedDoctypes();
-      expect(skipped, {'User'});
-      await db.close();
-    });
+    test(
+      'addSkippedDoctype is idempotent per doctype — no duplicate row, stamp refreshed',
+      () async {
+        final db = await _freshDb();
+        final dao = SdkMetaDao(db);
+        await dao.addSkippedDoctype('User', deniedAtMs: nowMs - 1000);
+        // Re-add of the SAME doctype must not create a second row and must
+        // REFRESH the timestamp (INSERT OR REPLACE extends the window).
+        await dao.addSkippedDoctype('User', deniedAtMs: nowMs);
+        final rows = await db.query('permission_skip_doctypes');
+        expect(rows, hasLength(1));
+        expect(rows.first['denied_at_ms'], nowMs);
+        expect(await dao.readActiveSkippedDoctypes(nowMs: nowMs), {'User'});
+        await db.close();
+      },
+    );
 
     test('addSkippedDoctype ignores an empty doctype name', () async {
       final db = await _freshDb();
       final dao = SdkMetaDao(db);
-      await dao.addSkippedDoctype('');
-      final skipped = await dao.readSkippedDoctypes();
+      await dao.addSkippedDoctype('', deniedAtMs: nowMs);
+      final skipped = await dao.readActiveSkippedDoctypes(nowMs: nowMs);
       expect(skipped, isEmpty);
+      await db.close();
+    });
+
+    test('removeSkippedDoctype drops a single doctype (200-revisit self-heal)',
+        () async {
+      final db = await _freshDb();
+      final dao = SdkMetaDao(db);
+      await dao.addSkippedDoctype('User', deniedAtMs: nowMs);
+      await dao.addSkippedDoctype('Role', deniedAtMs: nowMs);
+
+      await dao.removeSkippedDoctype('User');
+
+      expect(await dao.readActiveSkippedDoctypes(nowMs: nowMs), {'Role'});
       await db.close();
     });
 
     test('clearSkippedDoctypes empties a populated skip-set', () async {
       final db = await _freshDb();
       final dao = SdkMetaDao(db);
-      await dao.addSkippedDoctype('User');
-      await dao.addSkippedDoctype('Role');
-      expect(await dao.readSkippedDoctypes(), isNotEmpty);
+      await dao.addSkippedDoctype('User', deniedAtMs: nowMs);
+      await dao.addSkippedDoctype('Role', deniedAtMs: nowMs);
+      expect(await dao.readActiveSkippedDoctypes(nowMs: nowMs), isNotEmpty);
 
       await dao.clearSkippedDoctypes();
 
-      expect(await dao.readSkippedDoctypes(), isEmpty);
+      expect(await dao.readActiveSkippedDoctypes(nowMs: nowMs), isEmpty);
       await db.close();
     });
 
@@ -163,7 +194,53 @@ void main() {
       final dao = SdkMetaDao(db);
       // Never populated — table not even created yet. Must not throw.
       await dao.clearSkippedDoctypes();
-      expect(await dao.readSkippedDoctypes(), isEmpty);
+      expect(await dao.readActiveSkippedDoctypes(nowMs: nowMs), isEmpty);
+      await db.close();
+    });
+
+    // ── 2c. Expiry (24h TTL) ──────────────────────────────────────────
+    test(
+      'an expired skip (denied_at older than TTL) is EXCLUDED so it retries; '
+      'a fresh one is included',
+      () async {
+        final db = await _freshDb();
+        final dao = SdkMetaDao(db);
+        // Stale: denied a hair MORE than the TTL ago → must fall out.
+        await dao.addSkippedDoctype('StaleReport', deniedAtMs: nowMs - ttl - 1);
+        // Fresh: denied just now → must remain active.
+        await dao.addSkippedDoctype('FreshCountry', deniedAtMs: nowMs);
+
+        final active = await dao.readActiveSkippedDoctypes(nowMs: nowMs);
+        expect(active, {'FreshCountry'});
+        // Both rows still physically present — expiry is read-time only.
+        expect(await db.query('permission_skip_doctypes'), hasLength(2));
+        await db.close();
+      },
+    );
+
+    test('TTL boundary is strict (denied_at_ms > nowMs - TTL)', () async {
+      final db = await _freshDb();
+      final dao = SdkMetaDao(db);
+      // Exactly ON the boundary → NOT strictly greater → excluded.
+      await dao.addSkippedDoctype('OnBoundary', deniedAtMs: nowMs - ttl);
+      // One ms inside the window → included.
+      await dao.addSkippedDoctype('JustInside', deniedAtMs: nowMs - ttl + 1);
+
+      final active = await dao.readActiveSkippedDoctypes(nowMs: nowMs);
+      expect(active, {'JustInside'});
+      await db.close();
+    });
+
+    test('legacy rows stamped denied_at_ms = 0 are treated as expired',
+        () async {
+      // Self-heal path: `_ensureSkipTable` ALTER-adds `denied_at_ms` with a
+      // DEFAULT 0 for legacy 1-column rows, which must read as expired so
+      // the poisoned doctype is re-attempted.
+      final db = await _freshDb();
+      final dao = SdkMetaDao(db);
+      // Force the row in with a 0 stamp (simulating the legacy default).
+      await dao.addSkippedDoctype('LegacyPoison', deniedAtMs: 0);
+      expect(await dao.readActiveSkippedDoctypes(nowMs: nowMs), isEmpty);
       await db.close();
     });
   });

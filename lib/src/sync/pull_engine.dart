@@ -78,15 +78,24 @@ class PullEngine {
   /// exist on the table.
   final SchemaReconcilerFn? schemaReconciler;
 
-  /// Optional. Invoked with the doctype name when a per-doctype pull
-  /// fails specifically with a hard HTTP 403 / PermissionError — i.e. the
-  /// user cannot read this closure-dependency doctype. Wired by
-  /// [SyncEngineBuilder] to persist the doctype into the permission-skip
-  /// set so the closure-pull filter drops it on subsequent syncs. NEVER
-  /// fired for timeouts, SocketException, 5xx, or "no such table", which
-  /// stay retryable. Failure inside the callback is caught and logged —
-  /// it never aborts the pull.
-  final Future<void> Function(String doctype)? onPermissionDenied;
+  /// Optional. Invoked ONCE at the end of a pull round (one [run] call)
+  /// with the SET of doctypes that hard-403'd during that round. Wired by
+  /// [SyncEngineBuilder] to apply the storm-breaker: if any of the denied
+  /// doctypes is PROTECTED (a mobile-form entry point or one that has ever
+  /// synced rows) the whole round is treated as a session-level AUTH EVENT
+  /// — ZERO skips recorded, an `auth` error surfaced. Otherwise each denied
+  /// doctype (all unprotected by construction) is recorded as a
+  /// skip-with-expiry. Strictly counts HTTP 403 / PermissionError — never
+  /// timeouts, SocketException, 5xx, or "no such table", which stay
+  /// retryable. Failure inside the callback is caught and logged — it never
+  /// aborts the pull.
+  final Future<void> Function(Set<String> denied403)? onPermissionDeniedRound;
+
+  /// Optional. Invoked with a doctype name after it FULLY drains with a
+  /// 200 (complete-flip). Wired by [SyncEngineBuilder] to remove a stale
+  /// permission-skip row so a doctype that was denied and is now readable
+  /// self-heals immediately. Failure is caught and logged.
+  final Future<void> Function(String doctype)? onDoctypePullOk;
 
   PullEngine({
     required this.db,
@@ -99,7 +108,8 @@ class PullEngine {
     required this.metaResolver,
     this.writeQueueResolver,
     this.schemaReconciler,
-    this.onPermissionDenied,
+    this.onPermissionDeniedRound,
+    this.onDoctypePullOk,
   });
 
   /// Returns the set of doctypes that were deferred (skipped because a
@@ -115,16 +125,32 @@ class PullEngine {
   }) async {
     notifier.value = notifier.value.copyWith(isPulling: true);
     final deferred = <String>{};
+    // Round-local set of doctypes that hard-403'd this pull. Populated by
+    // the workers (single-isolate → shared-Set add is safe, same as
+    // `deferred`) and handed to the storm-breaker exactly once after all
+    // workers finish. Kept OUT of `_runDoctype`'s immediate side effects so
+    // the auth-event vs individual-skip decision can see the WHOLE round.
+    final denied403 = <String>{};
     try {
       final futures = <Future<void>>[];
       for (final dt in closure.doctypes) {
         if (closure.childDoctypes.contains(dt)) continue;
         if (allowedDoctypes != null && !allowedDoctypes.contains(dt)) continue;
         futures.add(
-          pool.submit<void>(() => _runDoctype(dt, closure, deferred)),
+          pool.submit<void>(() => _runDoctype(dt, closure, deferred, denied403)),
         );
       }
       await Future.wait(futures);
+      // Storm-breaker decision point. Fire the round callback ONCE with the
+      // full denied set; the wiring decides auth-event vs skip-with-expiry.
+      final roundCb = onPermissionDeniedRound;
+      if (roundCb != null) {
+        try {
+          await roundCb(denied403);
+        } catch (e, st) {
+          debugPrint('PullEngine.run: onPermissionDeniedRound failed — $e\n$st');
+        }
+      }
       return deferred;
     } finally {
       // Always reset `isPulling` and stamp `lastSyncAt` — without this,
@@ -141,6 +167,7 @@ class PullEngine {
     String doctype,
     ClosureResult closure,
     Set<String> deferred,
+    Set<String> denied403,
   ) async {
     if (await outboxDao.hasActivePushFor(doctype)) {
       // Dart's main isolate is single-threaded so add() on a shared Set
@@ -321,6 +348,23 @@ class PullEngine {
       if (cursorJson != null) {
         await metaDao.setLastOkCursor(doctype, jsonEncode(cursorJson));
       }
+
+      // Full drain succeeded (HTTP 200 across every page) → the surveyor
+      // CAN read this doctype. Clear any stale permission-skip row so a
+      // previously-denied-then-granted doctype self-heals now instead of
+      // waiting out the TTL. Best-effort; never aborts the pull.
+      final okCb = onDoctypePullOk;
+      if (okCb != null) {
+        try {
+          await okCb(doctype);
+        } catch (okErr, okSt) {
+          debugPrint(
+            'PullEngine._runDoctype($doctype): onDoctypePullOk failed '
+            '— $okErr\n$okSt',
+          );
+        }
+      }
+
       notifier.value = notifier.value.updatePerDoctype(
         doctype,
         DoctypeSyncState(
@@ -341,25 +385,18 @@ class PullEngine {
       // Reactive permission-skip: a genuine HTTP 403 / PermissionError
       // means the surveyor cannot read this closure-dependency doctype
       // (a Frappe framework/system table dragged in only as a Link
-      // target). Record it via [onPermissionDenied] so the closure-pull
-      // filter drops it on future syncs — one 403 instead of one per
-      // sync forever. STRICTLY 403 only: timeouts, SocketException, 5xx,
-      // and "no such table" all fall through untouched so they stay
-      // retryable. Entry-point (manifest) doctypes CAN reach this path,
-      // but the closure-pull filter never excludes manifest doctypes from
-      // a pull, so recording one here is harmless — it is always
-      // re-attempted regardless of the skip-set. Child doctypes never
-      // reach `_runDoctype` (skipped in `run`).
+      // target). We DEFER the skip/auth-event decision to the end of the
+      // round: add the doctype to the round-local `denied403` set and let
+      // [onPermissionDeniedRound] (wired in SyncEngineBuilder) decide —
+      // recording individual skips only when NO protected doctype was
+      // denied this round, otherwise treating the whole round as a
+      // session-level auth event. STRICTLY 403 only: timeouts,
+      // SocketException, 5xx, and "no such table" all fall through
+      // untouched so they stay retryable. Child doctypes never reach
+      // `_runDoctype` (skipped in `run`).
       final isPermissionDenied = e is FrappeException && e.statusCode == 403;
-      if (isPermissionDenied && onPermissionDenied != null) {
-        try {
-          await onPermissionDenied!(doctype);
-        } catch (skipErr, skipSt) {
-          debugPrint(
-            'PullEngine.pull($doctype): recording permission-skip failed '
-            '— $skipErr\n$skipSt',
-          );
-        }
+      if (isPermissionDenied) {
+        denied403.add(doctype);
       }
 
       notifier.value = notifier.value.updatePerDoctype(

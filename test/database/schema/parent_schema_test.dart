@@ -37,10 +37,11 @@ void main() {
       );
       final ddl = buildParentSchemaDDL(meta, tableName: 'docs__customer');
       final createStmt = ddl.firstWhere((s) => s.startsWith('CREATE TABLE'));
-      expect(createStmt, contains('customer_name TEXT'));
-      expect(createStmt, contains('customer_age INTEGER'));
-      expect(createStmt, contains('is_active INTEGER'));
-      expect(createStmt, contains('notes TEXT'));
+      // Fix 3: meta-field column identifiers are now quoted in the DDL.
+      expect(createStmt, contains('"customer_name" TEXT'));
+      expect(createStmt, contains('"customer_age" INTEGER'));
+      expect(createStmt, contains('"is_active" INTEGER'));
+      expect(createStmt, contains('"notes" TEXT'));
       expect(createStmt, isNot(contains('break1')));
     });
 
@@ -51,10 +52,10 @@ void main() {
       );
       final ddl = buildParentSchemaDDL(meta, tableName: 'docs__invoice');
       final createStmt = ddl.firstWhere((s) => s.startsWith('CREATE TABLE'));
-      expect(createStmt, contains('customer TEXT'));
-      expect(createStmt, contains('customer__is_local INTEGER'));
-      expect(createStmt, contains('dyn_ref TEXT'));
-      expect(createStmt, contains('dyn_ref__is_local INTEGER'));
+      expect(createStmt, contains('"customer" TEXT'));
+      expect(createStmt, contains('"customer__is_local" INTEGER'));
+      expect(createStmt, contains('"dyn_ref" TEXT'));
+      expect(createStmt, contains('"dyn_ref__is_local" INTEGER'));
     });
 
     test('adds __norm for search-target text fields', () {
@@ -70,8 +71,8 @@ void main() {
       );
       final ddl = buildParentSchemaDDL(meta, tableName: 'docs__contact');
       final createStmt = ddl.firstWhere((s) => s.startsWith('CREATE TABLE'));
-      expect(createStmt, contains('full_name__norm TEXT'));
-      expect(createStmt, contains('email_id__norm TEXT'));
+      expect(createStmt, contains('"full_name__norm" TEXT'));
+      expect(createStmt, contains('"email_id__norm" TEXT'));
       expect(createStmt, isNot(contains('age__norm')));
     });
 
@@ -173,7 +174,8 @@ void main() {
         ],
       );
       final create = buildParentSchemaDDL(meta, tableName: 'docs__y').first;
-      expect(RegExp(r'\ba\s+TEXT\b').allMatches(create).length, 1);
+      // Fix 3: the column is now quoted (`"a" TEXT`), still emitted once.
+      expect(RegExp(r'"a" TEXT').allMatches(create).length, 1);
     });
 
     test('Password fields are NOT created as columns (security)', () {

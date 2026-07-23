@@ -9,7 +9,7 @@ import 'daos/doctype_permission_dao.dart';
 import 'schema/system_tables.dart';
 
 class AppDatabase {
-  static const int _version = 3;
+  static const int _version = 4;
 
   /// Singleton instance for the production (on-disk) database. The in-memory
   /// factory does NOT touch this — each call returns an independent instance
@@ -126,6 +126,18 @@ class AppDatabase {
   ) async {
     if (oldVersion < 3) {
       await _migrateV2ToV3(db);
+    }
+    if (oldVersion < 4) {
+      // AC#6 self-heal: drop the permission-skip table ONCE on upgrade so
+      // field devices poisoned by the pre-hardening skip logic (a transient
+      // 403 storm that permanently skipped Member / geo masters) recover
+      // WITHOUT re-login. DROP (not DELETE) also retires the legacy
+      // 1-column shape; `SdkMetaDao._ensureSkipTable` lazily recreates the
+      // current 2-column shape on next use. Idempotent (`IF EXISTS`) and,
+      // gated on `oldVersion < 4`, runs exactly once per device. Fresh
+      // installs never had the table (`_onCreate` doesn't create it), so
+      // they are unaffected.
+      await db.execute('DROP TABLE IF EXISTS permission_skip_doctypes');
     }
   }
 

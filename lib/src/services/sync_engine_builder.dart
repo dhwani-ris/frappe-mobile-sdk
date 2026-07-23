@@ -20,6 +20,7 @@ import '../sync/idempotency_strategy.dart';
 import '../sync/pull_engine.dart';
 import '../sync/pull_page_fetcher.dart';
 import '../sync/push_engine.dart';
+import '../sync/sync_state.dart';
 import '../sync/sync_state_notifier.dart';
 import 'sync_controller.dart';
 
@@ -256,12 +257,46 @@ class SyncEngineBuilder {
       metaResolver: metaResolver,
       writeQueueResolver: writeQueueResolver,
       schemaReconciler: schemaReconciler,
-      // Persist a hard-403 closure-dependency doctype into the
-      // permission-skip set so future closure pulls prune it (see
-      // FrappeSDK._runUpgradeClosurePull) instead of re-attempting a
-      // guaranteed 403 on every sync.
-      onPermissionDenied: (doctype) =>
-          SdkMetaDao(rawDb).addSkippedDoctype(doctype),
+      // Storm-breaker (D4). At the end of each pull round, decide what to do
+      // with the doctypes that hard-403'd:
+      //  - AUTH EVENT ⟺ any DENIED doctype is PROTECTED (a mobile-form entry
+      //    point, or one that has ever synced rows). A session/auth problem
+      //    can 403 a doctype the surveyor demonstrably could read before, so
+      //    treating those 403s as permanent permission verdicts is what
+      //    froze Member/geo masters until re-login. On an auth event we
+      //    record ZERO skips for the whole round and surface an `auth` error.
+      //  - Otherwise every denied doctype is unprotected by construction —
+      //    a genuinely-restricted framework/system table — so record each as
+      //    a skip-with-expiry (revisited after the TTL; a 200 clears it).
+      onPermissionDeniedRound: (denied) async {
+        if (denied.isEmpty) return;
+        final protected = await metaDao.protectedPullDoctypes();
+        final protectedHit = denied.intersection(protected);
+        if (protectedHit.isNotEmpty) {
+          // Name the offending doctypes so a field/QA log is diagnosable —
+          // otherwise a perpetual auth event (e.g. a genuinely-revoked
+          // previously-synced doctype) is undebuggable from the count alone.
+          final names = (protectedHit.toList()..sort()).join(', ');
+          notifier.recordLastError(
+            SyncErrorSummary(
+              code: 'auth',
+              message:
+                  '${protectedHit.length} previously-readable doctype(s) '
+                  'returned 403 — session/auth problem: $names',
+              at: DateTime.now().toUtc(),
+            ),
+          );
+          return;
+        }
+        final dao = SdkMetaDao(rawDb);
+        final now = DateTime.now().toUtc().millisecondsSinceEpoch;
+        for (final dt in denied) {
+          await dao.addSkippedDoctype(dt, deniedAtMs: now);
+        }
+      },
+      // A doctype that fully drains with a 200 is readable now — clear any
+      // stale skip row so a denied-then-granted doctype self-heals at once.
+      onDoctypePullOk: (dt) => SdkMetaDao(rawDb).removeSkippedDoctype(dt),
     );
 
     Future<void> clearLocalConflict(String doctype, String mobileUuid) async {

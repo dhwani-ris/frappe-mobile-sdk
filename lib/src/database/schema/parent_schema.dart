@@ -45,14 +45,20 @@ List<String> buildParentSchemaDDL(
     final sqlType = sqliteColumnTypeFor(type);
     if (sqlType == null) continue;
 
-    cols.add('$name $sqlType');
+    // Quote the column identifier so a meta field named after a SQLite
+    // reserved word (e.g. User Document Type's `read`/`write`/`create`/
+    // `delete`/`submit`/`cancel`/`amend`) doesn't raise a DDL syntax error
+    // in column-def position. `"col"` is the repo's existing quoting style
+    // (app_database.dart, unified_resolver.dart) and what sqflite's own
+    // escapeName emits for the map-based DML path.
+    cols.add('"$name" $sqlType');
 
     if (isLinkFieldType(type)) {
-      cols.add('${name}__is_local INTEGER');
+      cols.add('"${name}__is_local" INTEGER');
     }
 
     if (normFields.contains(name) && sqlType == 'TEXT') {
-      cols.add('${name}__norm TEXT');
+      cols.add('"${name}__norm" TEXT');
     }
   }
 
@@ -87,7 +93,7 @@ List<String> buildParentSchemaDDL(
   for (final col in additional) {
     ddl.add(
       'CREATE INDEX IF NOT EXISTS ix_${suffix}_${_sanitizeColName(col)} '
-      'ON $tableName($col)',
+      'ON $tableName("$col")',
     );
   }
 
