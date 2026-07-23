@@ -207,6 +207,13 @@ class PullEngine {
       }
     }
 
+    // The first page of an INCREMENTAL (complete=true) pull is a seam
+    // refetch: it re-pulls the whole `modified == watermark` block (Phase A
+    // anchored at `name > ''`) so no same-second row is missed. RESUME
+    // (complete=false) and INITIAL (null cursor) pages never seam-refetch —
+    // they resume strictly after the persisted `(modified, name)`.
+    var firstIteration = true;
+
     try {
       while (true) {
         final result = await fetcher.fetch(
@@ -214,7 +221,9 @@ class PullEngine {
           meta: meta,
           cursor: scratch,
           pageSize: pageSize,
+          seamRefetch: firstIteration && scratch.complete,
         );
+        firstIteration = false;
         if (result.rows.isEmpty) break;
 
         if (writeQueueResolver != null) {
@@ -247,6 +256,18 @@ class PullEngine {
         final priorName = scratch.name;
         scratch = result.advancedCursor;
 
+        // Per-page cursor persistence (THE fix). Journal the advancing
+        // `(modified, name)` after EVERY successfully-applied page, keeping
+        // `complete=false` for an in-progress pull. On `complete=false` the
+        // next pull (this or the other path — SIG-9) RESUMES from this keyset
+        // point instead of discarding it and restarting unfiltered at offset
+        // 0. A failed page (catch block below) persists nothing extra — the
+        // last durable cursor is this journal, so at most one page is lost.
+        final pageCursorJson = scratch.toJson();
+        if (pageCursorJson != null) {
+          await metaDao.setLastOkCursor(doctype, jsonEncode(pageCursorJson));
+        }
+
         notifier.value = notifier.value.updatePerDoctype(
           doctype,
           DoctypeSyncState(
@@ -258,33 +279,43 @@ class PullEngine {
         );
 
         // Spec §5.1: only break on empty page. A short non-empty page is
-        // still followed by one confirmatory empty fetch — Frappe doesn't
+        // still followed by one confirmatory (keyset) fetch — Frappe doesn't
         // tell us "no more rows" inline; we have to ask. The "fail before
         // confirmation" case (network error on the next request) is what
-        // protects the cursor from advancing prematurely.
+        // protects against advancing past unapplied rows; per-page persist
+        // makes that failure cost at most one page.
 
-        // Stall guard (incremental only): when `modified >= cursor.modified`
-        // returns a non-empty page where every row shares the same modified
-        // timestamp, the advanced cursor equals the input cursor and the next
-        // request returns the same page — infinite loop. Not applicable to
-        // initial sync (complete=false) because that path uses limit_start
-        // offset pagination, which always advances.
-        if (scratch.complete &&
-            scratch.modified == priorModified &&
-            scratch.name == priorName) {
+        // No-advance ⟹ drained ⟹ safe to stop (debugPrint + break).
+        // Under the two-phase keyset, a NON-EMPTY page whose last row does not
+        // move the cursor (new anchor == previous anchor) can only mean the
+        // page's last row IS the anchor — i.e. Phase A returned the anchor's
+        // watermark block and Phase B (`modified > m`) came back empty, so the
+        // dataset is fully drained. Breaking here can therefore NEVER truncate
+        // clustered data: a same-`modified` tie block larger than pageSize
+        // advances page-by-page via `name` (each page's last name > the prior
+        // anchor), so the guard simply does not trip until the block AND the
+        // Phase B tail are exhausted. (The truncation risk this comment used to
+        // cite belonged to the OLD single-predicate `modified >=` design, where
+        // no-advance could happen with rows still pending — not so under
+        // keyset.) Restoring the break also removes the wasteful confirmatory
+        // round-trip on the incremental seam of an unchanged doctype (the loop
+        // then falls through to the markComplete() flip below).
+        if (scratch.modified == priorModified && scratch.name == priorName) {
+          debugPrint(
+            'PullEngine._runDoctype($doctype): cursor did not advance on a '
+            'non-empty page (modified=${scratch.modified}, '
+            'name=${scratch.name}) — dataset drained; stopping.',
+          );
           break;
         }
       }
 
-      // Cursor is persisted only when the doctype drains fully — partial
-      // pulls leave the on-disk cursor untouched so a relaunch resumes
-      // from the last fully-applied page. We flip `complete: true` here
-      // (and ONLY here) so the next pull treats the doctype as
+      // Full-drain completion flip. Per-page persistence above already wrote
+      // the resume cursor (complete=false); here we promote it to
+      // `complete: true` (ONLY here) so the next pull treats the doctype as
       // INCREMENTAL — same semantics as SyncService._pullOneInternal's
-      // final-page complete flip. Without this, the two pull paths wrote
-      // conflicting cursor formats (SIG-9): SyncService persisted with
-      // `complete`, PullEngine dropped it, the next SyncService read saw
-      // missing `complete` and re-fetched the entire dataset.
+      // final-page complete flip, and the same on-disk JSON shape so the two
+      // pull paths interoperate (SIG-9).
       final scratchComplete = scratch.markComplete();
       final cursorJson = scratchComplete.toJson();
       if (cursorJson != null) {

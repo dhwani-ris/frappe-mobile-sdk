@@ -10,11 +10,21 @@
 /// `SyncService._pullOneInternal` so both pull paths interoperate without
 /// silently dropping the field on read/write roundtrips.
 ///
-/// `start` is the row offset used during initial (complete=false) pulls.
-/// [PullPageFetcher] sends `limit_start=start` and advances it by pageSize
-/// each page, avoiding `modified >=` filtering until the full dataset is
-/// fetched once. After initial drain, [markComplete] resets start to 0 and
-/// incremental pulls use `modified >=` with `limit_start=0` from that point.
+/// Cursor semantics (SIG-9 interoperable `{modified,name,complete}` JSON):
+///   * `modified == null`               → INITIAL (no watermark, first page
+///                                          fetched unfiltered).
+///   * `modified != null, complete=F`   → RESUME point: the next page is a
+///                                          keyset fetch strictly after
+///                                          `(modified, name)`. `limit_start`
+///                                          is NEVER used again.
+///   * `modified != null, complete=T`   → INCREMENTAL (delta) watermark.
+///
+/// `start` is a LEGACY offset field. It is no longer written by [toJson] and
+/// is no longer consulted by [PullPageFetcher] (which now pages by keyset, not
+/// `limit_start` offset). It is still PARSED by [fromJson] so a device holding
+/// an old offset-format cursor migrates cleanly: `complete=false` + non-null
+/// `(modified, name)` is reinterpreted as a keyset resume point and the stale
+/// offset is ignored.
 class Cursor {
   final String? modified;
   final String? name;
@@ -46,11 +56,14 @@ class Cursor {
 
   Map<String, Object?>? toJson() {
     if (isNull) return null;
+    // NOTE: `start` is intentionally NOT written. The keyset pager resumes
+    // from `(modified, name)` + `complete`; persisting an offset would only
+    // resurrect the deep-OFFSET behaviour this fix removed. Keep the on-disk
+    // shape identical to SyncService's per-page journal (SIG-9).
     return {
       'modified': modified,
       'name': name,
       'complete': complete,
-      if (start != 0) 'start': start,
     };
   }
 

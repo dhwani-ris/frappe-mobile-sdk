@@ -17,19 +17,54 @@ void main() {
     expect(back.start, 0);
   });
 
-  test('start field round-trips through JSON', () {
-    const c = Cursor(modified: '2026-01-01', name: 'X', start: 300);
+  test('toJson NEVER writes the legacy `start` offset field (keyset)', () {
+    // Post-2026-07-23 keyset-resume fix: pagination is keyset, `limit_start`
+    // is always 0. Persisting an offset would resurrect the deep-OFFSET
+    // behaviour the fix removed, so even a non-zero in-memory `start` must
+    // NOT leak into the on-disk JSON.
+    const c = Cursor(modified: '2026-01-01', name: 'X', start: 12000);
     final json = c.toJson()!;
-    expect(json['start'], 300);
-    final back = Cursor.fromJson(json);
-    expect(back.start, 300);
+    expect(json.containsKey('start'), isFalse);
+    expect(
+      json.keys.toSet(),
+      {'modified', 'name', 'complete'},
+      reason: 'SIG-9 on-disk shape is exactly {modified,name,complete}',
+    );
   });
 
-  test('start=0 is omitted from toJson to keep JSON clean', () {
+  test('start=0 is also omitted from toJson (keyset — start never written)',
+      () {
     const c = Cursor(modified: '2026-01-01', name: 'X', start: 0);
     final json = c.toJson()!;
     expect(json.containsKey('start'), isFalse);
   });
+
+  test(
+    'fromJson tolerates a legacy {..,"start":N} cursor (no crash, keyset '
+    'semantics)',
+    () {
+      // A device upgrading from the offset era holds a cursor that still
+      // carries a stale `start`. fromJson MUST parse it without crashing; the
+      // offset is then simply ignored by the keyset pager. complete=false +
+      // non-null (modified,name) is reinterpreted as a keyset resume point.
+      final c = Cursor.fromJson({
+        'modified': '2026-01-01 00:00:00',
+        'name': 'CUST-500',
+        'complete': false,
+        'start': 12000,
+      });
+      expect(c.modified, '2026-01-01 00:00:00');
+      expect(c.name, 'CUST-500');
+      expect(c.complete, isFalse);
+      expect(
+        c.isNull,
+        isFalse,
+        reason: 'a non-null (modified,name) is a keyset resume point',
+      );
+      // Re-serialising the migrated cursor drops the stale offset entirely.
+      expect(c.toJson()!.containsKey('start'), isFalse);
+    },
+  );
 
   test('fromJson missing "start" defaults to 0', () {
     final c = Cursor.fromJson({'modified': '2026-01-01', 'name': 'X'});

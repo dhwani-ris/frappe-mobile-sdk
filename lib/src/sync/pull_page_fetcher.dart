@@ -18,26 +18,50 @@ class PullPageResult {
   const PullPageResult({required this.rows, required this.advancedCursor});
 }
 
-/// One-page list fetch with dual-mode pagination. Spec §5.1.
+/// One-page keyset fetch. Spec §5.1 + 2026-07-23 keyset-resume fix.
 ///
-/// **Initial sync** (`cursor.complete == false`): uses `limit_start` offset
-/// pagination — no `modified` filter, `limit_start` advances by `pageSize`
-/// each page. This guarantees the full dataset is fetched before the cursor
-/// is committed, avoiding the seam-skip risk of applying `modified >=` while
-/// new records can still land behind the advancing watermark.
+/// Every mode pages by a `(modified, name)` KEYSET — `limit_start` is only
+/// ever `0`. This eliminates the deep-OFFSET scans (staging-measured
+/// 501→991ms across depth 0→25k) that, stacked onto the constant-heavy
+/// bulk-child POST, crossed the 30s client timeout on heavy first syncs and
+/// restarted the pull from offset 0 forever.
 ///
-/// **Incremental sync** (`cursor.complete == true`): uses the classic
-/// `modified >= cursor.modified` predicate with `limit_start = 0`. Combined
-/// with `order_by modified asc, name asc` this returns:
-///   - the seam row(s) at `modified == cursor.modified` — idempotently
-///     re-applied by PullApply's UPSERT-by-server_name
-///   - all rows with `modified > cursor.modified`
+/// The composite keyset predicate `(modified>m) OR (modified=m AND name>n)`
+/// is NOT expressible in one `frappe.client.get_list` (`or_filters` is a flat
+/// OR — it cannot nest `modified=m AND name>n`). So a logical page is fetched
+/// in **two AND-only phases** (result-identical), given the resume anchor
+/// `(m, n)`:
 ///
-/// **Stall hazard (incremental only):** when many rows share the same
-/// `modified` second, `modified >= cursor.modified` keeps returning the same
-/// page. [PullEngine] owns the stall guard for this case (it only fires for
-/// `complete == true` pages). For initial sync the loop terminates on an
-/// empty page, so no stall guard is needed.
+///   * **Phase A — tie-drain:** `filters=[['modified','=',m],['name','>',n]]`,
+///     `order_by name asc`, `limit pageSize`. Strict forward progress by
+///     `name` within the same-`modified` block.
+///   * **Phase B — advance (only if Phase A returned < pageSize):**
+///     `filters=[['modified','>',m]]`, `order_by modified asc, name asc`,
+///     `limit pageSize - lenA`. The logical page is A followed by B.
+///
+/// Modes:
+///   * **First page** (`cursor.modified == null` — INITIAL): unfiltered,
+///     `order_by modified asc, name asc`, `limit pageSize`. Single request.
+///   * **Resume** (`complete=false`, non-null `(m,n)`): two-phase keyset from
+///     the persisted `(m, n)` — this is THE fix; the old path discarded the
+///     cursor and restarted unfiltered at offset 0.
+///   * **Incremental seam** (`complete=true`, [seamRefetch] true — page 1 of a
+///     delta pull): Phase A anchored at `name > ''` re-pulls the WHOLE
+///     `modified == m` watermark-second block (idempotent UPSERT absorbs the
+///     re-applies), then Phase B pulls `modified > m`. This preserves today's
+///     `modified >= watermark` seam semantics without the same-`modified`
+///     stall/truncation. Incremental pages 2+ use the normal keyset advance
+///     ([seamRefetch] false).
+///
+/// Migrated `modified` timestamps are unique (spike: largest tie-block = 1),
+/// so Phase A usually returns 0 rows — but it is kept for correctness against
+/// genuine ties, and `order_by modified asc, name asc` is used throughout so
+/// the keyset is well-defined.
+///
+/// The advanced cursor after a non-empty page is always the LAST row's
+/// `(modified, name)` with the input `complete` bit preserved. A non-empty
+/// page therefore ALWAYS advances the cursor strictly forward — no stall
+/// guard is required (see [PullEngine]).
 class PullPageFetcher {
   final ListHttpFn listHttp;
 
@@ -48,49 +72,80 @@ class PullPageFetcher {
     required DocTypeMeta meta,
     required Cursor cursor,
     required int pageSize,
+    bool seamRefetch = false,
   }) async {
     final fields = _fieldsToRequest(meta);
-    final params = <String, Object?>{
-      'fields': fields,
-      'order_by': 'modified asc, name asc',
-      'limit_page_length': pageSize,
-      'limit_start': cursor.complete ? 0 : cursor.start,
-    };
 
-    if (cursor.complete && cursor.modified != null) {
-      // Incremental: single-predicate form `modified >= cursor.modified`.
-      // Seam row at cursor.modified is re-applied idempotently by PullApply.
-      params['filters'] = <List<Object?>>[
-        ['modified', '>=', cursor.modified],
-      ];
+    // INITIAL first page: no anchor yet → unfiltered, single request.
+    if (cursor.modified == null) {
+      final rows = await listHttp(doctype, <String, Object?>{
+        'fields': fields,
+        'order_by': 'modified asc, name asc',
+        'limit_page_length': pageSize,
+        'limit_start': 0,
+      });
+      return _advance(rows, cursor, complete: cursor.complete);
     }
-    // Initial sync (complete=false): no filter, offset advances via limit_start.
 
-    final rows = await listHttp(doctype, params);
+    // Keyset anchor. On the incremental seam page we anchor the tie-drain at
+    // name > '' to re-pull the whole watermark-second block; otherwise we
+    // resume strictly after the persisted (modified, name).
+    final anchorModified = cursor.modified!;
+    final anchorName = seamRefetch ? '' : (cursor.name ?? '');
+
+    // Phase A — tie-drain within the same `modified` block.
+    final phaseA = await listHttp(doctype, <String, Object?>{
+      'fields': fields,
+      'filters': <List<Object?>>[
+        ['modified', '=', anchorModified],
+        ['name', '>', anchorName],
+      ],
+      'order_by': 'name asc',
+      'limit_page_length': pageSize,
+      'limit_start': 0,
+    });
+
+    final combined = <Map<String, dynamic>>[...phaseA];
+
+    // Phase B — advance past the block, only if Phase A left room. Skipping it
+    // when Phase A filled the page keeps a large same-`modified` block draining
+    // one page at a time across successive fetch() calls (no truncation).
+    if (phaseA.length < pageSize) {
+      final phaseB = await listHttp(doctype, <String, Object?>{
+        'fields': fields,
+        'filters': <List<Object?>>[
+          ['modified', '>', anchorModified],
+        ],
+        'order_by': 'modified asc, name asc',
+        'limit_page_length': pageSize - phaseA.length,
+        'limit_start': 0,
+      });
+      combined.addAll(phaseB);
+    }
+
+    return _advance(combined, cursor, complete: cursor.complete);
+  }
+
+  /// Builds a [PullPageResult]: on an empty page the input cursor is returned
+  /// unchanged (loop terminator); otherwise the cursor advances to the last
+  /// row's `(modified, name)` with [complete] preserved.
+  PullPageResult _advance(
+    List<Map<String, dynamic>> rows,
+    Cursor cursor, {
+    required bool complete,
+  }) {
     if (rows.isEmpty) {
       return PullPageResult(rows: rows, advancedCursor: cursor);
     }
     final last = rows.last;
-
-    final Cursor next;
-    if (cursor.complete) {
-      // Incremental: advance by last row's modified/name timestamp.
-      next = Cursor(
+    return PullPageResult(
+      rows: rows,
+      advancedCursor: Cursor(
         modified: last['modified'] as String?,
         name: last['name'] as String?,
-        complete: true,
-      );
-    } else {
-      // Initial sync: advance offset; track modified/name for the final cursor
-      // that markComplete() will persist after the full drain.
-      next = Cursor(
-        modified: last['modified'] as String?,
-        name: last['name'] as String?,
-        complete: false,
-        start: cursor.start + rows.length,
-      );
-    }
-    return PullPageResult(rows: rows, advancedCursor: next);
+        complete: complete,
+      ),
+    );
   }
 
   /// Fields to request from `frappe.client.get_list`. Always includes

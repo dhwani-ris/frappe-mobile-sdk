@@ -62,9 +62,13 @@ void main() {
       expect(nextMemberStart, greaterThan(doInitializeStart));
       final body = source.substring(doInitializeStart, nextMemberStart);
 
+      // NB: the assignment may be chained (`.catchError(...)`) to swallow the
+      // now-unawaited future's errors — match the assignment prefix, not a
+      // trailing `;`, so that error-handling chaining doesn't false-fail this
+      // guard. The load-bearing check is the `isNot(await ...)` below.
       expect(
         body,
-        contains('_initialSyncFuture = _initialMetaAndDataSync();'),
+        contains('_initialSyncFuture = _initialMetaAndDataSync()'),
         reason:
             'the boot sync must be assigned to _initialSyncFuture, not '
             'awaited inline',

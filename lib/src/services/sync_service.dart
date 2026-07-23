@@ -378,24 +378,36 @@ class SyncService {
   ///     The cursor advances on every successful delta page so future
   ///     deltas pull only the newest changes.
   ///
-  /// Filter semantics (mechanically the same for RESUME and INCREMENTAL
-  /// — see comment below for why we use `>=` + tie-skip in both):
+  /// Pagination is KEYSET, never offset — `limit_start` is always 0 (see the
+  /// 2026-07-23 keyset-resume fix; deep OFFSET scans crossed the 30s timeout
+  /// on heavy pulls). Each logical page is fetched in two AND-only phases from
+  /// the anchor `(m, n)`, because the composite `(modified>m) OR (modified=m
+  /// AND name>n)` predicate is not expressible in one `get_list` (`or_filters`
+  /// is flat):
+  ///   • Phase A (tie-drain): `[[modified,=,m],[name,>,n]]`, order_by name asc.
+  ///   • Phase B (advance, if A < pageSize): `[[modified,>,m]]`,
+  ///     order_by modified asc, name asc. Logical page = A ++ B.
   ///
-  ///   INITIAL (no cursor)        no filter         no tie-skip
-  ///   RESUME (complete=false)    modified >= mod   skip <= (mod,name)
-  ///   INCREMENTAL (complete=true)modified >= mod   skip <= (mod,name)
+  /// Filter semantics by phase:
+  ///
+  ///   INITIAL (no cursor)         unfiltered first page, then keyset advance
+  ///   RESUME (complete=false)     keyset from (m, n)         no tie-skip
+  ///   INCREMENTAL (complete=true) seam page = Phase A at name>'' (refetch the
+  ///                               whole watermark-second block), + tie-skip
+  ///                               rows <= (m, n); pages 2+ = keyset advance
   ///
   /// On the final page (a short page that says "no more rows"), the
   /// cursor is rewritten with `complete: true` — flipping the doctype
   /// from INITIAL/RESUME to INCREMENTAL. From that point on, every
   /// future call is a delta pull.
   ///
-  /// Why `>=` + tie-skip in INCREMENTAL too (vs strict `>`): Frappe's
-  /// `modified` is set at request time and CAN collide on the second
-  /// when two rows are written together. A strict `>` filter would
-  /// silently skip a same-microsecond newer-name row created after our
-  /// cursor was set. `>=` plus tie-skip catches them — at the cost of
-  /// one cursor-row overlap per delta call (1 wasted upsert).
+  /// Why the incremental seam refetches the whole `modified == m` block (vs a
+  /// strict `>`): Frappe's `modified` CAN collide on the microsecond when two
+  /// rows are written together, so a strict `modified > m` would silently skip
+  /// a same-instant newer-`name` row created after our cursor was set. The
+  /// seam Phase A (`modified = m, name > ''`) re-pulls that whole block and the
+  /// tie-skip drops the already-applied prefix — same guarantee as the old
+  /// `>=` + tie-skip, without the same-`modified` stall.
   ///
   /// Legacy [since] (epoch ms) is honoured only when there is no
   /// persisted cursor — preserves the old `syncDoctype` flow's
@@ -466,17 +478,11 @@ class SyncService {
       }
     }
 
-    // Build server filter — see phase table in the docstring above.
-    final filters = <List<dynamic>>[];
-    if (cursorModified != null) {
-      filters.add(['modified', '>=', cursorModified]);
-    } else if (since != null) {
-      filters.add([
-        'modified',
-        '>',
-        DateTime.fromMillisecondsSinceEpoch(since).toIso8601String(),
-      ]);
-    }
+    // Legacy [since] (epoch ms) is honoured only when there is no persisted
+    // cursor. It becomes the Phase-B `modified >` boundary of the first page.
+    final String? sinceIso = (cursorModified == null && since != null)
+        ? DateTime.fromMillisecondsSinceEpoch(since).toIso8601String()
+        : null;
 
     // If the parent meta declares any `Table` / `Table MultiSelect`
     // field, the bare `frappe.client.get_list` response is missing
@@ -489,65 +495,139 @@ class SyncService {
         (await _repository.doctypesWithChildren()).contains(doctype) ||
         await _doctypeHasChildTables(doctype);
 
-    // Paginate via `limit_start` until the server returns a short page
-    // (fewer rows than requested). Without this, doctypes with > 1000
-    // rows (Village, Hamlet, etc.) silently truncate at the first page.
-    // Page size is the API cap, not a UX choice.
+    // KEYSET pagination — `limit_start` is ALWAYS 0 (2026-07-23 fix). Deep
+    // OFFSET scans grew O(depth) and crossed the 30s timeout on heavy pulls;
+    // keyset is flat. Page size is the API cap, not a UX choice.
     const int pageSize = 1000;
-    // Stable order is required for the cursor to be valid: the server
-    // must return the unprocessed suffix in the same order on every
-    // call. `name asc` breaks ties when multiple rows share `modified`.
+    // Stable total order — required for the keyset to be well-defined.
     const String orderBy = 'modified asc, name asc';
-    // Look-ahead is REACTIVE, not speculative: page N+1 is fired only
-    // after page N comes back full-sized. Small doctypes (<= pageSize
-    // rows) therefore make exactly one HTTP call — no wasted GETs.
-    // Multi-page doctypes keep one extra page in-flight while the
-    // current page's rows are written to SQLite (so apply overlaps with
-    // network), giving the same 2x throughput as the previous
-    // speculative scheme without the small-doctype tax.
-    Future<List<dynamic>> fetchPage(int start) {
+
+    // One raw `get_list` page, limit_start pinned at 0.
+    Future<List<dynamic>> fetchRaw(
+      List<List<dynamic>>? f,
+      String order,
+      int pageLength,
+    ) {
       return needsFullDoc
           ? _client.doctype.listFullDocs(
               doctype,
-              filters: filters.isEmpty ? null : filters,
-              limitStart: start,
-              limitPageLength: pageSize,
-              orderBy: orderBy,
+              filters: f,
+              limitStart: 0,
+              limitPageLength: pageLength,
+              orderBy: order,
             )
           : _client.doctype.list(
               doctype,
-              filters: filters.isEmpty ? null : filters,
+              filters: f,
               fields: ['*'],
-              limitStart: start,
-              limitPageLength: pageSize,
-              orderBy: orderBy,
+              limitStart: 0,
+              limitPageLength: pageLength,
+              orderBy: order,
             );
     }
 
-    int start = 0;
-    Future<List<dynamic>> currentFetch = fetchPage(start);
+    // One logical page via the two-phase AND-filter keyset (the composite
+    // `(modified>m) OR (modified=m AND name>n)` is not expressible in one
+    // get_list). [seamRefetch] anchors Phase A at `name > ''` to re-pull the
+    // whole `modified == anchorModified` block (incremental seam, page 1).
+    Future<List<dynamic>> fetchKeysetPage(
+      String? anchorModified,
+      String? anchorName, {
+      required bool seamRefetch,
+    }) async {
+      if (anchorModified == null) {
+        // INITIAL first page (unfiltered) or legacy since-delta first page.
+        final f = sinceIso != null
+            ? <List<dynamic>>[
+                ['modified', '>', sinceIso],
+              ]
+            : null;
+        return fetchRaw(f, orderBy, pageSize);
+      }
+      final tieName = seamRefetch ? '' : (anchorName ?? '');
+      final phaseA = await fetchRaw(
+        <List<dynamic>>[
+          ['modified', '=', anchorModified],
+          ['name', '>', tieName],
+        ],
+        'name asc',
+        pageSize,
+      );
+      if (phaseA.length >= pageSize) return phaseA;
+      final phaseB = await fetchRaw(
+        <List<dynamic>>[
+          ['modified', '>', anchorModified],
+        ],
+        orderBy,
+        pageSize - phaseA.length,
+      );
+      return <dynamic>[...phaseA, ...phaseB];
+    }
+
+    // Keyset anchor + seam state. Page 1 of an INCREMENTAL pull is a seam
+    // refetch (re-pull the watermark-second block); RESUME/INITIAL are not.
+    final String? anchorModified = cursorModified;
+    final String? anchorName = cursorName;
+    bool isSeamPage = cursorComplete && cursorModified != null;
+
+    // Mirrors the `complete` flag most recently written to disk (NOT the
+    // in-memory `cursorComplete`, which is only ever raised to true). Seeded
+    // with the on-disk state at entry, updated in every in-loop persist. The
+    // post-loop drain flip consults this so it (a) heals a doctype demoted to
+    // complete=false mid-loop — e.g. an exactly-pageSize INCREMENTAL delta
+    // whose only full page journals complete=false before the empty look-ahead
+    // page breaks the loop — and (b) skips a redundant write when the last
+    // page already journaled complete=true.
+    bool lastPersistedComplete = cursorComplete;
+
+    // Look-ahead is REACTIVE, not speculative: page N+1 is fired only after
+    // page N comes back full, keyed on page N's LAST row (not an offset), so
+    // apply overlaps with the next network fetch without any deep-offset cost.
+    Future<List<dynamic>> currentFetch = fetchKeysetPage(
+      anchorModified,
+      anchorName,
+      seamRefetch: isSeamPage,
+    );
 
     while (true) {
       final page = await currentFetch;
       if (page.isEmpty) break;
       total += page.length;
 
-      // Only fire a look-ahead when this page came back full — i.e.
-      // there is reason to believe the next page exists. A short page
-      // means we're done, no extra GET needed.
-      Future<List<dynamic>>? lookahead;
-      if (page.length >= pageSize) {
-        lookahead = fetchPage(start + pageSize);
+      // Raw last row of this page = the keyset anchor for the next page.
+      // Computed from the fetched rows (independent of apply outcome) so a
+      // trailing apply failure never advances the in-memory paging anchor.
+      String? rawLastModified;
+      String? rawLastName;
+      for (final d in page) {
+        if (d is! Map<String, dynamic>) continue;
+        final id = (d['name'] as String?) ?? (d['docname'] as String?);
+        if (id == null || id.isEmpty) continue;
+        rawLastModified = d['modified'] as String? ?? '';
+        rawLastName = id;
       }
 
-      // Track the cursor advance for this page so we can persist it
-      // exactly once after the page drains. Updating per-row would
-      // burn extra UPDATE statements without changing crash-safety.
+      // Only fire a look-ahead when this page came back full — i.e. there is
+      // reason to believe the next page exists. A short page means we're done.
+      Future<List<dynamic>>? lookahead;
+      if (page.length >= pageSize &&
+          rawLastModified != null &&
+          rawLastName != null) {
+        lookahead = fetchKeysetPage(
+          rawLastModified,
+          rawLastName,
+          seamRefetch: false,
+        );
+      }
+
+      // Track the cursor advance for this page so we can persist it exactly
+      // once after the page drains. This is the last APPLIED row (crash-safety
+      // resume point), which may lag the raw last row if the tail failed.
       String? pageLastModified;
       String? pageLastName;
 
-      // Apply the current page to SQLite. When `lookahead` was fired,
-      // this work overlaps with the network request.
+      // Apply the current page to SQLite. When `lookahead` was fired, this
+      // work overlaps with the network request.
       for (final docData in page) {
         if (docData is! Map<String, dynamic>) continue;
         final serverId =
@@ -555,11 +635,12 @@ class SyncService {
         final modifiedAt = docData['modified'] as String? ?? '';
         if (serverId == null || serverId.isEmpty) continue;
 
-        // Skip rows from the cursor's tie group that we already
-        // applied on a previous run. Only relevant on resume — the
-        // first page may include the cursor row plus same-`modified`
-        // peers that sort before it under `name asc`.
-        if (cursorModified != null && cursorName != null) {
+        // Tie-skip: ONLY on the incremental seam page, which deliberately
+        // re-pulls the whole `modified == cursorModified` block (name > '').
+        // Drop the already-applied prefix (rows <= the cursor); the idempotent
+        // UPSERT would absorb them, but skipping saves the write. RESUME pages
+        // need no tie-skip — Phase A already filtered `name > cursorName`.
+        if (isSeamPage && cursorModified != null && cursorName != null) {
           final modCmp = modifiedAt.compareTo(cursorModified);
           if (modCmp < 0) continue;
           if (modCmp == 0 && serverId.compareTo(cursorName) <= 0) continue;
@@ -618,6 +699,7 @@ class SyncService {
         cursorModified = pageLastModified;
         cursorName = pageLastName;
         if (isFinalPage) cursorComplete = true;
+        lastPersistedComplete = isFinalPage;
       } else if (isFinalPage && cursorModified != null && !cursorComplete) {
         // Edge case: server returned a page (possibly all skipped via
         // tie-skip) and the next page is empty — no row was applied
@@ -633,11 +715,45 @@ class SyncService {
           }),
         );
         cursorComplete = true;
+        lastPersistedComplete = true;
       }
 
+      // The seam refetch is a one-page event: only the first page of an
+      // incremental pull re-pulls the watermark block. Every page after it
+      // is a plain keyset advance (no tie-skip, no `name > ''`).
+      isSeamPage = false;
+
       if (lookahead == null) break;
-      start += pageSize;
+      // Keyset advance: the look-ahead was already fired from this page's raw
+      // last row — no `limit_start` bump. `currentFetch` becomes that future.
       currentFetch = lookahead;
+    }
+
+    // Drain completion flip (mirrors PullEngine._runDoctype's markComplete()).
+    // The loop can exit via the top-of-loop `if (page.isEmpty) break` — most
+    // notably when a full final page fired a look-ahead that came back empty
+    // (a scoped count that is an exact multiple of pageSize) — which bypasses
+    // the in-loop `isFinalPage` promotion. Whenever a cursor exists but the
+    // last on-disk write left it complete=false, the dataset is nonetheless
+    // fully drained (an empty page means no more rows), so promote it to
+    // complete=true here: RESUME → INCREMENTAL, and an exact-pageSize
+    // INCREMENTAL delta stays INCREMENTAL instead of being demoted to RESUME.
+    // Guarded on `!lastPersistedComplete` so the short-final-page and
+    // already-complete paths (which already journaled complete=true) don't
+    // re-write. A genuinely empty doctype has no cursor (cursorModified null)
+    // → nothing to promote. Exceptions from fetchKeysetPage propagate out of
+    // the loop and skip this — correct (no false completion on a failed pull).
+    if (cursorModified != null && !lastPersistedComplete) {
+      await _database.doctypeMetaDao.setLastOkCursor(
+        doctype,
+        jsonEncode({
+          'modified': cursorModified,
+          'name': cursorName,
+          'complete': true,
+        }),
+      );
+      cursorComplete = true;
+      lastPersistedComplete = true;
     }
 
     return SyncResult(success, failed, total, null, errors: errors);

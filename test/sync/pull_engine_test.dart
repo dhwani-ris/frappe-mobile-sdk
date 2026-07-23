@@ -20,6 +20,73 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 DocField f(String n, String t, {String? options}) =>
     DocField(fieldname: n, fieldtype: t, label: n, options: options);
 
+/// In-memory `frappe.client.get_list` stand-in that honours the two-phase
+/// KEYSET contract (AND-only `filters` + `order_by` + `limit_page_length`),
+/// so a full multi-page PullEngine drive exercises the real keyset paging.
+/// Rows carry string `modified` + `name` (both lexicographically ordered
+/// here). Records every params map and can be told to throw on the Nth call
+/// to simulate a mid-pull network failure.
+class FakeListServer {
+  final List<Map<String, dynamic>> rows;
+  int throwOnCall; // 1-based call index to throw on; 0 = never
+  int callCount = 0;
+  final List<Map<String, Object?>> requests = [];
+
+  FakeListServer(this.rows, {this.throwOnCall = 0});
+
+  void reset({int throwOnCall = 0}) {
+    callCount = 0;
+    this.throwOnCall = throwOnCall;
+    requests.clear();
+  }
+
+  Future<List<Map<String, dynamic>>> call(
+    String doctype,
+    Map<String, Object?> params,
+  ) async {
+    callCount++;
+    requests.add(Map.of(params));
+    if (throwOnCall != 0 && callCount == throwOnCall) {
+      throw Exception('injected network failure on call $callCount');
+    }
+    final filters =
+        (params['filters'] as List?)?.cast<List>() ?? const <List>[];
+    final order = params['order_by'] as String? ?? 'modified asc, name asc';
+    final limit = params['limit_page_length'] as int? ?? rows.length;
+
+    Iterable<Map<String, dynamic>> out = rows;
+    for (final fr in filters) {
+      final field = fr[0] as String;
+      final op = fr[1] as String;
+      final val = fr[2] as String;
+      out = out.where((r) {
+        final c = (r[field] as String).compareTo(val);
+        switch (op) {
+          case '=':
+            return c == 0;
+          case '>':
+            return c > 0;
+          case '>=':
+            return c >= 0;
+          case '<':
+            return c < 0;
+          default:
+            return true;
+        }
+      });
+    }
+    final list = out.toList();
+    list.sort((a, b) {
+      if (order.startsWith('name')) {
+        return (a['name'] as String).compareTo(b['name'] as String);
+      }
+      final c = (a['modified'] as String).compareTo(b['modified'] as String);
+      return c != 0 ? c : (a['name'] as String).compareTo(b['name'] as String);
+    });
+    return list.take(limit).toList();
+  }
+}
+
 void main() {
   setUpAll(() {
     sqfliteFfiInit();
@@ -235,51 +302,82 @@ void main() {
     expect(called, isFalse);
   });
 
-  test('does not advance cursor on mid-page failure', () async {
-    var page = 0;
-    final fetcher = PullPageFetcher(
-      listHttp: (doctype, params) async {
-        page++;
-        if (page == 1) {
-          return [
-            {'name': 'C-1', 'modified': '2026-01-01', 'customer_name': 'A'},
-          ];
-        }
-        throw Exception('network');
-      },
-    );
-    final closure = const ClosureResult(
-      doctypes: ['Customer'],
-      graph: {
-        'Customer': DepGraph(
-          doctype: 'Customer',
-          tier: 0,
-          outgoing: [],
-          incoming: [],
-        ),
-      },
-      childDoctypes: {},
-      warnings: [],
-    );
-    final engine = PullEngine(
-      db: db,
-      metaDao: metaDao,
-      outboxDao: OutboxDao(db),
-      pool: ConcurrencyPool(maxConcurrent: 2),
-      fetcher: fetcher,
-      pageSize: 500,
-      notifier: SyncStateNotifier(),
-      metaResolver: (dt) async =>
-          DocTypeMeta(name: dt, fields: [f('customer_name', 'Data')]),
-    );
-    await engine.run(closure);
-    final cursor = await metaDao.getLastOkCursor('Customer');
-    expect(
-      cursor,
-      isNull,
-      reason: 'cursor must NOT advance when page 2 throws',
-    );
-  });
+  test(
+    'per-page persistence: a mid-pull failure keeps the last applied page\'s '
+    'KEYSET cursor (complete=false) — the reported bug',
+    () async {
+      // Page 1 applies C-1 and journals its (modified,name). Page 2's Phase-A
+      // request throws. The OLD engine deferred the cursor to a full drain, so
+      // a failure left the cursor NULL → next pull restarted unfiltered at
+      // offset 0 forever (the plateau). The fix journals after EVERY applied
+      // page, so the failure keeps a durable complete=false resume point.
+      var page = 0;
+      final fetcher = PullPageFetcher(
+        listHttp: (doctype, params) async {
+          page++;
+          if (page == 1) {
+            return [
+              {
+                'name': 'C-1',
+                'modified': '2026-01-01 00:00:01',
+                'customer_name': 'A',
+              },
+            ];
+          }
+          throw Exception('network');
+        },
+      );
+      final closure = const ClosureResult(
+        doctypes: ['Customer'],
+        graph: {
+          'Customer': DepGraph(
+            doctype: 'Customer',
+            tier: 0,
+            outgoing: [],
+            incoming: [],
+          ),
+        },
+        childDoctypes: {},
+        warnings: [],
+      );
+      final engine = PullEngine(
+        db: db,
+        metaDao: metaDao,
+        outboxDao: OutboxDao(db),
+        pool: ConcurrencyPool(maxConcurrent: 2),
+        fetcher: fetcher,
+        pageSize: 500,
+        notifier: SyncStateNotifier(),
+        metaResolver: (dt) async =>
+            DocTypeMeta(name: dt, fields: [f('customer_name', 'Data')]),
+      );
+      await engine.run(closure);
+
+      final cursor = await metaDao.getLastOkCursor('Customer');
+      expect(
+        cursor,
+        isNotNull,
+        reason:
+            'per-page journal must persist after page 1 (defer-to-drain left '
+            'this null → restart-from-offset-0 plateau)',
+      );
+      final parsed = jsonDecode(cursor!) as Map<String, dynamic>;
+      expect(parsed['modified'], '2026-01-01 00:00:01');
+      expect(parsed['name'], 'C-1');
+      expect(
+        parsed['complete'],
+        isFalse,
+        reason: 'an in-progress pull stays resumable, NOT marked complete',
+      );
+      expect(
+        parsed.containsKey('start'),
+        isFalse,
+        reason: 'no legacy offset is ever persisted',
+      );
+      // The one successfully-applied row survived.
+      expect((await db.query('docs__customer')).length, 1);
+    },
+  );
 
   test('multiple doctypes drain in parallel via the pool', () async {
     // Add a second doctype.
@@ -630,41 +728,29 @@ void main() {
   );
 
   test(
-    'stall guard: terminates and persists cursor when all page rows share same modified',
+    'no truncation: a same-`modified` block larger than pageSize drains fully '
+    '(neutralized stall guard)',
     () async {
-      // Simulates INCREMENTAL sync where every row has the same `modified`
-      // timestamp (e.g. bulk-imported reference data). Without the stall guard,
-      // `modified >= cursor.modified` returns the same page forever.
-      // The stall guard only fires for complete=true cursors; seed one first.
+      // A genuine same-second block of 5 rows, pageSize 2. The OLD stall guard
+      // `break`ed the moment a page did not advance `(modified,name)` — which
+      // silently TRUNCATED any same-`modified` block bigger than one page. The
+      // neutralized guard only logs, and keyset drains the block by `name` one
+      // page at a time (Phase A fills, no Phase B), terminating on the empty
+      // page. All 5 rows MUST be applied — nothing dropped.
       await metaDao.setLastOkCursor(
         'Customer',
-        '{"modified":"2025-12-31","name":"C-0","complete":true}',
+        '{"modified":"2026-01-01 00:00:00","name":"C-00","complete":true}',
       );
-      var calls = 0;
-      final fetcher = PullPageFetcher(
-        listHttp: (doctype, params) async {
-          calls++;
-          // Return the same 3 rows on every call — cursor never advances.
-          // The stall guard must break the loop after the second fetch.
-          return [
-            {
-              'name': 'C-1',
-              'modified': '2026-01-01 00:00:00',
-              'customer_name': 'Alpha',
-            },
-            {
-              'name': 'C-2',
-              'modified': '2026-01-01 00:00:00',
-              'customer_name': 'Beta',
-            },
-            {
-              'name': 'C-3',
-              'modified': '2026-01-01 00:00:00',
-              'customer_name': 'Gamma',
-            },
-          ];
+      final block = List.generate(
+        5,
+        (i) => {
+          'name': 'C-${(i + 1).toString().padLeft(2, '0')}',
+          'modified': '2026-01-01 00:00:00',
+          'customer_name': 'Row-${i + 1}',
         },
       );
+      final server = FakeListServer(block);
+      final fetcher = PullPageFetcher(listHttp: server.call);
       final closure = const ClosureResult(
         doctypes: ['Customer'],
         graph: {
@@ -684,25 +770,28 @@ void main() {
         outboxDao: OutboxDao(db),
         pool: ConcurrencyPool(maxConcurrent: 2),
         fetcher: fetcher,
-        pageSize: 500,
+        pageSize: 2,
         notifier: SyncStateNotifier(),
         metaResolver: (dt) async =>
             DocTypeMeta(name: dt, fields: [f('customer_name', 'Data')]),
       );
       await engine.run(closure);
 
-      // Must terminate (not loop forever).
-      // Exactly 2 fetches: one fresh page + one stall detection.
-      expect(calls, 2, reason: 'stall detected on second fetch — loop exits');
-      // Rows are idempotently applied.
-      final rows = await db.query('docs__customer');
-      expect(rows.length, 3);
-      // Cursor is persisted with complete:true so the next sync cycle
-      // resumes incrementally rather than from scratch.
-      final cursorJson = await metaDao.getLastOkCursor('Customer');
-      expect(cursorJson, isNotNull);
-      final parsed = jsonDecode(cursorJson!) as Map<String, dynamic>;
+      final rows = await db.query('docs__customer', orderBy: 'server_name ASC');
+      expect(
+        rows.length,
+        5,
+        reason: 'all 5 same-`modified` rows applied — no page-size truncation',
+      );
+      expect(
+        rows.map((r) => r['server_name']).toList(),
+        ['C-01', 'C-02', 'C-03', 'C-04', 'C-05'],
+      );
+      final parsed =
+          jsonDecode((await metaDao.getLastOkCursor('Customer'))!)
+              as Map<String, dynamic>;
       expect(parsed['complete'], isTrue);
+      expect(parsed['name'], 'C-05');
     },
   );
 
@@ -761,5 +850,289 @@ void main() {
       expect(rows.length, 1);
       expect(rows.first['customer_name'], 'Gamma');
     },
+  );
+
+  ClosureResult customerClosure() => const ClosureResult(
+    doctypes: ['Customer'],
+    graph: {
+      'Customer': DepGraph(
+        doctype: 'Customer',
+        tier: 0,
+        outgoing: [],
+        incoming: [],
+      ),
+    },
+    childDoctypes: {},
+    warnings: [],
+  );
+
+  PullEngine makeEngine(PullPageFetcher fetcher, {int pageSize = 2}) =>
+      PullEngine(
+        db: db,
+        metaDao: metaDao,
+        outboxDao: OutboxDao(db),
+        pool: ConcurrencyPool(maxConcurrent: 2),
+        fetcher: fetcher,
+        pageSize: pageSize,
+        notifier: SyncStateNotifier(),
+        metaResolver: (dt) async =>
+            DocTypeMeta(name: dt, fields: [f('customer_name', 'Data')]),
+      );
+
+  test(
+    'THE BUG — first sync crashes mid-pull, then RESUMES by keyset (not an '
+    'unfiltered offset-0 restart) and completes exactly once',
+    () async {
+      // 5 rows, unique microsecond `modified` (mirrors migrated Members). A
+      // fault-injecting server throws partway through the first pull.
+      final data = List.generate(
+        5,
+        (i) => {
+          'name': 'M-${(i + 1).toString().padLeft(2, '0')}',
+          'modified': '2026-01-01 00:00:0${i + 1}',
+          'customer_name': 'Member ${i + 1}',
+        },
+      );
+      // Fail on call 5 = Phase B of the 3rd logical page. By then pages 1 & 2
+      // (M-01..M-04) have each been applied AND journaled.
+      final server = FakeListServer(data, throwOnCall: 5);
+      final engine = makeEngine(PullPageFetcher(listHttp: server.call));
+
+      // ── First pull: dies mid-flight ────────────────────────────────────
+      await engine.run(customerClosure());
+
+      // (i) The cursor was journaled after each successful page — the last
+      // durable point is the 2nd page's last row, complete=false.
+      final midRaw = await metaDao.getLastOkCursor('Customer');
+      expect(midRaw, isNotNull, reason: 'per-page journal, not defer-to-drain');
+      final mid = jsonDecode(midRaw!) as Map<String, dynamic>;
+      expect(mid['modified'], '2026-01-01 00:00:04');
+      expect(mid['name'], 'M-04');
+      expect(mid['complete'], isFalse);
+      expect(mid.containsKey('start'), isFalse);
+      expect(
+        (await db.query('docs__customer')).length,
+        4,
+        reason: 'only the pages that applied before the crash survive',
+      );
+
+      // ── Second pull: must RESUME by keyset, not restart from offset 0 ──
+      server.reset(); // clear request log + fault; same dataset
+      await engine.run(customerClosure());
+
+      // (ii) The FIRST request of the resume is keyset-filtered on the
+      // persisted (modified,name) with limit_start 0 — NOT an unfiltered
+      // offset-0 restart (the plateau bug).
+      final firstResume = server.requests.first;
+      expect(
+        firstResume['limit_start'],
+        0,
+        reason: 'keyset — limit_start is never an offset',
+      );
+      final firstFilters =
+          (firstResume['filters'] as List?)?.cast<List>() ?? const [];
+      expect(
+        firstFilters.any((cl) => cl[0] == 'modified'),
+        isTrue,
+        reason:
+            'resume MUST carry a keyset `modified` filter — not unfiltered '
+            'offset-0 (that discard-and-restart IS the reported bug)',
+      );
+      expect(
+        firstFilters,
+        contains(equals(['modified', '=', '2026-01-01 00:00:04'])),
+        reason: 'Phase A anchored at the persisted watermark',
+      );
+      // No request in the whole resume ever used a non-zero offset.
+      for (final r in server.requests) {
+        expect(r['limit_start'], 0);
+      }
+
+      // (iii) After resume, every row is present EXACTLY once (no dupes, no
+      // gap) and the doctype is marked complete.
+      final finalRows =
+          await db.query('docs__customer', orderBy: 'server_name ASC');
+      expect(finalRows.length, 5, reason: 'full dataset, no gap');
+      expect(
+        finalRows.map((r) => r['server_name']).toSet().length,
+        5,
+        reason: 'no duplicate server_name — idempotent apply',
+      );
+      expect(
+        finalRows.map((r) => r['server_name']).toList(),
+        ['M-01', 'M-02', 'M-03', 'M-04', 'M-05'],
+      );
+      final done =
+          jsonDecode((await metaDao.getLastOkCursor('Customer'))!)
+              as Map<String, dynamic>;
+      expect(done['complete'], isTrue);
+      expect(done['name'], 'M-05');
+    },
+  );
+
+  test(
+    'incremental seam re-pulls the watermark block by name; idempotent UPSERT '
+    'keeps it a no-op count-wise',
+    () async {
+      // Step 1: initial drain of a single row → doctype goes complete=true.
+      final rows = <Map<String, dynamic>>[
+        {
+          'name': 'M-01',
+          'modified': '2026-01-01 00:00:01',
+          'customer_name': 'One',
+        },
+      ];
+      final server = FakeListServer(rows);
+      final engine = makeEngine(
+        PullPageFetcher(listHttp: server.call),
+        pageSize: 500,
+      );
+      await engine.run(customerClosure());
+      expect((await db.query('docs__customer')).length, 1);
+      final afterInitial =
+          jsonDecode((await metaDao.getLastOkCursor('Customer'))!)
+              as Map<String, dynamic>;
+      expect(afterInitial['complete'], isTrue);
+
+      // Step 2: a delta arrives (M-02). Incremental page 1 is a seam refetch:
+      // it re-pulls the whole `modified == watermark` block by name (so it
+      // re-fetches the already-applied M-01) then advances to M-02.
+      rows.add({
+        'name': 'M-02',
+        'modified': '2026-01-01 00:00:02',
+        'customer_name': 'Two',
+      });
+      server.reset();
+      await engine.run(customerClosure());
+
+      // The seam re-pulled M-01 (Phase A anchored at name > '').
+      final seamPhaseA = server.requests.first;
+      expect((seamPhaseA['filters'] as List).cast<List>(), [
+        ['modified', '=', '2026-01-01 00:00:01'],
+        ['name', '>', ''],
+      ]);
+
+      // Idempotent: re-applying M-01 did not duplicate it — DB has exactly 2.
+      final finalRows =
+          await db.query('docs__customer', orderBy: 'server_name ASC');
+      expect(finalRows.length, 2);
+      expect(finalRows.map((r) => r['server_name']).toList(), ['M-01', 'M-02']);
+      final done =
+          jsonDecode((await metaDao.getLastOkCursor('Customer'))!)
+              as Map<String, dynamic>;
+      expect(done['complete'], isTrue);
+      expect(done['name'], 'M-02');
+    },
+  );
+
+  // ── MED-2 (2026-07-23 verify review): the no-advance guard breaks ────────
+  //
+  // The plan mandated "debugPrint + break" on a non-advancing NON-EMPTY page;
+  // an interim build demoted it to log-only. Restoring the break is provably
+  // safe under the two-phase keyset (a non-empty page whose last row does not
+  // move the cursor means Phase B came back empty ⟹ the doctype is drained)
+  // and it cuts the wasteful confirmatory round-trip on the unchanged-doctype
+  // incremental seam (MED-3: 2 requests, not 4).
+
+  test(
+    'MED-2: unchanged INCREMENTAL doctype breaks on the seam page — 2 HTTP '
+    'calls (not 4), terminates, and stays complete=true',
+    () async {
+      // Enter as INCREMENTAL at the watermark; the server holds exactly the
+      // watermark row and NOTHING new. Seam page = Phase A (returns M-01) +
+      // Phase B (empty) = 2 calls; the page's last row IS the anchor, so the
+      // cursor does not advance → break. Before the fix the loop ran a second
+      // confirmatory iteration (Phase A empty + Phase B empty = 2 more calls).
+      await metaDao.setLastOkCursor(
+        'Customer',
+        '{"modified":"2026-01-01 00:00:01","name":"M-01","complete":true}',
+      );
+      final server = FakeListServer([
+        {
+          'name': 'M-01',
+          'modified': '2026-01-01 00:00:01',
+          'customer_name': 'One',
+        },
+      ]);
+      final engine = makeEngine(
+        PullPageFetcher(listHttp: server.call),
+        pageSize: 500,
+      );
+
+      await engine.run(customerClosure());
+
+      expect(
+        server.callCount,
+        2,
+        reason:
+            'seam Phase A + Phase B only; the restored break skips the '
+            'confirmatory 2nd iteration (was 4 calls when the guard only '
+            'logged)',
+      );
+      // Idempotent re-apply of the watermark row — no duplicate.
+      expect((await db.query('docs__customer')).length, 1);
+      final done =
+          jsonDecode((await metaDao.getLastOkCursor('Customer'))!)
+              as Map<String, dynamic>;
+      expect(
+        done['complete'],
+        isTrue,
+        reason: 'markComplete() runs after the break — doctype stays drained',
+      );
+      expect(done['name'], 'M-01');
+    },
+    // A missing break would loop forever against a static server → the
+    // timeout makes "terminates" a hard assertion, not a hope.
+    timeout: const Timeout(Duration(seconds: 15)),
+  );
+
+  test(
+    'MED-2 positive: a same-`modified` tie block larger than pageSize drains '
+    'FULLY via the `name` tiebreaker — the break never trips mid-block',
+    () async {
+      // 5 rows sharing one `modified`, pageSize 2. Each keyset page advances
+      // the cursor by `name` (C-02, C-04, C-05), so the no-advance guard is
+      // NEVER satisfied until the block AND its (empty) Phase-B tail are gone.
+      // The break only fires on a genuine non-advance, so nothing is truncated.
+      await metaDao.setLastOkCursor(
+        'Customer',
+        '{"modified":"2026-01-01 00:00:00","name":"C-00","complete":true}',
+      );
+      final block = List.generate(
+        5,
+        (i) => {
+          'name': 'C-${(i + 1).toString().padLeft(2, '0')}',
+          'modified': '2026-01-01 00:00:00',
+          'customer_name': 'Row-${i + 1}',
+        },
+      );
+      final server = FakeListServer(block);
+      final engine = makeEngine(
+        PullPageFetcher(listHttp: server.call),
+        pageSize: 2,
+      );
+
+      await engine.run(customerClosure());
+
+      final rows = await db.query('docs__customer', orderBy: 'server_name ASC');
+      expect(
+        rows.map((r) => r['server_name']).toList(),
+        ['C-01', 'C-02', 'C-03', 'C-04', 'C-05'],
+        reason: 'all 5 tie rows applied — the restored break did not truncate',
+      );
+      expect(
+        server.callCount,
+        greaterThan(2),
+        reason:
+            'the block drained across multiple keyset pages; a premature '
+            'break at the first page would have fetched far fewer',
+      );
+      final done =
+          jsonDecode((await metaDao.getLastOkCursor('Customer'))!)
+              as Map<String, dynamic>;
+      expect(done['complete'], isTrue);
+      expect(done['name'], 'C-05');
+    },
+    timeout: const Timeout(Duration(seconds: 15)),
   );
 }
