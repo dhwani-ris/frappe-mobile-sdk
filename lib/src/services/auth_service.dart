@@ -1,6 +1,9 @@
 import 'dart:developer' as dev;
 
+import 'package:flutter/foundation.dart';
+
 import '../api/client.dart';
+import '../api/exceptions.dart';
 import '../api/oauth2_helper.dart';
 import '../database/app_database.dart';
 import '../database/daos/sdk_meta_dao.dart';
@@ -29,7 +32,11 @@ class AuthService {
   static const Uuid _uuid = Uuid();
   FrappeClient? _client;
   bool _isAuthenticated = false;
-  bool _isRefreshingToken = false;
+
+  /// Single-flight guard for [_tryRefreshMobileAuthToken]. Concurrent 401
+  /// callers await the same in-progress refresh instead of each firing
+  /// their own; cleared via `whenComplete` when the refresh settles.
+  Future<bool>? _refreshInFlight;
   AppDatabase? _database;
   List<String> _roles = [];
   String? _language;
@@ -685,82 +692,137 @@ class AuthService {
     }
   }
 
-  Future<bool> _tryRefreshMobileAuthToken() async {
-    if (_isRefreshingToken) {
-      return false;
-    }
-    _isRefreshingToken = true;
-    // Try mobile auth refresh first
-    try {
-      if (_database != null) {
-        try {
-          final token = await _database!.authTokenDao.getCurrentToken();
-          if (token != null && token.refreshToken.isNotEmpty) {
-            final baseUrl = await getBaseUrl();
-            if (baseUrl != null) {
-              // Ensure refresh call is not sent with an expired Bearer token
-              _client?.rest.setBearerToken(null);
-              // Call mobile_auth.refresh_token endpoint
+  /// Single-flight entry point invoked by [RestHelper] on a 401. Concurrent
+  /// callers await the same in-progress refresh; the future is cleared when
+  /// it settles (success OR failure), so the next 401 starts a fresh cycle.
+  Future<bool> _tryRefreshMobileAuthToken() {
+    return _refreshInFlight ??= _doRefreshToken().whenComplete(() {
+      _refreshInFlight = null;
+    });
+  }
+
+  /// Test seam: [_tryRefreshMobileAuthToken] is private and
+  /// [AuthService.forTesting] does not wire `onTokenExpired`, so tests drive
+  /// the single-flight refresh directly through this.
+  @visibleForTesting
+  Future<bool> debugTryRefreshMobileAuthToken() =>
+      _tryRefreshMobileAuthToken();
+
+  Future<bool> _doRefreshToken() async {
+    // Try mobile auth refresh first.
+    if (_database != null && _client != null) {
+      try {
+        final token = await _database!.authTokenDao.getCurrentToken();
+        if (token != null && token.refreshToken.isNotEmpty) {
+          try {
+            // Call the endpoint WITHOUT auth (callPublic → includeAuth:false).
+            // The endpoint is guest-callable, and keeping the global bearer
+            // intact means concurrent authed requests still send the old
+            // token (401 → await this same refresh → retry) instead of
+            // failing as guest with a 403.
+            final result = await _client!.rest.callPublic(
+              'mobile_auth.refresh_token',
+              args: {'refresh_token': token.refreshToken},
+            );
+            final response = result is Map<String, dynamic>
+                ? result
+                : <String, dynamic>{};
+            final newAccessToken = response['access_token'] as String?;
+            final newRefreshToken =
+                response['refresh_token'] as String? ?? token.refreshToken;
+
+            if (newAccessToken != null && newAccessToken.isNotEmpty) {
+              final updatedToken = AuthTokenEntity(
+                accessToken: newAccessToken,
+                refreshToken: newRefreshToken,
+                user: token.user,
+                fullName: token.fullName,
+                createdAt: token.createdAt,
+              );
+              await _database!.authTokenDao.updateToken(updatedToken);
+              _client?.rest.setBearerToken(newAccessToken);
+              _isAuthenticated = true;
+              // A successful refresh follows exactly the session-
+              // eviction 401 that co-occurs with a 403 storm — the new
+              // session makes any prior permission-skips stale, so clear
+              // them here too (in addition to login/logout). Best-effort.
               try {
-                final result = await _client!.rest.call(
-                  'mobile_auth.refresh_token',
-                  args: {'refresh_token': token.refreshToken},
-                );
-                final response = result is Map<String, dynamic>
-                    ? result
-                    : <String, dynamic>{};
-                final newAccessToken = response['access_token'] as String?;
-                final newRefreshToken =
-                    response['refresh_token'] as String? ?? token.refreshToken;
-
-                if (newAccessToken != null && newAccessToken.isNotEmpty) {
-                  final updatedToken = AuthTokenEntity(
-                    accessToken: newAccessToken,
-                    refreshToken: newRefreshToken,
-                    user: token.user,
-                    fullName: token.fullName,
-                    createdAt: token.createdAt,
-                  );
-                  await _database!.authTokenDao.updateToken(updatedToken);
-                  _client?.rest.setBearerToken(newAccessToken);
-                  _isAuthenticated = true;
-                  // A successful refresh follows exactly the session-
-                  // eviction 401 that co-occurs with a 403 storm — the new
-                  // session makes any prior permission-skips stale, so clear
-                  // them here too (in addition to login/logout). Best-effort.
-                  try {
-                    await SdkMetaDao(
-                      _database!.rawDatabase,
-                    ).clearSkippedDoctypes();
-                  } catch (_) {}
-                  return true;
-                }
-              } catch (e, st) {
-                dev.log(
-                  '_tryRefreshMobileAuthToken: refresh call failed, clearing tokens — $e\n$st',
-                  name: 'Auth',
-                );
-                await _database!.authTokenDao.deleteAll();
-              }
+                await SdkMetaDao(
+                  _database!.rawDatabase,
+                ).clearSkippedDoctypes();
+              } catch (_) {}
+              return true;
             }
+            // 2xx but no access_token — treat as a transient server hiccup;
+            // keep tokens and stay authenticated so the caller can retry.
+            dev.log(
+              '_doRefreshToken: refresh response missing access_token, keeping tokens',
+              name: 'Auth',
+            );
+            return false;
+          } on FrappeException catch (e, st) {
+            if (_isDefinitiveRefreshRejection(e)) {
+              // The refresh token itself was rejected — it is truly dead.
+              dev.log(
+                '_doRefreshToken: definitive rejection, clearing tokens — $e\n$st',
+                name: 'Auth',
+              );
+              await _database!.authTokenDao.deleteAll();
+              _isAuthenticated = false;
+              // Fall through to the OAuth fallback below (returns false for
+              // mobile-auth users, who have no OAuth tokens stored).
+            } else {
+              // Offline / timeout / 5xx / rate-limit — retryable. Keep the
+              // tokens AND the bearer untouched and stay authenticated; the
+              // caller's request fails retryably (a later drain retries it).
+              dev.log(
+                '_doRefreshToken: transient refresh failure, keeping tokens — $e\n$st',
+                name: 'Auth',
+              );
+              return false;
+            }
+          } catch (e, st) {
+            // Non-Frappe error on the refresh call (DB write, etc.) — never
+            // destructive.
+            dev.log(
+              '_doRefreshToken: unexpected refresh error, keeping tokens — $e\n$st',
+              name: 'Auth',
+            );
+            return false;
           }
-        } catch (e, st) {
-          dev.log(
-            '_tryRefreshMobileAuthToken: token DAO read failed, falling back to OAuth — $e\n$st',
-            name: 'Auth',
-          );
         }
+      } catch (e, st) {
+        dev.log(
+          '_doRefreshToken: token DAO read failed, falling back to OAuth — $e\n$st',
+          name: 'Auth',
+        );
       }
-
-      // Fallback to OAuth refresh
-      final refreshed = await _tryRefreshOAuthToken();
-      if (!refreshed) {
-        _isAuthenticated = false;
-      }
-      return refreshed;
-    } finally {
-      _isRefreshingToken = false;
     }
+
+    // Fallback to OAuth refresh (OAuth-login users, or after a definitive
+    // mobile-auth rejection).
+    final refreshed = await _tryRefreshOAuthToken();
+    if (!refreshed) {
+      _isAuthenticated = false;
+    }
+    return refreshed;
+  }
+
+  /// Classifies a refresh-call [FrappeException] as a definitive rejection
+  /// (the refresh credential is dead → wipe tokens, route to login) versus
+  /// a transient failure (offline / server hiccup → keep tokens, retry).
+  ///
+  /// - 401/403 ([AuthException]): server rejected the refresh token.
+  /// - 417 ([ValidationException]): invalid_grant-style rejection.
+  /// - [NetworkException] (offline/timeout, wrapped by RestHelper): transient.
+  /// - Other 4xx ([ApiException]) minus 408/429: definitive.
+  /// - 5xx / 408 / 429 / null status / anything else: transient.
+  bool _isDefinitiveRefreshRejection(FrappeException e) {
+    if (e is AuthException) return true;
+    if (e is ValidationException) return true;
+    if (e is NetworkException) return false;
+    final s = e.statusCode;
+    return s != null && s >= 400 && s < 500 && s != 408 && s != 429;
   }
 
   Future<bool> _tryRefreshOAuthToken() async {

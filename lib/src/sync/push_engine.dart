@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:sqflite/sqflite.dart';
 
+import '../api/exceptions.dart';
 import '../concurrency/concurrency_pool.dart';
 import '../concurrency/write_queue.dart';
 import '../database/daos/doctype_meta_dao.dart';
@@ -92,6 +93,12 @@ class PushEngine {
   final List<Duration> attachmentBackoff;
   final List<Duration> networkBackoff;
 
+  /// Max number of automatic requeue attempts for a transient-failed outbox
+  /// row (NETWORK / TIMEOUT / AUTH / UNKNOWN) before it stays `failed` until
+  /// a user-initiated retry (which resets the counter). Tests tighten this;
+  /// production uses the default of 5.
+  final int maxAutoRetryAttempts;
+
   /// Optional. When provided, every parent-side write (response writeback,
   /// auto-merge persist) is routed through the [WriteQueue] for that
   /// doctype — providing per-doctype serialisation across pull and push
@@ -121,6 +128,7 @@ class PushEngine {
     required this.attachmentUploader,
     DependenciesForRowFn? dependencyScanner,
     this.writeQueueResolver,
+    this.maxAutoRetryAttempts = 5,
     this.attachmentBackoff = const [
       Duration(seconds: 2),
       Duration(seconds: 5),
@@ -160,6 +168,14 @@ class PushEngine {
               AND older.created_at  < newer.created_at
          )
       ''');
+
+      // Auto-requeue transient failures (NETWORK / TIMEOUT / AUTH / UNKNOWN
+      // under the attempt cap) so field devices recover without a manual
+      // retry. Runs AFTER the supersede pass so a superseded `failed` row is
+      // deleted first and never becomes a second pending row (double-dispatch).
+      await outboxDao.resetTransientFailedToPending(
+        maxAttempts: maxAutoRetryAttempts,
+      );
 
       final pending = await outboxDao.findByState(OutboxState.pending);
       if (pending.isEmpty) return;
@@ -225,6 +241,14 @@ class PushEngine {
       await outboxDao.markFailed(
         row.id,
         errorCode: ErrorCode.TIMEOUT,
+        errorMessage: e.message,
+      );
+    } on AuthError catch (e) {
+      // 401 mid-push: session expired. Transient — auto-requeued by the
+      // next `runOnce` once Fix A's single-flight refresh restores the bearer.
+      await outboxDao.markFailed(
+        row.id,
+        errorCode: ErrorCode.AUTH,
         errorMessage: e.message,
       );
     } on ServerRejection catch (e) {
@@ -336,7 +360,7 @@ class PushEngine {
       }
 
       try {
-        return await send(method, payload, docServerName);
+        return await _sendTranslated(method, payload, docServerName);
       } on DuplicateEntryError catch (e) {
         if (!isInsert) rethrow;
         return await _resolveDuplicate(row, decision, e);
@@ -353,6 +377,25 @@ class PushEngine {
     if (lastTransient is NetworkError) throw lastTransient;
     if (lastTransient is TimeoutError) throw lastTransient;
     throw NetworkError(message: 'unknown network failure');
+  }
+
+  /// Calls the consumer's [send] and translates any raw [FrappeException]
+  /// into the [PushError] the dispatch loop / `_process` matrix understands
+  /// (F-B1). A translated [NetworkError] / [TimeoutError] is re-caught by the
+  /// same loop's `on NetworkError` / `on TimeoutError` clause so in-loop
+  /// backoff retry is preserved; other push errors propagate to `_process`.
+  /// [PushError]s thrown directly by [send] (test fakes, assembler) pass
+  /// through untouched — they are not [FrappeException]s.
+  Future<Map<String, dynamic>> _sendTranslated(
+    String method,
+    Map<String, Object?> payload,
+    String? serverName,
+  ) async {
+    try {
+      return await send(method, payload, serverName);
+    } on FrappeException catch (e) {
+      throw translateFrappeException(e);
+    }
   }
 
   /// Recovers from a `DuplicateEntryError` on INSERT by fetching the

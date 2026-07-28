@@ -7,6 +7,7 @@ enum OutboxState { pending, inFlight, done, failed, conflict, blocked }
 enum ErrorCode {
   NETWORK,
   TIMEOUT,
+  AUTH,
   TIMESTAMP_MISMATCH,
   LINK_EXISTS,
   PERMISSION_DENIED,
@@ -96,6 +97,12 @@ class OutboxRow {
   final ErrorCode? errorCode;
   final DateTime createdAt;
 
+  /// Per-row automatic-requeue counter. Bumped by
+  /// [OutboxDao.resetTransientFailedToPending] each time a transient-failed
+  /// row is auto-requeued; zeroed by a user-initiated
+  /// [OutboxDao.resetToPending]. Null-safe on pre-migration snapshots.
+  final int attempts;
+
   OutboxRow({
     required this.id,
     required this.doctype,
@@ -109,6 +116,7 @@ class OutboxRow {
     this.errorMessage,
     this.errorCode,
     required this.createdAt,
+    this.attempts = 0,
   });
 
   factory OutboxRow.fromMap(Map<String, Object?> row) {
@@ -133,6 +141,7 @@ class OutboxRow {
         row['created_at'] as int,
         isUtc: true,
       ),
+      attempts: (row['attempts'] as int?) ?? 0,
     );
   }
 }

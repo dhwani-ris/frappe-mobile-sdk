@@ -3,7 +3,7 @@ import '../models/outbox_row.dart';
 /// Reorders outbox rows for `Retry all` per Spec §7.4.
 ///
 /// Priority (1 highest, 7 lowest):
-/// 1. `state=failed AND error_code IN (NETWORK, TIMEOUT)` — transient.
+/// 1. `state=failed AND error_code IN (NETWORK, TIMEOUT, AUTH)` — transient.
 /// 2. `state=blocked` — releases dependents on parent success.
 /// 3. `state=conflict` — often succeeds after auto-merge retry.
 /// 4. `state=failed AND error_code=LINK_EXISTS` — succeeds only after
@@ -35,6 +35,7 @@ class RetryPriority {
       switch (r.errorCode) {
         case ErrorCode.NETWORK:
         case ErrorCode.TIMEOUT:
+        case ErrorCode.AUTH:
           return 1;
         case ErrorCode.LINK_EXISTS:
           return 4;

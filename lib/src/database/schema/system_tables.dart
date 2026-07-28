@@ -20,7 +20,8 @@ List<String> systemTablesDDL() => <String>[
         state TEXT NOT NULL,
         created_at INTEGER NOT NULL,
         error_code TEXT,
-        error_message TEXT
+        error_message TEXT,
+        attempts INTEGER NOT NULL DEFAULT 0
       )
       ''',
   'CREATE INDEX IF NOT EXISTS ix_outbox_state ON outbox(state, created_at)',

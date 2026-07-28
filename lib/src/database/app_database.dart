@@ -9,7 +9,7 @@ import 'daos/doctype_permission_dao.dart';
 import 'schema/system_tables.dart';
 
 class AppDatabase {
-  static const int _version = 4;
+  static const int _version = 5;
 
   /// Singleton instance for the production (on-disk) database. The in-memory
   /// factory does NOT touch this — each call returns an independent instance
@@ -138,6 +138,18 @@ class AppDatabase {
       // installs never had the table (`_onCreate` doesn't create it), so
       // they are unaffected.
       await db.execute('DROP TABLE IF EXISTS permission_skip_doctypes');
+    }
+    if (oldVersion < 5) {
+      // Add the per-row auto-retry counter to the slim outbox. Fresh
+      // installs get it from `systemTablesDDL()`; upgraded DBs skip the
+      // `CREATE TABLE IF NOT EXISTS` so this ALTER supplies it. Additive,
+      // idempotent (`_safeAddColumn` swallows duplicate-column re-entry).
+      await db.transaction((txn) async {
+        await _safeAddColumn(
+          txn,
+          'ALTER TABLE outbox ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0',
+        );
+      });
     }
   }
 

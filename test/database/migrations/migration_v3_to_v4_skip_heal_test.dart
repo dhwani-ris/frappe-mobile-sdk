@@ -60,6 +60,22 @@ void main() {
           );
           await db.insert('permission_skip_doctypes', {'doctype': 'Member'});
           await db.insert('permission_skip_doctypes', {'doctype': 'Village'});
+          // A real pre-v5 device also carries the slim outbox table (created
+          // when the DB reached v3). It's needed here because `_onUpgrade`'s
+          // v5 step (oldVersion < 5) runs the `outbox.attempts` ALTER, which
+          // must have a table to alter. Seeded in its PRE-v5 shape (no
+          // `attempts` column) so the ALTER exercises the real migration.
+          await db.execute(
+            'CREATE TABLE outbox ('
+            'id INTEGER PRIMARY KEY AUTOINCREMENT, '
+            'doctype TEXT NOT NULL, '
+            'mobile_uuid TEXT NOT NULL, '
+            'operation TEXT NOT NULL, '
+            'state TEXT NOT NULL, '
+            'created_at INTEGER NOT NULL, '
+            'error_code TEXT, '
+            'error_message TEXT)',
+          );
         },
       );
       final seeded = await v3.query('permission_skip_doctypes');

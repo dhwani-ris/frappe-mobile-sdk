@@ -309,6 +309,37 @@ class OutboxDao {
     );
   }
 
+  /// Auto-requeues transient failures at drain start. Flips `failed` rows
+  /// whose `error_code` is in the transient set {NETWORK, TIMEOUT, AUTH,
+  /// UNKNOWN} and whose [attempts] is below [maxAttempts] back to `pending`,
+  /// clearing the error fields and incrementing the per-row auto-retry
+  /// counter. Rows at/over the cap stay `failed` until a user-initiated
+  /// [resetToPending] (which zeroes the counter). Returns the row count.
+  ///
+  /// UNKNOWN is included deliberately: every pre-fix field failure — real
+  /// network errors included — was recorded as UNKNOWN, and the cap bounds
+  /// genuinely-permanent unknowns to [maxAttempts] extra tries. Excluded
+  /// (stay failed): VALIDATION, MANDATORY, PERMISSION_DENIED, LINK_EXISTS,
+  /// TIMESTAMP_MISMATCH, and NULL error_code.
+  Future<int> resetTransientFailedToPending({required int maxAttempts}) {
+    return _db.rawUpdate(
+      'UPDATE outbox '
+      'SET state = ?, error_code = NULL, error_message = NULL, '
+      '    attempts = attempts + 1 '
+      'WHERE state = ? AND attempts < ? '
+      '  AND error_code IN (?, ?, ?, ?)',
+      <Object?>[
+        OutboxState.pending.wireName,
+        OutboxState.failed.wireName,
+        maxAttempts,
+        ErrorCode.NETWORK.wireName,
+        ErrorCode.TIMEOUT.wireName,
+        ErrorCode.AUTH.wireName,
+        ErrorCode.UNKNOWN.wireName,
+      ],
+    );
+  }
+
   /// Flips a row in any non-pending state back to `pending` so the push
   /// engine picks it up on the next drain. Clears `error_code` /
   /// `error_message` so retries start with a fresh slate. Used by
@@ -321,6 +352,8 @@ class OutboxDao {
         'state': OutboxState.pending.wireName,
         'error_code': null,
         'error_message': null,
+        // A user-initiated retry restores the full auto-retry budget.
+        'attempts': 0,
       },
       where: 'id = ?',
       whereArgs: [id],

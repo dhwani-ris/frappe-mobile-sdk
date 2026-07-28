@@ -104,6 +104,7 @@ OutboxErrorText humanizeOutboxError(OutboxRow row) {
       switch (code) {
         case ErrorCode.NETWORK:
         case ErrorCode.TIMEOUT:
+        case ErrorCode.AUTH:
           fallback = 'Could not reach the server';
           fallbackDetail =
               'The device could not connect long enough to '

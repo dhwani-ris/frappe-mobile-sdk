@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 
+import '../api/exceptions.dart';
 import '../models/outbox_row.dart';
 
 /// Common base for every error the push pipeline can raise. Each maps to
@@ -30,6 +31,19 @@ class TimeoutError extends PushError {
   ErrorCode toErrorCode() => ErrorCode.TIMEOUT;
   @override
   String toString() => 'TimeoutError: $message';
+}
+
+/// The server rejected the request with a 401 — the device's session
+/// expired mid-push. Session-expiry class: transient and auto-retryable
+/// once the token refresh (Fix A) restores the bearer.
+class AuthError extends PushError {
+  @override
+  final String message;
+  AuthError({required this.message});
+  @override
+  ErrorCode toErrorCode() => ErrorCode.AUTH;
+  @override
+  String toString() => 'AuthError: $message';
 }
 
 /// Frappe `check_if_latest` failed — the row has been modified on the
@@ -158,5 +172,61 @@ class ServerRejection extends PushError {
     if (status == 403) return ErrorCode.PERMISSION_DENIED;
     if (status == 417) return ErrorCode.VALIDATION;
     return ErrorCode.UNKNOWN;
+  }
+}
+
+/// Maps a raw [FrappeException] thrown by the HTTP `send` boundary into the
+/// [PushError] the engine's `_process` matrix understands. Without this the
+/// consumer's `client.document.*` calls throw `NetworkException` /
+/// `AuthException` / `ValidationException` / `ApiException` straight through
+/// the dispatch loop into the catch-all → every real-world failure would be
+/// recorded as `UNKNOWN`.
+///
+/// - [NetworkException] (offline/timeout, wrapped by RestHelper) → [NetworkError]
+///   so the dispatch loop's own `on NetworkError` clause runs its backoff.
+/// - [AuthException] 401 → [AuthError] (session-expiry, transient).
+/// - [AuthException] 403 → [ServerRejection] (→ PERMISSION_DENIED).
+/// - [ValidationException] → [ServerRejection] carrying the error body so
+///   `exc_type` derives VALIDATION / MANDATORY.
+/// - [ApiException] / other → [ServerRejection] carrying whatever detail is
+///   available.
+PushError translateFrappeException(FrappeException e) {
+  if (e is NetworkException) return NetworkError(message: e.message);
+  if (e is AuthException) {
+    return e.statusCode == 401
+        ? AuthError(message: e.message)
+        : ServerRejection(
+            status: e.statusCode ?? 403,
+            rawBody: jsonEncode({'message': e.message}),
+          );
+  }
+  if (e is ValidationException) {
+    return ServerRejection(
+      status: 417,
+      rawBody: jsonEncode(e.errors ?? {'message': e.message}),
+    );
+  }
+  if (e is ApiException) {
+    return ServerRejection(
+      status: e.statusCode ?? 0,
+      rawBody: _encodeBody(e.details, e.message),
+    );
+  }
+  return ServerRejection(
+    status: e.statusCode ?? 0,
+    rawBody: jsonEncode({'message': e.message}),
+  );
+}
+
+/// Best-effort JSON encode of an [ApiException]'s `details` (which may be a
+/// decoded Map/List, a raw String, or null). Falls back to a message map on
+/// null or a non-encodable value so `ServerRejection.toErrorCode` always has
+/// valid JSON to parse.
+String _encodeBody(dynamic details, String message) {
+  if (details == null) return jsonEncode({'message': message});
+  try {
+    return jsonEncode(details);
+  } catch (_) {
+    return jsonEncode({'message': message});
   }
 }

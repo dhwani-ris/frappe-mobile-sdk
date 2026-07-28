@@ -230,7 +230,8 @@ class RestHelper {
 
         return _handleResponse(response);
       } on AuthException catch (e) {
-        if (e.statusCode == 401 &&
+        if (includeAuth &&
+            e.statusCode == 401 &&
             _bearerToken != null &&
             onTokenExpired != null) {
           final refreshed = await onTokenExpired!();
