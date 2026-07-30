@@ -144,8 +144,95 @@ class ServerRejection extends PushError {
   final String rawBody;
   ServerRejection({required this.status, required this.rawBody});
 
+  /// Frappe's human-readable reason, followed by the status for our own
+  /// debugging — e.g.
+  /// `This scheme application's follow-up flow is already closed … (status=417)`.
+  ///
+  /// This used to return `'ServerRejection status=$status'` and throw [rawBody]
+  /// away. That string is what gets stored on the outbox row and shown to the
+  /// surveyor, so a rejection carrying a perfectly clear explanation surfaced as
+  /// `ServerRejection status=417` with no indication of what to change
+  /// (SWF-2026-69164; seen again 2026-07-30 on a scheme follow-up whose server
+  /// message said exactly why it was refused).
+  ///
+  /// The consumer's error classifier already knows how to unpack
+  /// `_server_messages` / `exception`, but only ever receives this string — so
+  /// the extraction has to happen here, at the point the body is still in hand.
+  /// Falls back to the bare status line when the body has nothing usable, so
+  /// the value is never empty.
   @override
-  String get message => 'ServerRejection status=$status';
+  String get message {
+    final reason = _humanReason();
+    return reason == null
+        ? 'ServerRejection status=$status'
+        : '$reason (status=$status)';
+  }
+
+  /// Pulls the surveyor-facing sentence out of a Frappe error envelope.
+  ///
+  /// `_server_messages` is a JSON-encoded LIST of JSON-encoded maps — double
+  /// encoded — which is why it needs decoding twice. Falls back to `exception`
+  /// (`frappe.exceptions.ValidationError: <text>`) and then to `message`.
+  String? _humanReason() {
+    Map<String, dynamic>? body;
+    try {
+      body = jsonDecode(rawBody) as Map<String, dynamic>?;
+    } catch (_) {
+      return null;
+    }
+    if (body == null) return null;
+
+    final sm = body['_server_messages'];
+    if (sm is String && sm.trim().isNotEmpty) {
+      try {
+        final outer = jsonDecode(sm);
+        if (outer is List) {
+          final parts = <String>[];
+          for (final entry in outer) {
+            if (entry is String) {
+              try {
+                final inner = jsonDecode(entry);
+                if (inner is Map && inner['message'] is String) {
+                  final m = (inner['message'] as String).trim();
+                  if (m.isNotEmpty) parts.add(_stripHtml(m));
+                  continue;
+                }
+              } catch (_) {
+                // not JSON — take the raw entry
+              }
+              final t = entry.trim();
+              if (t.isNotEmpty) parts.add(_stripHtml(t));
+            }
+          }
+          if (parts.isNotEmpty) return parts.join(' ');
+        }
+      } catch (_) {
+        // fall through to the other fields
+      }
+    }
+
+    for (final key in const ['exception', 'message']) {
+      final v = body[key];
+      if (v is String && v.trim().isNotEmpty) {
+        // 'frappe.exceptions.ValidationError: Age must be…' -> 'Age must be…'
+        final m = RegExp(
+          r'^[\w.]*(?:Error|Exception):\s*(.+)$',
+          dotAll: true,
+        ).firstMatch(v.trim());
+        final text = (m != null ? m.group(1)! : v).trim();
+        if (text.isNotEmpty) return _stripHtml(text);
+      }
+    }
+    return null;
+  }
+
+  /// Frappe messages routinely carry markup (`<b>`, `<br>`, links). The outbox
+  /// value is rendered as plain text, so strip tags rather than show them.
+  static String _stripHtml(String s) => s
+      .replaceAll(RegExp(r'<br\s*/?>', caseSensitive: false), ' ')
+      .replaceAll(RegExp(r'<[^>]+>'), '')
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .trim();
 
   @override
   ErrorCode toErrorCode() {

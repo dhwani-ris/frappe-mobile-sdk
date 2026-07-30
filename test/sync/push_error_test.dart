@@ -1,8 +1,10 @@
+import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:frappe_mobile_sdk/src/sync/push_error.dart';
 import 'package:frappe_mobile_sdk/src/models/outbox_row.dart';
 
 void main() {
+  _serverRejectionMessageTests();
   test('NetworkError maps to ErrorCode.NETWORK', () {
     final e = NetworkError(message: 'timeout');
     expect(e.toErrorCode(), ErrorCode.NETWORK);
@@ -170,5 +172,77 @@ void main() {
       'when exc_type is absent', () {
     final e = ServerRejection(status: 417, rawBody: '{}');
     expect(e.toErrorCode(), ErrorCode.VALIDATION);
+  });
+}
+
+void _serverRejectionMessageTests() {
+  group('ServerRejection.message surfaces the server reason (SWF-69164)', () {
+    // The outbox stores this string and the Sync screen shows it. It used to be
+    // 'ServerRejection status=417' with the body discarded, so a rejection that
+    // explained itself perfectly well reached the surveyor as a status code.
+    test('extracts the message from _server_messages (double-encoded)', () {
+      final body = jsonEncode({
+        'exc_type': 'ValidationError',
+        '_server_messages': jsonEncode([
+          jsonEncode({
+            'message':
+                "This scheme application's follow-up flow is already "
+                'closed (current status: Application Rejected). No further '
+                'follow-ups can be added.',
+            'title': 'Message',
+          }),
+        ]),
+      });
+      final e = ServerRejection(status: 417, rawBody: body);
+      expect(e.message, contains('follow-up flow is already closed'));
+      expect(e.message, contains('Application Rejected'));
+      expect(e.message, contains('status=417'));
+      expect(e.message, isNot(startsWith('ServerRejection')));
+    });
+
+    test('strips HTML that Frappe routinely includes', () {
+      final body = jsonEncode({
+        '_server_messages': jsonEncode([
+          jsonEncode({'message': 'Missing: <b>Village</b><br>Fix it.'}),
+        ]),
+      });
+      expect(
+        ServerRejection(status: 417, rawBody: body).message,
+        'Missing: Village Fix it. (status=417)',
+      );
+    });
+
+    test('falls back to `exception`, trimming the class prefix', () {
+      final body = jsonEncode({
+        'exception': 'frappe.exceptions.ValidationError: Age must be under 130',
+      });
+      expect(
+        ServerRejection(status: 417, rawBody: body).message,
+        'Age must be under 130 (status=417)',
+      );
+    });
+
+    test('falls back to the bare status when the body has nothing usable', () {
+      expect(
+        ServerRejection(status: 500, rawBody: 'not json at all').message,
+        'ServerRejection status=500',
+      );
+      expect(
+        ServerRejection(status: 403, rawBody: jsonEncode({'x': 1})).message,
+        'ServerRejection status=403',
+      );
+    });
+
+    test('error-code mapping is unchanged', () {
+      final body = jsonEncode({'exc_type': 'ValidationError'});
+      expect(
+        ServerRejection(status: 417, rawBody: body).toErrorCode(),
+        ErrorCode.VALIDATION,
+      );
+      expect(
+        ServerRejection(status: 403, rawBody: '{}').toErrorCode(),
+        ErrorCode.PERMISSION_DENIED,
+      );
+    });
   });
 }
