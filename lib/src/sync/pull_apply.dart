@@ -259,7 +259,26 @@ class PullApply {
 
         for (var idx = 0; idx < list.length; idx++) {
           final cr = Map<String, dynamic>.from(list[idx] as Map);
-          final serverChildName = cr['name'] as String?;
+          // `.toString()`, NOT `as String?`. A child doctype declared with
+          // `autoname: "autoincrement"` — a normal Frappe naming mode — gets an
+          // INTEGER primary key, so `name` arrives as a JSON number and a hard
+          // cast throws:
+          //
+          //   type 'int' is not a subtype of type 'String?' in type cast
+          //
+          // That kills the whole doctype's pull, not just the row, so the
+          // doctype never completes and the first-sync screen reports it as a
+          // required item that did not finish. Observed on staging 2026-07-30:
+          // the PM could not sync Livelihood Application or Livelihood Goat
+          // Purchase Followup at all, because their Table MultiSelect children
+          // (Goat Training Item / Goat Sex Item / Market Channel Item) are all
+          // `autoincrement`. It was dormant until those tables held their first
+          // row — which is why it appeared the day Livelihood was first tested.
+          //
+          // The very next line already does this for `mobile_uuid`; `name` was
+          // simply missed. `server_name` downstream is a TEXT column, so the
+          // string form is what the local schema wants anyway.
+          final serverChildName = cr['name']?.toString();
           final rawChildUuid = cr['mobile_uuid']?.toString();
           final hasRawUuid = rawChildUuid != null && rawChildUuid.isNotEmpty;
           String? preserved;
