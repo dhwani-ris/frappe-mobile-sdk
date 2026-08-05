@@ -274,9 +274,20 @@ class ServerRejection extends PushError {
 /// - [AuthException] 401 → [AuthError] (session-expiry, transient).
 /// - [AuthException] 403 → [ServerRejection] (→ PERMISSION_DENIED).
 /// - [ValidationException] → [ServerRejection] carrying the error body so
-///   `exc_type` derives VALIDATION / MANDATORY.
+///   `exc_type` derives VALIDATION / MANDATORY — EXCEPT a `check_if_latest`
+///   conflict, which becomes a [TimestampMismatchError] (see below).
 /// - [ApiException] / other → [ServerRejection] carrying whatever detail is
 ///   available.
+///
+/// Frappe's `TimestampMismatchError` subclasses `ValidationError`, so it
+/// arrives as an ordinary HTTP 417 and RestHelper wraps it in a
+/// [ValidationException] like any other validation failure. Flattening it to a
+/// [ServerRejection] made `PushEngine._process`'s `on TimestampMismatchError`
+/// clause unreachable, so the three-way merge + retry-once cycle never ran:
+/// conflicts went straight to `markFailed`, and because the local `modified`
+/// is only written back on a successful push, a user Retry re-sent the same
+/// stale stamp and failed identically every time. Detecting it here is what
+/// makes that recovery path live.
 PushError translateFrappeException(FrappeException e) {
   if (e is NetworkException) return NetworkError(message: e.message);
   if (e is AuthException) {
@@ -288,6 +299,8 @@ PushError translateFrappeException(FrappeException e) {
           );
   }
   if (e is ValidationException) {
+    final mismatch = _asTimestampMismatch(e);
+    if (mismatch != null) return mismatch;
     return ServerRejection(
       status: 417,
       rawBody: jsonEncode(e.errors ?? {'message': e.message}),
@@ -303,6 +316,51 @@ PushError translateFrappeException(FrappeException e) {
     status: e.statusCode ?? 0,
     rawBody: jsonEncode({'message': e.message}),
   );
+}
+
+/// Matches Frappe's `check_if_latest` message, e.g.
+///
+/// ```text
+/// Error: SA-2026-3004531 (Scheme Application) has been modified after you
+/// have opened it (2026-08-04 19:33:11.775698, 2026-08-04 19:33:25.048539).
+/// Please refresh to get the latest document.
+/// ```
+///
+/// The first captured stamp is the value actually in the database — the one a
+/// refetch will return. The second is the server's clock at the moment of
+/// rejection, NOT the value the device sent: in `Document.check_if_latest`
+/// Frappe interpolates `self.modified` after `set_user_and_timestamp()` has
+/// already overwritten it, while the comparison itself is against
+/// `self._original_modified`. Only the first is useful to us.
+///
+/// Verified against a real rejection on staging 2026-08-05 — see the fixture
+/// in `test/sync/push_error_test.dart`. (Line numbers in `document.py` move
+/// between Frappe versions, so this cites the method, not a line.)
+final _timestampMismatchPattern = RegExp(
+  r'has been modified after you have opened it'
+  r'(?:\s*\(\s*([\d\-]+ [\d:.]+)\s*,)?',
+  caseSensitive: false,
+);
+
+/// Recognises a Frappe `check_if_latest` conflict inside a 417.
+///
+/// `exc_type` is the primary signal and is normally present: a real staging
+/// rejection (2026-08-05) carries `"exc_type": "TimestampMismatchError"` at the
+/// top level, and `RestHelper` passes the whole decoded body through as
+/// [ValidationException.errors] whenever it is a Map.
+///
+/// The message-text fallback covers the case where it is NOT a Map — a proxy
+/// HTML error page, or any non-JSON body — since `RestHelper` then passes
+/// `null` for `errors` and the collapsed sentence is all that is left.
+///
+/// Returns null for every other validation failure so ordinary rejections keep
+/// their VALIDATION handling.
+TimestampMismatchError? _asTimestampMismatch(ValidationException e) {
+  final excType = e.errors?['exc_type']?.toString();
+  final haystack = '${e.message} ${e.errors ?? ''}';
+  final match = _timestampMismatchPattern.firstMatch(haystack);
+  if (excType != 'TimestampMismatchError' && match == null) return null;
+  return TimestampMismatchError(serverModified: match?.group(1));
 }
 
 /// Best-effort JSON encode of an [ApiException]'s `details` (which may be a

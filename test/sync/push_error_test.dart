@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:frappe_mobile_sdk/src/api/exceptions.dart';
 import 'package:frappe_mobile_sdk/src/sync/push_error.dart';
 import 'package:frappe_mobile_sdk/src/models/outbox_row.dart';
 
@@ -243,6 +244,106 @@ void _serverRejectionMessageTests() {
         ServerRejection(status: 403, rawBody: '{}').toErrorCode(),
         ErrorCode.PERMISSION_DENIED,
       );
+    });
+  });
+
+  // Frappe's `check_if_latest` raises TimestampMismatchError, a subclass of
+  // ValidationError → HTTP 417. RestHelper turns every 417 into a
+  // ValidationException, so the translator used to flatten it to a plain
+  // ServerRejection. PushEngine._process catches `on TimestampMismatchError`
+  // to run its three-way merge + retry-once cycle — with the error flattened,
+  // that clause could never fire and the merge path was dead code. Every
+  // conflict went straight to markFailed, where a user Retry re-sent the same
+  // stale `modified` and failed identically, forever.
+  group('translateFrappeException — timestamp mismatch (417)', () {
+    // Captured from a REAL rejection on stg.swasti.mform.in (2026-08-05) by
+    // PUTing a stale `modified`, rather than hand-written from the reported
+    // screenshot. Confirms what actually survives the wire: HTTP 417, an
+    // `exc_type` that IS present in the body, and the message shape the regex
+    // has to parse. `exc` (a full traceback) is elided; nothing reads it.
+    const realMessage =
+        'Error: SA-2026-55068 (Scheme Application) has been modified after '
+        'you have opened it (2026-07-10 12:08:29.642316, '
+        '2026-08-05 11:57:56.983030). Please refresh to get the latest '
+        'document.';
+    final realBody = <String, dynamic>{
+      'exception': 'frappe.exceptions.TimestampMismatchError: $realMessage',
+      'exc_type': 'TimestampMismatchError',
+      '_server_messages': jsonEncode([
+        jsonEncode({
+          'message': realMessage,
+          'as_table': false,
+          'title': 'Message',
+          'indicator': 'red',
+          'raise_exception': 1,
+        }),
+      ]),
+    };
+
+    test('the real staging 417 payload is recognised', () {
+      final err = translateFrappeException(
+        ValidationException(realMessage, realBody),
+      );
+      expect(err, isA<TimestampMismatchError>());
+      expect(err.toErrorCode(), ErrorCode.TIMESTAMP_MISMATCH);
+      // The DB value — the one a refetch returns. NOT the second stamp, which
+      // is the server's clock at rejection.
+      expect(
+        (err as TimestampMismatchError).serverModified,
+        '2026-07-10 12:08:29.642316',
+      );
+    });
+
+    test('exc_type alone is enough, even with an unparseable message', () {
+      final err = translateFrappeException(
+        ValidationException('translated to another language', {
+          'exc_type': 'TimestampMismatchError',
+        }),
+      );
+      expect(err, isA<TimestampMismatchError>());
+      expect((err as TimestampMismatchError).serverModified, isNull);
+    });
+
+    test('message-only 417 (no exc_type) is still recognised', () {
+      // The production payload: RestHelper's `extractErrorMessage` collapses
+      // _server_messages to a bare sentence and exc_type does not survive.
+      final err = translateFrappeException(
+        ValidationException(
+          'SA-2026-3004531 (Scheme Application) has been modified after you '
+          'have opened it (2026-08-04 19:33:11.775698, '
+          '2026-08-04 19:33:25.048539). Please refresh to get the latest '
+          'document.',
+        ),
+      );
+      expect(err, isA<TimestampMismatchError>());
+    });
+
+    test('captures the server modified stamp for the refetch', () {
+      final err = translateFrappeException(
+        ValidationException(
+          'X has been modified after you have opened it '
+          '(2026-08-04 19:33:11.775698, 2026-08-04 19:33:25.048539). '
+          'Please refresh to get the latest document.',
+        ),
+      );
+      // First of the pair is the value actually in the database; the second is
+      // the server's clock at rejection (Frappe prints `self.modified` after
+      // set_user_and_timestamp has already overwritten it — see
+      // frappe/model/document.py:866-871).
+      expect(
+        (err as TimestampMismatchError).serverModified,
+        '2026-08-04 19:33:11.775698',
+      );
+    });
+
+    test('an ordinary 417 validation error is NOT misclassified', () {
+      final err = translateFrappeException(
+        ValidationException('Marital Status cannot be "Widowed" for a minor', {
+          'exc_type': 'ValidationError',
+        }),
+      );
+      expect(err, isA<ServerRejection>());
+      expect(err.toErrorCode(), ErrorCode.VALIDATION);
     });
   });
 }
