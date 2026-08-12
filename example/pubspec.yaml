@@ -2,7 +2,7 @@ name: frappe_mobile_sdk_example
 description: Example app demonstrating Frappe Mobile SDK usage
 publish_to: 'none'
 
-version: 2.0.0-beta.2
+version: 1.4.0-dev
 
 environment:
   # Kept in step with the SDK's own floor: `flutter pub get` in the SDK root also
