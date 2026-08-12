@@ -19,6 +19,13 @@ class TableMultiSelectFieldBase extends BaseField {
   final LinkFilterBuilder? Function(String doctype, String fieldname)?
   getLinkFilterBuilder;
 
+  /// Inline error message rendered below the selector, mirroring
+  /// `ChildTableField.errorText`. This widget is NOT a `FormBuilderField`, so
+  /// `FormBuilderState.fields[...].invalidate()` cannot surface its
+  /// required-empty error — the form builder's mandatory sweep writes here
+  /// instead. Null/empty renders nothing, so existing call sites are unchanged.
+  final String? errorText;
+
   const TableMultiSelectFieldBase({
     super.key,
     required super.field,
@@ -30,11 +37,17 @@ class TableMultiSelectFieldBase extends BaseField {
     this.formData = const {},
     this.parentFormData = const {},
     this.getLinkFilterBuilder,
+    this.errorText,
     super.style,
   }) : super(value: rows);
 
   @override
   Widget buildField(BuildContext context) {
+    // NOTE: the error is rendered INSIDE [_Loader] (not by wrapping it here).
+    // Wrapping conditionally would flip this slot's widget type when the error
+    // appears, unmounting [_LoaderState] → `initState` → `_load()` →
+    // `_emitCleanValue()` fires `onChanged([])`, which the form builder treats
+    // as an edit and clears the error that was just surfaced.
     return _Loader(
       field: field,
       rows: rows,
@@ -47,6 +60,7 @@ class TableMultiSelectFieldBase extends BaseField {
       getLinkFilterBuilder: getLinkFilterBuilder,
       labelText: style?.decoration?.labelText,
       style: style,
+      errorText: errorText,
     );
   }
 }
@@ -65,6 +79,7 @@ class _Loader extends StatefulWidget {
     this.getLinkFilterBuilder,
     this.labelText,
     this.style,
+    this.errorText,
   });
 
   final DocField field;
@@ -79,6 +94,7 @@ class _Loader extends StatefulWidget {
   getLinkFilterBuilder;
   final String? labelText;
   final FieldStyle? style;
+  final String? errorText;
 
   @override
   State<_Loader> createState() => _LoaderState();
@@ -162,23 +178,47 @@ class _LoaderState extends State<_Loader> {
 
   @override
   Widget build(BuildContext context) {
-    return SearchableSelect(
-      options: _options,
-      selected: _selected,
-      multiSelect: true,
-      enabled: widget.enabled,
-      loading: _loading,
-      hintText: widget.field.placeholder,
-      labelText: widget.labelText,
-      pickerMode:
-          widget.style?.linkFieldPickerMode ?? LinkFieldPickerMode.inline,
-      onChanged: (values) {
-        if (_linkFieldName == null) return;
-        final rows = values
-            .map((v) => <String, dynamic>{_linkFieldName!: v})
-            .toList();
-        widget.onChanged?.call(rows);
-      },
+    final error = widget.errorText;
+    // The Column is UNCONDITIONAL: keeping the selector at child index 0 in
+    // both states means the error appearing/clearing reconciles in place and
+    // never remounts [SearchableSelect] (which would drop its focus/search
+    // state) or this loader. Layout is unchanged when there is no error —
+    // SearchableSelect already returns a min-size, start-aligned Column.
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SearchableSelect(
+          options: _options,
+          selected: _selected,
+          multiSelect: true,
+          enabled: widget.enabled,
+          loading: _loading,
+          hintText: widget.field.placeholder,
+          labelText: widget.labelText,
+          pickerMode:
+              widget.style?.linkFieldPickerMode ?? LinkFieldPickerMode.inline,
+          onChanged: (values) {
+            if (_linkFieldName == null) return;
+            final rows = values
+                .map((v) => <String, dynamic>{_linkFieldName!: v})
+                .toList();
+            widget.onChanged?.call(rows);
+          },
+        ),
+        // Same shape/styling as ChildTableField's inline error.
+        if (error != null && error.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Text(
+              error,
+              style: TextStyle(
+                color: Theme.of(context).colorScheme.error,
+                fontSize: 12,
+              ),
+            ),
+          ),
+      ],
     );
   }
 }

@@ -45,8 +45,11 @@ void main() {
       expect(sqliteColumnTypeFor('Time'), 'TEXT');
     });
 
-    test('Rating — INTEGER (numeric 1-5)', () {
-      expect(sqliteColumnTypeFor('Rating'), 'INTEGER');
+    // Frappe persists a Rating as a 0..1 fraction (stars / max_stars), so
+    // values like 0.6 are the norm — REAL, not INTEGER. The old expectation
+    // ("numeric 1-5") encoded a star-count assumption Frappe does not use.
+    test('Rating — REAL (Frappe stores a 0..1 fraction, e.g. 0.6)', () {
+      expect(sqliteColumnTypeFor('Rating'), 'REAL');
     });
 
     test('layout fieldtypes have no column', () {

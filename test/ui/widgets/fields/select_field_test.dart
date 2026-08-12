@@ -131,6 +131,29 @@ void main() {
       );
       expect(w.enabled, isFalse);
     });
+
+    testWidgets(
+      'readOnly with valid options still renders all options, not the '
+      'no-options placeholder',
+      (tester) async {
+        await _pumpSelect(
+          tester,
+          field: DocField(
+            fieldname: 'month',
+            fieldtype: 'Select',
+            label: 'Month',
+            options: '\nJanuary\nFebruary\nMarch',
+            readOnly: true,
+          ),
+        );
+        expect(find.text('No options available'), findsNothing);
+        final w = tester.widget<FormBuilderDropdown<String>>(
+          find.byType(FormBuilderDropdown<String>),
+        );
+        expect(w.enabled, isFalse);
+        expect(w.items.length, 3);
+      },
+    );
   });
 
   group('empty-options fallback', () {

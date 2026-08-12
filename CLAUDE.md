@@ -23,7 +23,8 @@ example/README.md
 android/src/main/kotlin/**/*.kt
 android/build.gradle
 android/src/main/AndroidManifest.xml
-ios/Classes/*.swift
+ios/frappe_mobile_sdk/Package.swift
+ios/frappe_mobile_sdk/Sources/**/*.swift
 ios/frappe_mobile_sdk.podspec
 pubspec.yaml
 analysis_options.yaml

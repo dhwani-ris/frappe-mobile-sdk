@@ -360,16 +360,23 @@ class OfflineRepository {
   Future<List<Document>> getDirtyDocuments({String? doctype}) async {
     if (!offlineMode.enabled) return const [];
     final db = _database.rawDatabase;
-    final List<String> doctypes;
+
+    // Candidate doctype -> table_name. A single doctype is one entry; a full
+    // scan takes the enrolled set from doctype_meta.
+    final tableByDoctype = <String, String>{};
     if (doctype != null) {
-      doctypes = [doctype];
+      tableByDoctype[doctype] = normalizeDoctypeTableName(doctype);
     } else {
       try {
         final rows = await db.rawQuery(
-          "SELECT doctype FROM doctype_meta "
+          "SELECT doctype, table_name FROM doctype_meta "
           "WHERE table_name IS NOT NULL AND table_name != ''",
         );
-        doctypes = rows.map((r) => r['doctype'] as String).toList();
+        for (final r in rows) {
+          final dt = r['doctype'] as String?;
+          final tbl = (r['table_name'] as String?) ?? '';
+          if (dt != null && tbl.isNotEmpty) tableByDoctype[dt] = tbl;
+        }
       } on DatabaseException catch (e, st) {
         sdkLog(
           'OfflineRepository.getDirtyDocuments: doctype_meta scan failed '
@@ -378,10 +385,56 @@ class OfflineRepository {
         return const [];
       }
     }
+    if (tableByDoctype.isEmpty) return const [];
+
+    // ONE metadata round-trip: every table's name + CREATE DDL, read from
+    // `sqlite_master` in a single query. B43 — this replaces the old
+    // per-doctype table + column existence probes (two sequential DB
+    // round-trips EACH, O(N) on the main isolate — the "Sync Data page slow"
+    // cause). Existence is membership in this map;
+    // `sync_status` presence is read straight from the CREATE DDL, so child /
+    // link `docs__*` tables (which lack the column) are skipped WITHOUT ever
+    // issuing a throwing query against them. Uses only `sqlite_master`, so it
+    // stays portable across every SQLite version the app ships on.
+    final ddlByTable = <String, String>{};
+    try {
+      final tables = await db.rawQuery(
+        "SELECT name, sql FROM sqlite_master WHERE type = 'table'",
+      );
+      for (final t in tables) {
+        final name = t['name'] as String?;
+        if (name != null) ddlByTable[name] = (t['sql'] as String?) ?? '';
+      }
+    } on DatabaseException catch (e, st) {
+      sdkLog(
+        'OfflineRepository.getDirtyDocuments: sqlite_master scan failed '
+        '— $e\n$st',
+      );
+      return const [];
+    }
+
+    // `\b` guards against false positives on a hypothetical `*_sync_status*`
+    // column (`_` is a word char, so no boundary there).
+    final syncStatusColumn = RegExp(r'\bsync_status\b');
+    // `sync_status` alone is not a sound parent marker: it is absent from
+    // `systemChildColumnNames`, and `child_schema.dart` emits every mappable
+    // DocField as a column — so a CHILD doctype that happens to declare a field
+    // literally named `sync_status` gets one, and would be misclassified as a
+    // parent here (its rows then read back through `Document.fromResolverRow`
+    // as if they were top-level documents). `parent_uuid` IS a child system
+    // column and is never emitted on a parent, so requiring its absence makes
+    // the test unambiguous in both directions.
+    final parentUuidColumn = RegExp(r'\bparent_uuid\b');
     final out = <Document>[];
-    for (final dt in doctypes) {
-      final tableName = normalizeDoctypeTableName(dt);
-      if (!await sqliteTableExists(db, tableName)) continue;
+    for (final entry in tableByDoctype.entries) {
+      final dt = entry.key;
+      final tableName = entry.value;
+      final ddl = ddlByTable[tableName];
+      if (ddl == null) continue; // table absent
+      if (!syncStatusColumn.hasMatch(ddl)) continue; // no sync_status column
+      if (parentUuidColumn.hasMatch(ddl)) {
+        continue; // child mirror, not a parent
+      }
       try {
         final rows = await db.query(
           tableName,
@@ -538,6 +591,30 @@ class OfflineRepository {
     }
 
     final existingServerName = existing?['server_name'] as String?;
+
+    // Carry Frappe's audit fields forward. LocalWriter's insert is
+    // `ConflictAlgorithm.replace`, so any column it doesn't emit is reset to
+    // NULL — and the form payload has no reason to round-trip `owner` /
+    // `creation` / `modified_by`. Without this, editing a previously-pulled
+    // doc would blank its `owner` and drop the row out of any `owner = <me>`
+    // filtered list. Values come only from the row already on disk (i.e. from
+    // the server, or from this device's own earlier save). Safe to read off
+    // `existing` because `reconcileParentTableForMeta` above has already added
+    // the columns.
+    //
+    // `modified_by` is deliberately EXCLUDED when the writer has a session
+    // user: this save's author is the current user, not whoever last touched
+    // the row, and carrying the stale value forward would win over the
+    // writer's stamp (highest precedence is `data`). With no session user we
+    // fall through to the old carry-forward so the on-disk value is preserved
+    // exactly as before.
+    final stampedBy = _localWriter.currentSessionUserId;
+    for (final col in serverAuditColumnNames) {
+      if (dataWithUuid.containsKey(col)) continue;
+      if (col == 'modified_by' && stampedBy != null) continue;
+      final v = existing?[col];
+      if (v != null) dataWithUuid[col] = v;
+    }
 
     await _database.rawDatabase.transaction((txn) async {
       await _localWriter.writeParentInTxn(
@@ -989,6 +1066,27 @@ class OfflineRepository {
     final addedNorm = <String>[];
     final seen = <String>{..._reconcileParentSystemCols};
 
+    // Backfill Frappe's server-owned audit columns onto tables created before
+    // they were materialized. The loop below only ever proposes META-derived
+    // columns (system names are pre-seeded into `seen` and therefore skipped),
+    // so without this an already-installed app would keep a `docs__*` table
+    // that has no `owner` / `creation` / `modified_by` — and `FilterParser`
+    // now emits real SQL for those, which would fail with "no such column".
+    //
+    // `AppDatabase._migrateV5ToV6` covers the same gap at open time and is the
+    // primary guarantee (it runs offline too); this is the per-doctype
+    // belt-and-braces for tables created between an upgrade and this pull, and
+    // for hosts that provision tables outside the migration path.
+    //
+    // ONLY nullable TEXT columns are safe to add this way: SQLite rejects
+    // `ALTER TABLE ... ADD COLUMN ... NOT NULL` without a default, which is
+    // why the other system columns (`local_modified`, `sync_status`, ...) are
+    // deliberately NOT reconciled here.
+    for (final col in serverAuditColumnNames) {
+      if (actual.contains(col)) continue;
+      addedFields.add(AddedField(name: col, sqlType: 'TEXT'));
+    }
+
     for (final f in meta.fields) {
       final name = f.fieldname;
       final type = f.fieldtype;
@@ -1011,6 +1109,10 @@ class OfflineRepository {
     }
 
     if (addedFields.isEmpty && addedIsLocal.isEmpty && addedNorm.isEmpty) {
+      // `owner` is necessarily already present on this branch — a missing audit
+      // column would have landed in `addedFields` — but the guard keeps the
+      // statement from ever running against a table without the column.
+      if (actual.contains('owner')) await _ensureOwnerIndex(tableName);
       return;
     }
 
@@ -1026,6 +1128,10 @@ class OfflineRepository {
 
     try {
       await MetaMigration.apply(db, diff, tableName: tableName);
+      // After the ALTER, never before: a failed ALTER must not leave a
+      // CREATE INDEX running against a missing column, and any index failure is
+      // logged by the catch below instead of failing the pull page.
+      await _ensureOwnerIndex(tableName);
     } catch (e, st) {
       developer.log(
         'parent table schema reconcile failed for $doctype/$tableName: $e',
@@ -1036,6 +1142,25 @@ class OfflineRepository {
     }
   }
 
+  /// `buildParentSchemaDDL` and `AppDatabase._migrateV5ToV6` both index
+  /// `owner`; a table that acquires the audit columns HERE instead would keep
+  /// the full scan that index exists to remove — which is exactly the tables
+  /// this reconcile exists for (created between an upgrade and the next pull,
+  /// or provisioned outside the migration path). Not gated on "we just added
+  /// `owner`": a host that provisions its own table WITH the columns and
+  /// without the index lands in the same place. `IF NOT EXISTS` makes the
+  /// per-pull re-run free.
+  ///
+  /// Name and quoting match `AppDatabase._migrateV5ToV6` exactly so all three
+  /// provisioning paths converge on one index rather than creating two under
+  /// different names.
+  Future<void> _ensureOwnerIndex(String tableName) async {
+    final suffix = stripDocsPrefix(tableName);
+    await _database.rawDatabase.execute(
+      'CREATE INDEX IF NOT EXISTS "ix_${suffix}_owner" ON "$tableName"(owner)',
+    );
+  }
+
   /// Returns [doc] with child-table rows attached to [doc.data] under each
   /// Table field's fieldname. Reads from the per-child-doctype SQLite tables
   /// (`docs__<child_doctype>`) by `parent_uuid = doc.localId`, ordered by
@@ -1044,13 +1169,16 @@ class OfflineRepository {
   ///
   /// Used when opening a document in offline mode, where the resolver's flat
   /// row does not embed child arrays.
+  ///
+  /// The DB fetch (this method) and the merge ([mergeChildRowsIntoData]) are
+  /// split so the merge can be unit-tested with plain maps, no database.
   Future<Document> attachChildRows(
     String doctype,
     Document doc,
     DocTypeMeta meta,
   ) async {
     final db = _database.rawDatabase;
-    final enriched = Map<String, dynamic>.from(doc.data);
+    final childRowsByField = <String, List<Map<String, dynamic>>>{};
     for (final field in meta.fields) {
       final fname = field.fieldname;
       final ftype = field.fieldtype;
@@ -1066,15 +1194,64 @@ class OfflineRepository {
         whereArgs: [doc.localId],
         orderBy: 'idx ASC',
       );
-      enriched[fname] = rows.map((r) {
-        final m = Map<String, dynamic>.from(r);
-        // Map server_name → name so field values align with Frappe convention.
-        if (!m.containsKey('name') && m.containsKey('server_name')) {
-          m['name'] = m['server_name'];
-        }
-        return m;
-      }).toList();
+      childRowsByField[fname] = rows
+          .map((r) => Map<String, dynamic>.from(r))
+          .toList();
     }
-    return doc.copyWith(data: enriched);
+    if (childRowsByField.isEmpty) return doc;
+    return doc.copyWith(
+      data: mergeChildRowsIntoData(doc.data, meta, childRowsByField),
+    );
   }
+}
+
+/// Pure merge step behind [OfflineRepository.attachChildRows]: no I/O, no
+/// database — takes the parent document's data map plus already-fetched
+/// child rows (keyed by the parent Table/Table MultiSelect fieldname) and
+/// returns the data map with those fields populated.
+///
+/// For every field in [meta] with `fieldtype` `Table` or `Table MultiSelect`
+/// that has a matching entry in [childRowsByField], each row is copied and
+/// `server_name` is aliased to `name` when `name` is absent — matching the
+/// shape the form builder receives from the live API — so `enriched[fname]`
+/// ends up identical whether the document was read online or offline.
+/// Fields absent from [childRowsByField] (no matching child table, or no
+/// rows found) are left untouched in [parentData].
+///
+/// Extracted so this merge can be unit-tested with plain maps/fixtures,
+/// independent of the SQLite fetch in [OfflineRepository.attachChildRows].
+Map<String, dynamic> mergeChildRowsIntoData(
+  Map<String, dynamic> parentData,
+  DocTypeMeta meta,
+  Map<String, List<Map<String, dynamic>>> childRowsByField,
+) {
+  final enriched = Map<String, dynamic>.from(parentData);
+  for (final field in meta.fields) {
+    final fname = field.fieldname;
+    final ftype = field.fieldtype;
+    if (fname == null) continue;
+    if (ftype != 'Table' && ftype != 'Table MultiSelect') continue;
+    final rows = childRowsByField[fname];
+    if (rows == null) continue;
+    enriched[fname] = rows.map((r) {
+      final m = Map<String, dynamic>.from(r);
+      // Map server_name → name so field values align with Frappe convention.
+      if (!m.containsKey('name') && m.containsKey('server_name')) {
+        m['name'] = m['server_name'];
+      }
+      return m;
+    }).toList();
+  }
+  return enriched;
+}
+
+/// Returns true if [meta] declares at least one `Table` / `Table MultiSelect`
+/// field — i.e. [OfflineRepository.attachChildRows] would have something to
+/// hydrate for this doctype. Pure (no I/O); lets callers skip the child-row
+/// fetch entirely for doctypes with no children instead of running a no-op
+/// loop over every mobile-form meta on every detail read.
+bool metaHasChildTableFields(DocTypeMeta meta) {
+  return meta.fields.any(
+    (f) => f.fieldtype == 'Table' || f.fieldtype == 'Table MultiSelect',
+  );
 }

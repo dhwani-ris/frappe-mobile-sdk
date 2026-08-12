@@ -55,9 +55,7 @@ String extractErrorMessage(dynamic body) {
         raw = serverMsg;
       }
     } catch (e, st) {
-      sdkLog(
-        'extractErrorMessage: _server_messages parse failed — $e\n$st',
-      );
+      sdkLog('extractErrorMessage: _server_messages parse failed — $e\n$st');
     }
   }
 

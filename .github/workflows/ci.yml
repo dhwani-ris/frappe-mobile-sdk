@@ -28,14 +28,18 @@ jobs:
       - name: Get dependencies
         run: flutter pub get
 
-      - name: Format code
-        run: dart format .
-
       - name: Analyze
         run: flutter analyze --no-fatal-infos
 
+      # There used to be a "Format code" step running `dart format .` — an
+      # IN-PLACE REWRITE — immediately before this check, which made the check
+      # structurally incapable of failing whatever was committed. Do not
+      # reintroduce it. This step must stay AFTER "Get dependencies": `dart
+      # format` reads the package's language version from the resolved
+      # `.dart_tool/package_config.json`, and without it the formatter assumes
+      # the newest language version and reports a completely different verdict.
       - name: Format check
-        run: dart format --set-exit-if-changed .
+        run: dart format --output=none --set-exit-if-changed .
 
       - name: Test
         run: flutter test

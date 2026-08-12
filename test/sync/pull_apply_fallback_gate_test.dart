@@ -5,10 +5,10 @@ import 'package:frappe_mobile_sdk/src/sync/pull_apply.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 DocTypeMeta _meta() => DocTypeMeta(
-      name: 'Patient',
-      isTable: false,
-      fields: [DocField(fieldname: 'patient_name', fieldtype: 'Data')],
-    );
+  name: 'Patient',
+  isTable: false,
+  fields: [DocField(fieldname: 'patient_name', fieldtype: 'Data')],
+);
 
 void main() {
   setUpAll(() {
@@ -92,7 +92,8 @@ void main() {
       expect(
         rows.first['sync_status'],
         'conflict',
-        reason: 'server advanced past dirty local edit → must be conflict, not synced',
+        reason:
+            'server advanced past dirty local edit → must be conflict, not synced',
       );
       expect(
         rows.first['patient_name'],
@@ -104,40 +105,40 @@ void main() {
 
   // T2 — tombstoned row during initial sync: sequential path chosen,
   // tombstone respected, row not resurrected.
-  test(
-    'T2: tombstoned row during initial sync → not resurrected',
-    () async {
-      await db.insert('docs__patient', {
-        'mobile_uuid': 'uuid-tomb',
-        'server_name': 'PAT-002',
-        'sync_status': 'deleted',
-        'sync_op': 'DELETE',
-        'local_modified': 1,
-        'patient_name': 'Should Stay Deleted',
-      });
+  test('T2: tombstoned row during initial sync → not resurrected', () async {
+    await db.insert('docs__patient', {
+      'mobile_uuid': 'uuid-tomb',
+      'server_name': 'PAT-002',
+      'sync_status': 'deleted',
+      'sync_op': 'DELETE',
+      'local_modified': 1,
+      'patient_name': 'Should Stay Deleted',
+    });
 
-      await PullApply.applyPage(
-        db: db,
-        parentMeta: _meta(),
-        parentTable: 'docs__patient',
-        childMetasByFieldname: const {},
-        rows: [
-          {
-            'name': 'PAT-002',
-            'modified': '2026-06-01 10:00:00',
-            'patient_name': 'Server Version',
-          },
-        ],
-        isInitialSync: true,
-      );
+    await PullApply.applyPage(
+      db: db,
+      parentMeta: _meta(),
+      parentTable: 'docs__patient',
+      childMetasByFieldname: const {},
+      rows: [
+        {
+          'name': 'PAT-002',
+          'modified': '2026-06-01 10:00:00',
+          'patient_name': 'Server Version',
+        },
+      ],
+      isInitialSync: true,
+    );
 
-      final rows = await db.query('docs__patient');
-      expect(rows, hasLength(1));
-      expect(rows.first['sync_status'], 'deleted',
-          reason: 'tombstoned row must not be resurrected');
-      expect(rows.first['patient_name'], 'Should Stay Deleted');
-    },
-  );
+    final rows = await db.query('docs__patient');
+    expect(rows, hasLength(1));
+    expect(
+      rows.first['sync_status'],
+      'deleted',
+      reason: 'tombstoned row must not be resurrected',
+    );
+    expect(rows.first['patient_name'], 'Should Stay Deleted');
+  });
 
   // T3 — ghost-success row (mobile_uuid present, server_name null) during
   // initial sync: sequential path chosen, server_name stamped, no duplicate.
@@ -170,8 +171,11 @@ void main() {
       );
 
       final rows = await db.query('docs__patient');
-      expect(rows, hasLength(1),
-          reason: 'must NOT create a duplicate row for the ghost-success INSERT');
+      expect(
+        rows,
+        hasLength(1),
+        reason: 'must NOT create a duplicate row for the ghost-success INSERT',
+      );
     },
   );
 

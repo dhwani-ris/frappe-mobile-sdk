@@ -70,6 +70,134 @@ class LinkOptionService {
       _syncCompleteStream = null,
       _translate = null;
 
+  /// Max entries in [_titleCache]. A Link title is a short string, so 500 caps
+  /// the cache in the low tens of KB while still covering a long scroll through
+  /// a child-table grid. Chosen because the previous unbounded map was the
+  /// reason this method was removed once already.
+  static const int _titleCacheMaxEntries = 500;
+
+  /// Bounded LRU for [getLinkTitle], keyed `doctype::name`.
+  ///
+  /// The value is NULLABLE and membership is tested with `containsKey`, so this
+  /// distinguishes three states rather than two:
+  ///   * absent          — never resolved, or resolved to "retry later"
+  ///   * present, non-null — a real distinct title
+  ///   * present, null   — resolved, and this doctype has no distinct title to
+  ///                       give (no `title_field`), so the answer is final
+  ///
+  /// That third state is the point. Previously any `label == name` outcome was
+  /// left uncached to stay retryable while the target doctype was mid-pull — but
+  /// for a doctype whose `title_field` is unset (the majority in Frappe) the
+  /// label IS the name permanently, so those keys never populated and every grid
+  /// cell re-queried on every build. That is the exact N+1 this method's LRU was
+  /// restored to eliminate, still present for the doctypes most likely to appear
+  /// in a child-table grid.
+  ///
+  /// Insertion-ordered: a hit re-inserts the key to move it to the newest
+  /// position, and inserting past [_titleCacheMaxEntries] evicts the oldest.
+  final Map<String, String?> _titleCache = <String, String?>{};
+
+  /// In-flight lookups, so N grid cells referencing the SAME target await ONE
+  /// resolve instead of each firing its own (the N+1 that motivated the
+  /// original removal). Cleared when the lookup settles.
+  final Map<String, Future<String?>> _titleInFlight =
+      <String, Future<String?>>{};
+
+  /// Resolves a single Link VALUE (`name`) of [doctype] to its display title,
+  /// offline-first. Returns null when the value is empty or the target row is
+  /// not available locally.
+  ///
+  /// Needed because a Link cell stores the linked document's id, so a grid or
+  /// list rendering that value raw shows an opaque id where a human-readable
+  /// title belongs. Parent list rows get this for free — the resolver runs
+  /// `LinkDecorator.decorateBatch`, which adds a `<field>__display` companion
+  /// to each row map. Child-table rows do NOT: they are read straight out of
+  /// `docs__<child>` by `mergeChildRowsIntoData`, which never decorates. This
+  /// method is the only title path for those cells.
+  ///
+  /// Bounded by construction: an LRU cap ([_titleCacheMaxEntries]) and
+  /// single-flight dedupe ([_titleInFlight]). Prefer `<field>__display` when
+  /// reading rows through the resolver — it costs nothing extra there.
+  Future<String?> getLinkTitle(String doctype, String name) async {
+    if (name.isEmpty) return null;
+    final key = '$doctype::$name';
+
+    if (_titleCache.containsKey(key)) {
+      // Re-insert to mark as most-recently-used. A null value is a real cached
+      // answer ("no distinct title"), not a miss — hence containsKey.
+      final cached = _titleCache.remove(key);
+      _titleCache[key] = cached;
+      return cached;
+    }
+
+    final inFlight = _titleInFlight[key];
+    if (inFlight != null) return inFlight;
+
+    final future = _resolveLinkTitle(doctype, name, key);
+    _titleInFlight[key] = future;
+    try {
+      return await future;
+    } finally {
+      _titleInFlight.remove(key);
+    }
+  }
+
+  Future<String?> _resolveLinkTitle(
+    String doctype,
+    String name,
+    String key,
+  ) async {
+    final resolver = _resolver;
+    final metaResolver = _metaResolver;
+    if (resolver == null || metaResolver == null) return null;
+
+    final meta = await metaResolver(doctype);
+    // A Link VALUE is the target's Frappe `name`; locally that is
+    // `server_name` for synced rows or `mobile_uuid` for rows created on this
+    // device that have not pushed yet. `name` is not a local column, so filter
+    // on both identity columns.
+    final result = await resolver.resolve(
+      doctype: doctype,
+      orFilters: [
+        ['server_name', '=', name],
+        ['mobile_uuid', '=', name],
+      ],
+      page: 0,
+      pageSize: 1,
+    );
+    final entities = _rowsToEntities(
+      result.rows,
+      doctype,
+      meta.titleField,
+      translateLabels: meta.translatedDoctype,
+    );
+    // Row not found locally: genuinely retryable — the target doctype may not
+    // have pulled yet. Never cached.
+    if (entities.isEmpty) return null;
+
+    final label = entities.first.label;
+    final hasTitleField =
+        meta.titleField != null && meta.titleField!.isNotEmpty;
+    if (label == null || label.isEmpty || label == name) {
+      // A doctype with no `title_field` can never produce a title distinct from
+      // the name, so this answer is FINAL and worth caching. With a title_field
+      // configured the same outcome is transient — the field may be empty on
+      // this row now and populated by a later pull — so stay retryable.
+      if (!hasTitleField) _cacheTitle(key, null);
+      return label;
+    }
+    _cacheTitle(key, label);
+    return label;
+  }
+
+  /// Writes [value] for [key] and evicts the oldest entry past the cap.
+  void _cacheTitle(String key, String? value) {
+    _titleCache[key] = value;
+    if (_titleCache.length > _titleCacheMaxEntries) {
+      _titleCache.remove(_titleCache.keys.first);
+    }
+  }
+
   /// Fetches link options via the resolver (DB-first + background refresh when online).
   Future<List<LinkOptionEntity>> getLinkOptions(
     String doctype, {

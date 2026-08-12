@@ -31,6 +31,14 @@ List<String> buildParentSchemaDDL(
     'push_base_payload TEXT',
     'docstatus INTEGER NOT NULL DEFAULT 0',
     'modified TEXT',
+    // Frappe's server-owned audit fields. NULLABLE with no default — the
+    // server is their only writer, so a locally-created row legitimately has
+    // none of them until a pull fills them in. Materialized so a filter on
+    // `owner` / `creation` / `modified_by` produces real SQL offline instead
+    // of being silently dropped. See `serverAuditColumnNames`.
+    'owner TEXT',
+    'creation TEXT',
+    'modified_by TEXT',
     'local_modified INTEGER NOT NULL',
     'pulled_at INTEGER',
   ];
@@ -82,6 +90,17 @@ List<String> buildParentSchemaDDL(
   ddl.add(
     'CREATE INDEX IF NOT EXISTS ix_${suffix}_modified ON $tableName(modified)',
   );
+  // `owner` is the audit column hosts actually filter on ("my submissions"), and
+  // it can never be chosen by `chooseIndexes` — that only proposes META-derived
+  // columns, and the audit trio is never declared in `meta.fields`. Without this
+  // an `owner = <me>` filter was a guaranteed full table scan on the main
+  // isolate. Paired with the bare (sargable) `=` form emitted by `FilterParser`
+  // for these columns; the wrapped `IFNULL(owner, '')` form could not use it.
+  //
+  // Only `owner` is indexed: `creation` / `modified_by` are not primary
+  // predicates, and every extra index costs write amplification on the bulk
+  // inserts the pull path performs.
+  ddl.add('CREATE INDEX IF NOT EXISTS ix_${suffix}_owner ON $tableName(owner)');
 
   final additional = chooseIndexes(
     meta,

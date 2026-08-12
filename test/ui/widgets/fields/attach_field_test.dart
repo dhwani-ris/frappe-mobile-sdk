@@ -66,7 +66,11 @@ void main() {
         readOnly: true,
       ),
     );
-    final btn = tester.widget<OutlinedButton>(find.byType(OutlinedButton));
+    // Supertype match: Flutter before 3.38 builds `OutlinedButton.icon` as a
+    // private `OutlinedButton` subclass, which `find.byType` would miss.
+    final btn = tester.widget<OutlinedButton>(
+      find.byWidgetPredicate((w) => w is OutlinedButton),
+    );
     expect(btn.onPressed, isNull);
   });
 

@@ -54,6 +54,17 @@ class SyncStateNotifier {
     value = _value.copyWith(failedMetaSyncs: next);
   }
 
+  /// Publishes platform connectivity onto [SyncState.isOnline].
+  ///
+  /// Fed by the SDK's `ConnectivityWatcher` (initial probe + every edge).
+  /// Without a publisher, `isOnline` stays at [SyncState.initial]'s `false`
+  /// forever and every `SyncStatusBar` renders a permanent "Offline" strip
+  /// even while API calls succeed. No-op when the value is unchanged.
+  void updateOnline(bool online) {
+    if (_value.isOnline == online) return;
+    value = _value.copyWith(isOnline: online);
+  }
+
   /// Records [error] on [SyncState.lastError]. Used by the SDK to surface
   /// boot-time / sync-pipeline failures the host app can subscribe to and
   /// turn into UI (e.g. a "couldn't reach server" banner).

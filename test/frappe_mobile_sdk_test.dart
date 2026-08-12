@@ -142,8 +142,23 @@ void main() {
       );
       expect(field1.displayLabel, equals('Lead Name'));
 
+      // Missing label falls back to a HUMANIZED fieldname so validation
+      // messages read "Email is required", not "email is required".
       final field2 = DocField(fieldname: 'email', fieldtype: 'Data');
-      expect(field2.displayLabel, equals('email'));
+      expect(field2.displayLabel, equals('Email'));
+
+      final field3 = DocField(fieldname: 'lead_name', fieldtype: 'Data');
+      expect(field3.displayLabel, equals('Lead Name'));
+
+      // Zero-width labels (hosts blank labels to '​' to suppress
+      // duplicate rendering) are treated as absent — otherwise the
+      // required-message degrades to a bare "is required".
+      final field4 = DocField(
+        fieldname: 'enterprenur_name',
+        fieldtype: 'Data',
+        label: '​',
+      );
+      expect(field4.displayLabel, equals('Enterprenur Name'));
     });
   });
 

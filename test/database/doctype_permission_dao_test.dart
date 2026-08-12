@@ -129,4 +129,41 @@ void main() {
     expect(rows, isEmpty);
     await db.close();
   });
+
+  test('replaceAll prunes rows absent from the new set', () async {
+    final db = await AppDatabase.inMemoryDatabase();
+    final dao = DoctypePermissionDao(db.rawDatabase);
+    await dao.upsertAll([
+      _perm(doctype: 'Customer', read: true),
+      _perm(doctype: 'Supplier', read: true),
+    ]);
+    // Authoritative refresh no longer includes Supplier → it must be DENIED
+    // (kept as an explicit all-false row), not deleted (which would re-grant it
+    // because an absent row defaults to allow).
+    await dao.replaceAll([
+      _perm(doctype: 'Customer', read: true, write: true),
+      _perm(doctype: 'Lead', read: true),
+    ]);
+
+    final supplier = await dao.findByDoctype('Supplier');
+    expect(supplier, isNotNull);
+    expect(supplier!.read, isFalse);
+    expect(supplier.write, isFalse);
+    expect((await dao.findByDoctype('Customer'))!.write, isTrue);
+    expect((await dao.findByDoctype('Lead'))!.read, isTrue);
+    final rows = await db.rawDatabase.query('doctype_permission');
+    expect(rows, hasLength(3));
+    await db.close();
+  });
+
+  test('replaceAll on empty list is a no-op (never wipes the cache)', () async {
+    final db = await AppDatabase.inMemoryDatabase();
+    final dao = DoctypePermissionDao(db.rawDatabase);
+    await dao.upsertAll([_perm(doctype: 'A'), _perm(doctype: 'B')]);
+    await dao.replaceAll([]);
+
+    final rows = await db.rawDatabase.query('doctype_permission');
+    expect(rows, hasLength(2));
+    await db.close();
+  });
 }

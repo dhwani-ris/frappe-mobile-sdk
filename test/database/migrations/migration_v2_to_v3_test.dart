@@ -197,11 +197,11 @@ void main() {
         equals({'outbox', 'pending_attachments', 'sdk_meta'}),
       );
 
-      // 3g. sdk_meta row exists with schema_version=5 (full v2→v5 chain ran),
+      // 3g. sdk_meta row exists with schema_version=6 (full v2→v6 chain ran),
       //     offline_enabled=0, bootstrap_done=0.
       final meta = await v3.query('sdk_meta', where: 'id = 1');
       expect(meta, hasLength(1));
-      expect(meta.first['schema_version'], 5);
+      expect(meta.first['schema_version'], 6);
       expect(meta.first['offline_enabled'], 0);
       expect(meta.first['bootstrap_done'], 0);
 

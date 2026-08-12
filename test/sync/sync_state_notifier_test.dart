@@ -220,4 +220,49 @@ void main() {
       },
     );
   });
+
+  group('updateOnline', () {
+    test('publishes connectivity onto SyncState.isOnline and emits', () async {
+      final n = SyncStateNotifier();
+      final emitted = <SyncState>[];
+      final sub = n.stream.listen(emitted.add);
+
+      expect(n.value.isOnline, isFalse); // SyncState.initial
+      n.updateOnline(true);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(n.value.isOnline, isTrue);
+      expect(emitted, hasLength(1));
+      expect(emitted.single.isOnline, isTrue);
+
+      await sub.cancel();
+      await n.close();
+    });
+
+    test('duplicate state is a no-op (no extra emission)', () async {
+      final n = SyncStateNotifier();
+      final emitted = <SyncState>[];
+      final sub = n.stream.listen(emitted.add);
+
+      n.updateOnline(true);
+      n.updateOnline(true);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(emitted, hasLength(1));
+
+      await sub.cancel();
+      await n.close();
+    });
+
+    test('preserves the rest of the sync state', () async {
+      final n = SyncStateNotifier();
+      n.value = n.value.copyWith(isPushing: true);
+
+      n.updateOnline(true);
+
+      expect(n.value.isPushing, isTrue);
+      expect(n.value.isOnline, isTrue);
+      await n.close();
+    });
+  });
 }

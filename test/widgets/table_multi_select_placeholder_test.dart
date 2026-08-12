@@ -25,7 +25,11 @@ DocTypeMeta _childMeta() => DocTypeMeta(
   name: 'Fee Component Table',
   isTable: true,
   fields: <DocField>[
-    DocField(fieldname: 'component', fieldtype: 'Link', options: 'Fee Component'),
+    DocField(
+      fieldname: 'component',
+      fieldtype: 'Link',
+      options: 'Fee Component',
+    ),
   ],
 );
 

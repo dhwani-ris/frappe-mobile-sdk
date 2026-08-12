@@ -11,7 +11,7 @@ import 'package:flutter/foundation.dart';
 /// | RAM ≤ 6 GB OR cores ≤ 6         | 4           |
 /// | otherwise                       | 8           |
 class DeviceTier {
-  /// Pure function — testable without `device_info_plus`.
+  /// Pure function — no platform channel, so it is testable directly.
   static int concurrencyForSpecs({
     required int totalRamMb,
     required int cores,

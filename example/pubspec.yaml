@@ -2,10 +2,13 @@ name: frappe_mobile_sdk_example
 description: Example app demonstrating Frappe Mobile SDK usage
 publish_to: 'none'
 
-version: 1.3.0-dev
+version: 2.0.0-beta.2
 
 environment:
-  sdk: ^3.10.4
+  # Kept in step with the SDK's own floor: `flutter pub get` in the SDK root also
+  # resolves this example, so a higher floor here would break the root resolve
+  # for contributors on the SDK's minimum Flutter.
+  sdk: ">=3.9.0 <4.0.0"
 
 dependencies:
   flutter:

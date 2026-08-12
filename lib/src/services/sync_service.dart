@@ -474,39 +474,69 @@ class SyncService {
     // current page's rows are written to SQLite (so apply overlaps with
     // network), giving the same 2x throughput as the previous
     // speculative scheme without the small-doctype tax.
-    Future<List<dynamic>> fetchPage(int start) {
-      return needsFullDoc
-          ? _client.doctype.listFullDocs(
-              doctype,
-              filters: filters.isEmpty ? null : filters,
-              limitStart: start,
-              limitPageLength: pageSize,
-              orderBy: orderBy,
-            )
-          : _client.doctype.list(
-              doctype,
-              filters: filters.isEmpty ? null : filters,
-              fields: ['*'],
-              limitStart: start,
-              limitPageLength: pageSize,
-              orderBy: orderBy,
-            );
+    // Paging keys off names SCANNED, not docs returned. On the `listFullDocs`
+    // path the server's per-doc permission gate silently drops denied/missing
+    // names (and a doc deleted mid-pull), so docs-returned under-reports how
+    // much of the requested window was actually consumed. Two truncations
+    // followed from conflating them:
+    //   * a PARTIALLY filtered full window looked SHORT (`page.length <
+    //     pageSize`), so no look-ahead fired, `isFinalPage` went true, and the
+    //     cursor flipped to `complete: true` with every later page unfetched;
+    //   * a FULLY filtered window looked like end-of-stream at `page.isEmpty`
+    //     and stalled the drain at that offset on every subsequent sync.
+    // Both are silent. `scanned` is the honest window measure.
+    Future<({List<dynamic> rows, int scanned})> fetchPage(int start) async {
+      if (needsFullDoc) {
+        final page = await _client.doctype.listFullDocsPage(
+          doctype,
+          filters: filters.isEmpty ? null : filters,
+          limitStart: start,
+          limitPageLength: pageSize,
+          orderBy: orderBy,
+        );
+        return (rows: page.docs, scanned: page.namesScanned);
+      }
+      final rows = await _client.doctype.list(
+        doctype,
+        filters: filters.isEmpty ? null : filters,
+        fields: ['*'],
+        limitStart: start,
+        limitPageLength: pageSize,
+        orderBy: orderBy,
+      );
+      // Plain `get_list` returns every row it lists.
+      return (rows: rows, scanned: rows.length);
     }
 
     int start = 0;
-    Future<List<dynamic>> currentFetch = fetchPage(start);
+    var currentFetch = fetchPage(start);
 
     while (true) {
-      final page = await currentFetch;
-      if (page.isEmpty) break;
+      final fetched = await currentFetch;
+      final page = fetched.rows;
+      // Drained only when the server had nothing left in the window.
+      if (fetched.scanned == 0) break;
       total += page.length;
 
-      // Only fire a look-ahead when this page came back full — i.e.
-      // there is reason to believe the next page exists. A short page
+      // Only fire a look-ahead when this window came back full — i.e.
+      // there is reason to believe the next page exists. A short window
       // means we're done, no extra GET needed.
-      Future<List<dynamic>>? lookahead;
-      if (page.length >= pageSize) {
+      Future<({List<dynamic> rows, int scanned})>? lookahead;
+      if (fetched.scanned >= pageSize) {
         lookahead = fetchPage(start + pageSize);
+      }
+
+      // Whole window filtered out: nothing to apply and no cursor to move, but
+      // emphatically not the end. Skip to the next window.
+      //
+      // When there is no look-ahead the window was short, so the doctype really
+      // IS drained — fall through instead of breaking, so the "no rows applied
+      // but final page" branch below still promotes the cursor to
+      // `complete: true` rather than leaving it stuck in RESUME forever.
+      if (page.isEmpty && lookahead != null) {
+        start += pageSize;
+        currentFetch = lookahead;
+        continue;
       }
 
       // Apply the current page to SQLite. We batch them together so
@@ -563,7 +593,7 @@ class SyncService {
               operation: 'pull',
               errorMessage: batchServerNames.length > 1
                   ? '$e (${batchServerNames.length} docs,'
-                    ' first: ${batchServerNames.first})'
+                        ' first: ${batchServerNames.first})'
                   : e.toString(),
             ),
           );
@@ -575,10 +605,11 @@ class SyncService {
       }
 
       // Whether THIS page is the last one for the current pull. The
-      // look-ahead is only fired when the current page came back full
-      // (page.length >= pageSize); a null look-ahead therefore means
-      // "no more rows" — the doctype is fully drained and the cursor
-      // can flip to complete=true (transition from INITIAL/RESUME →
+      // look-ahead is only fired when the current WINDOW came back full
+      // (`fetched.scanned >= pageSize` — names scanned, not docs returned, so a
+      // permission-filtered page cannot masquerade as short); a null look-ahead
+      // therefore means "no more rows" — the doctype is fully drained and the
+      // cursor can flip to complete=true (transition from INITIAL/RESUME →
       // INCREMENTAL, or stay INCREMENTAL).
       final bool isFinalPage = lookahead == null;
 

@@ -68,4 +68,35 @@ void main() {
     expect(e.read, isFalse);
     expect(e.write, isFalse);
   });
+
+  test('fromApiMap coerces Frappe int Check flags (1/0)', () {
+    // frappe.get_all on DocPerm serialises Check fields as int 1/0; Dart's
+    // `1 == true` is false, so without coercion every flag would read false.
+    final e = DoctypePermissionEntity.fromApiMap('Activity Logger', {
+      'read': 1,
+      'write': 1,
+      'create': 1,
+      'delete': 0,
+      'submit': 0,
+      'cancel': 0,
+      'amend': 0,
+    });
+    expect(e.read, isTrue);
+    expect(e.write, isTrue);
+    expect(e.create, isTrue);
+    expect(e.delete, isFalse);
+    expect(e.submit, isFalse);
+  });
+
+  test('fromApiMap coerces string Check flags ("1"/"0")', () {
+    final e = DoctypePermissionEntity.fromApiMap('Item', {
+      'read': '1',
+      'write': '0',
+      'create': '1',
+    });
+    expect(e.read, isTrue);
+    expect(e.write, isFalse);
+    expect(e.create, isTrue);
+    expect(e.delete, isFalse);
+  });
 }

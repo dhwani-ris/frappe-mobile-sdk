@@ -11,16 +11,15 @@ SecurityEvent _evt(
   int? serverAnchorMs,
   int? lastWallMs,
   int? monotonicMs,
-}) =>
-    SecurityEvent(
-      id: 'test-${check.name}-$detectedAtMs',
-      checkType: check,
-      detectedAtMs: detectedAtMs,
-      wallTimeMs: detectedAtMs,
-      serverAnchorMs: serverAnchorMs,
-      lastWallMs: lastWallMs,
-      monotonicMs: monotonicMs,
-    );
+}) => SecurityEvent(
+  id: 'test-${check.name}-$detectedAtMs',
+  checkType: check,
+  detectedAtMs: detectedAtMs,
+  wallTimeMs: detectedAtMs,
+  serverAnchorMs: serverAnchorMs,
+  lastWallMs: lastWallMs,
+  monotonicMs: monotonicMs,
+);
 
 void main() {
   setUpAll(() {
@@ -95,29 +94,26 @@ void main() {
     await db.close();
   });
 
-  test(
-    'queryNewestFirst skips a row with an unknown check_type instead of '
-    'throwing (H2: audit log stays readable across enum changes)',
-    () async {
-      final db = await AppDatabase.inMemoryDatabase();
-      // A valid row plus a row from a hypothetical newer/rolled-back build that
-      // wrote a check_type this build does not know about.
-      await db.securityEventDao.insert(
-        _evt(SecurityCheck.root, detectedAtMs: 2000),
-      );
-      await db.rawDatabase.insert('security_events', {
-        'id': 'corrupt-1',
-        'check_type': 'some_future_check',
-        'detected_at_ms': 3000,
-        'wall_time_ms': 3000,
-      });
-      // Must not throw, and must return the readable row(s) only.
-      final events = await db.securityEventDao.queryNewestFirst();
-      expect(events, hasLength(1));
-      expect(events.first.checkType, SecurityCheck.root);
-      await db.close();
-    },
-  );
+  test('queryNewestFirst skips a row with an unknown check_type instead of '
+      'throwing (H2: audit log stays readable across enum changes)', () async {
+    final db = await AppDatabase.inMemoryDatabase();
+    // A valid row plus a row from a hypothetical newer/rolled-back build that
+    // wrote a check_type this build does not know about.
+    await db.securityEventDao.insert(
+      _evt(SecurityCheck.root, detectedAtMs: 2000),
+    );
+    await db.rawDatabase.insert('security_events', {
+      'id': 'corrupt-1',
+      'check_type': 'some_future_check',
+      'detected_at_ms': 3000,
+      'wall_time_ms': 3000,
+    });
+    // Must not throw, and must return the readable row(s) only.
+    final events = await db.securityEventDao.queryNewestFirst();
+    expect(events, hasLength(1));
+    expect(events.first.checkType, SecurityCheck.root);
+    await db.close();
+  });
 
   test(
     'insert trims the table to maxRows newest events (H3: bounded growth)',

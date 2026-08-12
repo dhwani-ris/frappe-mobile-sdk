@@ -266,6 +266,84 @@ void main() {
       await Future<void>.delayed(Duration.zero);
       expect(refreshes, 0);
     });
+
+    // The refresh endpoint itself is sent unauthenticated (callPublic ->
+    // postPublic), so without the `includeAuth` gate a 401 from it re-entered
+    // the very refresh that issued it. AuthService single-flights that call, so
+    // the re-entrant invocation received the in-flight future and awaited its
+    // own completion — a silent hang that also left the single-flight slot
+    // permanently occupied, wedging every later refresh for the process
+    // lifetime. Worst case it fires during boot restoreSession and the app
+    // never leaves the splash screen.
+    //
+    // Asserted positively (throws, with refreshes == 0) rather than by trying
+    // to observe a deadlock, which would hang the test runner.
+    test('401 on an UNAUTHENTICATED request does NOT call onTokenExpired, '
+        'even with a bearer set', () async {
+      var refreshes = 0;
+      var calls = 0;
+      final h = RestHelper(
+        'http://x',
+        client: MockClient((_) async {
+          calls++;
+          return _json({'exception': 'invalid refresh token'}, 401);
+        }),
+        onTokenExpired: () async {
+          refreshes++;
+          return true;
+        },
+      );
+      // The Bearer stays deliberately set during a refresh — nulling it would
+      // race concurrent requests down to Guest/403 — so it cannot be what
+      // distinguishes the refresh call from an ordinary one.
+      h.setBearerToken('expired');
+
+      await expectLater(
+        h.postPublic('/api/method/mobile_auth.refresh_token'),
+        throwsA(isA<AuthException>()),
+      );
+      expect(
+        refreshes,
+        0,
+        reason:
+            'a request carrying no Authorization header cannot be '
+            'repaired by refreshing a token',
+      );
+      expect(calls, 1, reason: 'no retry loop either');
+
+      await expectLater(
+        h.getPublic('/api/method/mobile_auth.get_social_login_providers'),
+        throwsA(isA<AuthException>()),
+      );
+      expect(
+        refreshes,
+        0,
+        reason:
+            'an allow_guest endpoint 401 must not trigger a refresh whose '
+            'rejection would wipe a logged-in user\'s stored tokens',
+      );
+    });
+
+    test('401 on an AUTHENTICATED request still refreshes (the gate is '
+        'scoped to includeAuth, not a blanket disable)', () async {
+      var calls = 0;
+      var refreshes = 0;
+      final h = RestHelper(
+        'http://x',
+        client: MockClient((req) async {
+          calls++;
+          if (calls == 1) return _json({'exception': 'expired'}, 401);
+          return _json({'ok': 1}, 200);
+        }),
+        onTokenExpired: () async {
+          refreshes++;
+          return true;
+        },
+      );
+      h.setBearerToken('expired');
+      expect(await h.post('/api/method/x', body: {'a': 1}), {'ok': 1});
+      expect(refreshes, 1);
+    });
   });
 
   group('GET retry on network errors', () {

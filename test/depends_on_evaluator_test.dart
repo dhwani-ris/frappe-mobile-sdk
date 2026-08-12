@@ -71,6 +71,30 @@ void main() {
         );
         expect(DependsOnEvaluator.evaluate('eval:doc.active', {}), isFalse);
       });
+
+      test('trailing semicolon on int comparison is stripped', () {
+        expect(
+          DependsOnEvaluator.evaluate('eval:doc.enabled_flag == 1;', {
+            'enabled_flag': 1,
+          }),
+          isTrue,
+        );
+        expect(
+          DependsOnEvaluator.evaluate('eval:doc.enabled_flag == 1;', {
+            'enabled_flag': 0,
+          }),
+          isFalse,
+        );
+      });
+
+      test('trailing semicolon on string comparison is stripped', () {
+        expect(
+          DependsOnEvaluator.evaluate("eval:doc.status == 'Yes';", {
+            'status': 'Yes',
+          }),
+          isTrue,
+        );
+      });
     });
 
     group('.includes() array expressions', () {

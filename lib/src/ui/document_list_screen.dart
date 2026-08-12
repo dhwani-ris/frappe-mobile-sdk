@@ -226,7 +226,8 @@ class _DocumentListScreenState extends State<DocumentListScreen> {
     if (titleFieldName != null &&
         titleFieldName.isNotEmpty &&
         doc.data[titleFieldName] != null) {
-      return doc.data[titleFieldName].toString().trim();
+      final raw = doc.data[titleFieldName].toString().trim();
+      return _titleViaLink(doc, titleFieldName, raw);
     }
     final t =
         doc.data['title']?.toString() ?? doc.data['name']?.toString() ?? '';
@@ -239,9 +240,29 @@ class _DocumentListScreenState extends State<DocumentListScreen> {
       'item_code',
     ]) {
       final v = doc.data[fn]?.toString();
-      if (v != null && v.isNotEmpty) return v;
+      if (v != null && v.isNotEmpty) return _titleViaLink(doc, fn, v);
     }
     return doc.serverId ?? doc.localId;
+  }
+
+  /// When the title-source [fieldname] is a Link, a row's raw value is the
+  /// linked document's ID, so list rows rendered the raw docname (a UUID or
+  /// server id) instead of the linked document's title. Frappe web resolves
+  /// link titles in list views; this brings the mobile list to parity.
+  /// The resolver already ran `LinkDecorator.decorateBatch` on
+  /// every row, writing the resolved title into the `<field>__display`
+  /// companion — read that directly instead of firing a second per-row
+  /// `getLinkTitle` lookup (removed: it was an N+1 plus an unbounded, never-
+  /// invalidated cache). On a miss the decorator leaves `__display` equal to
+  /// the raw value, and the next pull re-decorates, so titles still upgrade
+  /// once the target doctype finishes pulling.
+  String _titleViaLink(Document doc, String fieldname, String raw) {
+    if (raw.isEmpty) return raw;
+    final field = widget.meta.getField(fieldname);
+    if (field == null || field.fieldtype != 'Link') return raw;
+    final display = doc.data['${fieldname}__display']?.toString();
+    if (display != null && display.isNotEmpty) return display;
+    return raw;
   }
 
   List<Document> _filteredAndSortedDocs() {

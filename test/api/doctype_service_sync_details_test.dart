@@ -66,4 +66,87 @@ void main() {
     ]);
     expect(r, isNull);
   });
+
+  List<Map<String, String>> makeEntries(int n) => [
+    for (var i = 0; i < n; i++)
+      {'doctype': 'DT$i', 'since': '2026-01-01 00:00:00.000000'},
+  ];
+
+  http.Response manifestFor(http.Request req) {
+    final body = jsonDecode(req.body) as Map<String, dynamic>;
+    final dts = (body['doctypes'] as List).cast<Map<String, dynamic>>();
+    return _json({
+      'message': {
+        'doctypes': [
+          for (final d in dts)
+            {
+              'doctype': d['doctype'],
+              'changed': false,
+              'count': 0,
+              'meta_bumped': false,
+            },
+        ],
+        'delete_signals': 0,
+      },
+    });
+  }
+
+  test(
+    'at the 100-doctype cap: exactly ONE call (legacy behaviour unchanged)',
+    () async {
+      final sizes = <int>[];
+      final svc = _svc(
+        MockClient((req) async {
+          sizes.add(((jsonDecode(req.body)['doctypes']) as List).length);
+          return manifestFor(req);
+        }),
+      );
+      final r = await svc.getSyncDetails(makeEntries(100));
+      expect(sizes, [100], reason: 'a request at the cap must not be chunked');
+      expect(r!.entries.length, 100);
+    },
+  );
+
+  test('over the cap: transparently chunks into <=100 and merges', () async {
+    final sizes = <int>[];
+    final svc = _svc(
+      MockClient((req) async {
+        sizes.add(((jsonDecode(req.body)['doctypes']) as List).length);
+        return manifestFor(req);
+      }),
+    );
+    final r = await svc.getSyncDetails(makeEntries(250));
+    // 250 -> 100 + 100 + 50, three calls, none exceeding the server cap.
+    expect(sizes, [100, 100, 50]);
+    expect(
+      sizes.every((s) => s <= 100),
+      isTrue,
+      reason: 'no chunk may exceed the server MAX_DOCTYPES (417 guard)',
+    );
+    expect(r, isA<SyncDetailsResponse>());
+    expect(r!.entries.length, 250, reason: 'all chunks merged');
+    expect(r.entries['DT0']!.changed, isFalse);
+    expect(r.entries['DT249']!.changed, isFalse);
+  });
+
+  test(
+    'over the cap: a single failed chunk => null (all-or-nothing full pull)',
+    () async {
+      var call = 0;
+      final svc = _svc(
+        MockClient((req) async {
+          call++;
+          // Fail the 2nd chunk only.
+          if (call == 2) return _json({'error': 'boom'}, 500);
+          return manifestFor(req);
+        }),
+      );
+      final r = await svc.getSyncDetails(makeEntries(150));
+      expect(
+        r,
+        isNull,
+        reason: 'any chunk failure must fall back to full pull',
+      );
+    },
+  );
 }

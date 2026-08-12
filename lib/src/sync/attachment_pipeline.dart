@@ -124,7 +124,10 @@ class AttachmentPipeline {
           serverFileName: fileName ?? fileUrl,
           serverFileUrl: fileUrl,
         );
-        return AttachmentUploadResult(fileName: fileName ?? fileUrl, fileUrl: fileUrl);
+        return AttachmentUploadResult(
+          fileName: fileName ?? fileUrl,
+          fileUrl: fileUrl,
+        );
       } catch (e, st) {
         debugPrint(
           'AttachmentPipeline.upload(${p.id}) attempt $attempt failed — $e\n$st',

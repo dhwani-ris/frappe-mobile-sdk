@@ -39,33 +39,41 @@ void main() {
     );
   }
 
-  test('retryPaused resets a paused row to pending and triggers a push drain',
-      () async {
-    final id = await outbox.insertPending(
-      doctype: 'Sales Order',
-      mobileUuid: 'uuid-submit',
-      operation: OutboxOperation.submit,
-    );
-    await outbox.markPaused(
-      id,
-      errorCode: ErrorCode.PERMISSION_DENIED,
-      errorMessage: 'Insufficient permissions',
-    );
+  test(
+    'retryPaused resets a paused row to pending and triggers a push drain',
+    () async {
+      final id = await outbox.insertPending(
+        doctype: 'Sales Order',
+        mobileUuid: 'uuid-submit',
+        operation: OutboxOperation.submit,
+      );
+      await outbox.markPaused(
+        id,
+        errorCode: ErrorCode.PERMISSION_DENIED,
+        errorMessage: 'Insufficient permissions',
+      );
 
-    final before = await outbox.findById(id);
-    expect(before?.state, OutboxState.paused);
+      final before = await outbox.findById(id);
+      expect(before?.state, OutboxState.paused);
 
-    var pushDrainCount = 0;
-    final ctrl = buildCtrl(runPush: () async => pushDrainCount++);
+      var pushDrainCount = 0;
+      final ctrl = buildCtrl(runPush: () async => pushDrainCount++);
 
-    await ctrl.retryPaused(id);
+      await ctrl.retryPaused(id);
 
-    final after = await outbox.findById(id);
-    expect(after?.state, OutboxState.pending,
-        reason: 'retryPaused must reset the row to pending');
-    expect(pushDrainCount, 1,
-        reason: 'retryPaused must trigger a push drain');
-  });
+      final after = await outbox.findById(id);
+      expect(
+        after?.state,
+        OutboxState.pending,
+        reason: 'retryPaused must reset the row to pending',
+      );
+      expect(
+        pushDrainCount,
+        1,
+        reason: 'retryPaused must trigger a push drain',
+      );
+    },
+  );
 
   test('retryPaused is a no-op for a non-existent id', () async {
     final ctrl = buildCtrl();

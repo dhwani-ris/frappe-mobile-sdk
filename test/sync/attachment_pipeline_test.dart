@@ -312,10 +312,11 @@ void main() {
       int uploadCalls = 0;
       final pipeline = AttachmentPipeline(
         dao: dao,
-        uploader: (file, {doctype, docname, fileName, isPrivate = false}) async {
-          uploadCalls++;
-          return {'file_url': '/files/path.jpg', 'name': 'path.jpg'};
-        },
+        uploader:
+            (file, {doctype, docname, fileName, isPrivate = false}) async {
+              uploadCalls++;
+              return {'file_url': '/files/path.jpg', 'name': 'path.jpg'};
+            },
         fileFromPath: (p) => _FakeFile(p),
         // Zero-duration backoff so the test doesn't sleep between retry attempts.
         backoff: const [Duration.zero],
@@ -327,8 +328,11 @@ void main() {
         completes,
       );
       // Upload must NOT be re-attempted (fileUrl already set).
-      expect(uploadCalls, 0,
-          reason: 'must not re-upload when serverFileUrl is already set');
+      expect(
+        uploadCalls,
+        0,
+        reason: 'must not re-upload when serverFileUrl is already set',
+      );
     },
   );
 }

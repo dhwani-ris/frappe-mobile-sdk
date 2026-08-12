@@ -30,6 +30,12 @@ class DocField {
   /// for search. Used by the offline-first SDK's index policy.
   final bool searchIndex;
 
+  /// Frappe `is_virtual=1` flag — the field is computed at runtime (property
+  /// setter / controller) and has NO database column, whatever its fieldtype.
+  /// Selecting it would send an unknown column to the server, so callers that
+  /// build column lists must skip it.
+  final bool isVirtual;
+
   DocField({
     this.fieldname,
     required this.fieldtype,
@@ -53,6 +59,7 @@ class DocField {
     this.inListView = false,
     this.allowMultiple = false,
     this.searchIndex = false,
+    this.isVirtual = false,
   });
 
   factory DocField.fromJson(Map<String, dynamic> json) {
@@ -110,6 +117,7 @@ class DocField {
           _isMultiSelectFieldType(json['fieldtype'] as String?),
       searchIndex:
           parseBool(json['search_index']) || parseBool(json['searchIndex']),
+      isVirtual: parseBool(json['is_virtual']) || parseBool(json['isVirtual']),
     );
   }
 
@@ -144,6 +152,11 @@ class DocField {
       'in_list_view': inListView ? 1 : 0,
       'allow_multiple': allowMultiple ? 1 : 0,
       'search_index': searchIndex ? 1 : 0,
+      // Always emitted (like `search_index`): DocTypeMeta.toJson() is what
+      // MetaService persists into the local meta cache, so omitting the key
+      // would silently drop the flag on the next cold start and re-emit the
+      // virtual column in a ['*'] expansion.
+      'is_virtual': isVirtual ? 1 : 0,
     };
   }
 
@@ -164,8 +177,31 @@ class DocField {
         fieldtype != 'Heading';
   }
 
-  /// Get display label
+  /// Zero-width / invisible characters stripped when probing whether a label
+  /// carries any real text. Hoisted to a `static final` because [displayLabel]
+  /// runs on widget build paths and recompiling the pattern per call is pure
+  /// allocation churn.
+  static final RegExp _zeroWidthPattern = RegExp(
+    '[\\u200B\\u200C\\u200D\\uFEFF]',
+  );
+
+  /// Get display label.
+  ///
+  /// A label that is null, blank, or made only of zero-width/invisible
+  /// characters (hosts blank labels to `'​'` to suppress duplicate
+  /// rendering) falls back to a humanized fieldname — otherwise validation
+  /// messages degrade to a bare "is required".
   String get displayLabel {
-    return label ?? fieldname ?? '';
+    final l = label;
+    if (l != null && l.replaceAll(_zeroWidthPattern, '').trim().isNotEmpty) {
+      return l;
+    }
+    final f = fieldname;
+    if (f == null || f.isEmpty) return '';
+    return f
+        .split('_')
+        .where((w) => w.isNotEmpty)
+        .map((w) => w[0].toUpperCase() + w.substring(1))
+        .join(' ');
   }
 }

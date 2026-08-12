@@ -107,6 +107,9 @@ docs/superpowers/
 **/superpowers/plans/
 **/superpowers/specs/
 
+# AI agent working artifacts (diagnosis notes, probe scripts, captured diffs)
+/.claude-artifacts/
+
 # Implementation plans, specs, design docs (any name/location)
 PLAN-*.md
 PLANS-INDEX.md

@@ -49,6 +49,7 @@ export 'src/sdk/frappe_sdk.dart';
 
 // Services
 export 'src/services/auth_service.dart';
+export 'src/services/session_health.dart';
 export 'src/services/app_status_service.dart';
 export 'src/services/meta_service.dart';
 export 'src/services/permission_service.dart';
@@ -108,6 +109,7 @@ export 'src/ui/widgets/fields/button_field.dart';
 export 'src/ui/widgets/fields/numeric_field.dart';
 export 'src/ui/widgets/fields/link_field.dart';
 export 'src/ui/widgets/fields/phone_field.dart';
+export 'src/ui/widgets/fields/geolocation_field.dart';
 export 'src/ui/widgets/fields/link_field_picker_mode.dart';
 export 'src/ui/widgets/fields/child_table_field.dart'
     show ChildTableFormBuilder;
@@ -115,6 +117,9 @@ export 'src/ui/widgets/fields/child_table_field.dart'
 // Constants
 export 'src/constants/field_types.dart';
 export 'src/constants/oauth_constants.dart';
+
+// Utilities (Frappe expression parity)
+export 'src/utils/depends_on_evaluator.dart' show DependsOnEvaluator;
 
 // Query (UnifiedResolver + FilterParser) — Spec §6
 export 'src/query/filter_errors.dart'

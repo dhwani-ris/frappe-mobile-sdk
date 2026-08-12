@@ -8,6 +8,7 @@ import 'package:frappe_mobile_sdk/src/database/daos/outbox_dao.dart';
 import 'package:frappe_mobile_sdk/src/models/doc_type_meta.dart';
 import 'package:frappe_mobile_sdk/src/models/doc_field.dart';
 import 'package:frappe_mobile_sdk/src/models/outbox_row.dart';
+import 'package:frappe_mobile_sdk/src/query/filter_parser.dart';
 import 'package:frappe_mobile_sdk/src/sync/push_error.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
@@ -320,4 +321,264 @@ void main() {
       expect(byUuid['c-2'], 'A');
     },
   );
+
+  // Frappe's server-owned audit fields (`owner`, `creation`, `modified_by`)
+  // are stripped from every OUTBOUND payload, so the push response is the
+  // only place a client learns what the server assigned to a doc it created
+  // offline. The writeback used to drop them, which left `owner = NULL` on a
+  // successfully-pushed row — and since `FilterParser` now emits real SQL for
+  // an `owner = <me>` clause, the creating user's own record disappeared from
+  // their list until the next full pull.
+  group('server-owned audit fields', () {
+    test('persists owner / creation / modified_by from the response', () async {
+      final outboxRow = (await outbox.findByState(OutboxState.pending)).first;
+      await ResponseWriteback.apply(
+        db: db,
+        row: outboxRow,
+        parentTable: 'docs__sales_order',
+        childTablesByFieldname: const {'items': 'docs__so_item'},
+        response: {
+          'name': 'SO-1001',
+          'modified': '2026-02-01 10:00:00',
+          'owner': 'alice@example.com',
+          'creation': '2026-01-31 09:00:00',
+          'modified_by': 'bob@example.com',
+          'items': [
+            {'name': 'SOIT-1', 'idx': 0, 'modified': '2026-02-01 10:00:00'},
+          ],
+        },
+      );
+
+      final p = (await db.query('docs__sales_order')).first;
+      expect(p['owner'], 'alice@example.com');
+      expect(p['creation'], '2026-01-31 09:00:00');
+      expect(p['modified_by'], 'bob@example.com');
+      // The pre-existing writeback must be untouched by the addition.
+      expect(p['server_name'], 'SO-1001');
+      expect(p['modified'], '2026-02-01 10:00:00');
+      expect(p['sync_status'], 'synced');
+      expect(p['sync_attempts'], 0);
+      final c = (await db.query('docs__so_item')).first;
+      expect(c['server_name'], 'SOIT-1');
+    });
+
+    test('a response OMITTING them does not blank stored values', () async {
+      // A lean update response (custom controller, `frappe.client.set_value`)
+      // may echo only `name` + `modified`. An omitted key must leave the
+      // column alone rather than erasing what a pull already persisted.
+      await db.update(
+        'docs__sales_order',
+        {
+          'owner': 'alice@example.com',
+          'creation': '2026-01-31 09:00:00',
+          'modified_by': 'alice@example.com',
+        },
+        where: 'mobile_uuid = ?',
+        whereArgs: ['u-so'],
+      );
+
+      final outboxRow = (await outbox.findByState(OutboxState.pending)).first;
+      await ResponseWriteback.apply(
+        db: db,
+        row: outboxRow,
+        parentTable: 'docs__sales_order',
+        childTablesByFieldname: const {},
+        response: const {'name': 'SO-1001', 'modified': '2026-02-02 11:00:00'},
+      );
+
+      final p = (await db.query('docs__sales_order')).first;
+      expect(p['owner'], 'alice@example.com');
+      expect(p['creation'], '2026-01-31 09:00:00');
+      expect(p['modified_by'], 'alice@example.com');
+      // Everything the response DID carry still lands.
+      expect(p['server_name'], 'SO-1001');
+      expect(p['modified'], '2026-02-02 11:00:00');
+      expect(p['sync_status'], 'synced');
+    });
+
+    test('an empty-string value is treated as absent, not written', () async {
+      await db.update(
+        'docs__sales_order',
+        {'owner': 'alice@example.com'},
+        where: 'mobile_uuid = ?',
+        whereArgs: ['u-so'],
+      );
+
+      final outboxRow = (await outbox.findByState(OutboxState.pending)).first;
+      await ResponseWriteback.apply(
+        db: db,
+        row: outboxRow,
+        parentTable: 'docs__sales_order',
+        childTablesByFieldname: const {},
+        response: const {
+          'name': 'SO-1001',
+          'modified': '2026-02-02 11:00:00',
+          'owner': '',
+          'creation': null,
+        },
+      );
+
+      final p = (await db.query('docs__sales_order')).first;
+      expect(p['owner'], 'alice@example.com');
+      expect(p['creation'], isNull);
+    });
+
+    test('omitted on an all-NULL row leaves NULL and does not throw', () async {
+      final outboxRow = (await outbox.findByState(OutboxState.pending)).first;
+      await ResponseWriteback.apply(
+        db: db,
+        row: outboxRow,
+        parentTable: 'docs__sales_order',
+        childTablesByFieldname: const {},
+        response: const {'name': 'SO-1001', 'modified': '2026-02-01'},
+      );
+
+      final p = (await db.query('docs__sales_order')).first;
+      expect(p['owner'], isNull);
+      expect(p['creation'], isNull);
+      expect(p['modified_by'], isNull);
+      expect(p['server_name'], 'SO-1001');
+      expect(p['sync_status'], 'synced');
+    });
+
+    test(
+      'audit fields are written even when more outbox work is queued',
+      () async {
+        // `hasMore` keeps `sync_status = 'dirty'`, but the server still owns
+        // these three — a queued local edit cannot change them.
+        final outboxRow = (await outbox.findByState(OutboxState.pending)).first;
+        await outbox.insertPending(
+          doctype: 'Sales Order',
+          mobileUuid: 'u-so',
+          operation: OutboxOperation.update,
+        );
+        await ResponseWriteback.apply(
+          db: db,
+          row: outboxRow,
+          parentTable: 'docs__sales_order',
+          childTablesByFieldname: const {},
+          response: const {
+            'name': 'SO-1001',
+            'modified': '2026-02-01',
+            'owner': 'alice@example.com',
+          },
+        );
+        final p = (await db.query('docs__sales_order')).first;
+        expect(p['sync_status'], 'dirty');
+        expect(p['owner'], 'alice@example.com');
+      },
+    );
+
+    test(
+      'a parent table WITHOUT the audit columns does not break the writeback',
+      () async {
+        // A mirror provisioned outside `buildParentSchemaDDL` /
+        // `_migrateV5ToV6` / `reconcileParentTableForMeta` — i.e. exactly the
+        // pre-change column set. An unguarded UPDATE would raise `no such
+        // column: owner`, roll back the whole writeback and leave the outbox
+        // row to re-push a doc the server already accepted.
+        await db.execute('''
+          CREATE TABLE docs__legacy (
+            mobile_uuid TEXT PRIMARY KEY,
+            server_name TEXT,
+            sync_status TEXT NOT NULL DEFAULT 'dirty',
+            sync_error TEXT,
+            error_code TEXT,
+            sync_attempts INTEGER NOT NULL DEFAULT 0,
+            last_attempt_at INTEGER,
+            sync_op TEXT,
+            push_base_payload TEXT,
+            docstatus INTEGER NOT NULL DEFAULT 0,
+            modified TEXT,
+            local_modified INTEGER NOT NULL,
+            pulled_at INTEGER
+          )
+        ''');
+        await db.insert('docs__legacy', {
+          'mobile_uuid': 'u-legacy',
+          'sync_status': 'dirty',
+          'local_modified': 1,
+        });
+        final legacyId = await outbox.insertPending(
+          doctype: 'Legacy',
+          mobileUuid: 'u-legacy',
+          operation: OutboxOperation.insert,
+        );
+        final legacyRow = (await outbox.findById(legacyId))!;
+
+        await ResponseWriteback.apply(
+          db: db,
+          row: legacyRow,
+          parentTable: 'docs__legacy',
+          childTablesByFieldname: const {},
+          response: const {
+            'name': 'LEG-1',
+            'modified': '2026-02-01 10:00:00',
+            'owner': 'alice@example.com',
+            'creation': '2026-01-31 09:00:00',
+            'modified_by': 'bob@example.com',
+          },
+        );
+
+        // No throw, and the columns that DO exist were still written.
+        final p = (await db.query('docs__legacy')).first;
+        expect(p['server_name'], 'LEG-1');
+        expect(p['modified'], '2026-02-01 10:00:00');
+        expect(p['sync_status'], 'synced');
+        expect(await outbox.findById(legacyId), isNull);
+      },
+    );
+
+    test(
+      'THE REGRESSION: a pushed offline row becomes visible to owner = <me>',
+      () async {
+        // 1. Created offline → `owner` NULL (never fabricated locally).
+        // 2. Pushed; the server assigns the real owner.
+        // 3. Before this fix the writeback dropped it, so the user's own
+        //    freshly-synced record was filtered OUT of their own list.
+        const me = 'alice@example.com';
+        final meta = DocTypeMeta(
+          name: 'Sales Order',
+          fields: [f('items', 'Table', options: 'SO Item')],
+        );
+        final pq = FilterParser.toSql(
+          meta: meta,
+          tableName: 'docs__sales_order',
+          filters: [
+            ['owner', '=', me],
+          ],
+          page: 0,
+          pageSize: 50,
+        );
+        // The clause reaches SQL (it used to be silently dropped, which is
+        // why the missing writeback went unnoticed).
+        expect(pq.sql, contains('owner'));
+        expect(pq.params, contains(me));
+
+        // Precondition: locally-created, NULL owner → invisible to the filter.
+        expect((await db.query('docs__sales_order')).first['owner'], isNull);
+        expect(await db.rawQuery(pq.sql, pq.params), isEmpty);
+
+        final outboxRow = (await outbox.findByState(OutboxState.pending)).first;
+        await ResponseWriteback.apply(
+          db: db,
+          row: outboxRow,
+          parentTable: 'docs__sales_order',
+          childTablesByFieldname: const {},
+          response: const {
+            'name': 'SO-1001',
+            'modified': '2026-02-01 10:00:00',
+            'owner': me,
+            'creation': '2026-02-01 10:00:00',
+            'modified_by': me,
+          },
+        );
+
+        final visible = await db.rawQuery(pq.sql, pq.params);
+        expect(visible, hasLength(1));
+        expect(visible.first['server_name'], 'SO-1001');
+        expect(visible.first['sync_status'], 'synced');
+      },
+    );
+  });
 }

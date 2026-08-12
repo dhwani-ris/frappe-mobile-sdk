@@ -24,11 +24,7 @@ Widget _wrap(Widget child) {
       body: SizedBox(
         width: _phoneWidth,
         height: _phoneHeight,
-        child: SingleChildScrollView(
-          child: FormBuilder(
-            child: child,
-          ),
-        ),
+        child: SingleChildScrollView(child: FormBuilder(child: child)),
       ),
     ),
   );
@@ -64,14 +60,14 @@ void main() {
   testWidgets('DataField required — long label + asterisk does not overflow', (
     tester,
   ) async {
-    await tester.pumpWidget(
-      _wrap(DataField(field: _field(reqd: true))),
-    );
+    await tester.pumpWidget(_wrap(DataField(field: _field(reqd: true))));
     await tester.pump();
   });
 
   testWidgets('CheckField — long label does not overflow', (tester) async {
-    await tester.pumpWidget(_wrap(CheckField(field: _field(fieldtype: 'Check'))));
+    await tester.pumpWidget(
+      _wrap(CheckField(field: _field(fieldtype: 'Check'))),
+    );
     await tester.pump();
   });
 
@@ -95,73 +91,64 @@ void main() {
 
   testWidgets('label text is visible and accessible', (tester) async {
     const shortLabel = 'Field Name';
-    await tester.pumpWidget(
-      _wrap(DataField(field: _field(label: shortLabel))),
-    );
+    await tester.pumpWidget(_wrap(DataField(field: _field(label: shortLabel))));
     await tester.pump();
     expect(find.text(shortLabel), findsOneWidget);
   });
 
-  testWidgets(
-    'very narrow container (120px) — long label wraps, no overflow',
-    (tester) async {
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: SizedBox(
-              width: 120,
-              child: FormBuilder(
-                child: DataField(field: _field()),
-              ),
-            ),
+  testWidgets('very narrow container (120px) — long label wraps, no overflow', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 120,
+            child: FormBuilder(child: DataField(field: _field())),
           ),
         ),
-      );
-      await tester.pump();
-    },
-  );
+      ),
+    );
+    await tester.pump();
+  });
 
-  testWidgets(
-    'multiple fields with long labels in a Column — no overflow',
-    (tester) async {
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: SizedBox(
-              width: _phoneWidth,
-              height: _phoneHeight,
-              child: SingleChildScrollView(
-                child: FormBuilder(
-                  child: Column(
-                    children: [
-                      DataField(field: _field(fieldname: 'a')),
-                      CheckField(
-                        field: _field(fieldname: 'b', fieldtype: 'Check'),
-                      ),
-                      NumericField(
-                        field: _field(fieldname: 'c', fieldtype: 'Float'),
-                      ),
-                    ],
-                  ),
+  testWidgets('multiple fields with long labels in a Column — no overflow', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: _phoneWidth,
+            height: _phoneHeight,
+            child: SingleChildScrollView(
+              child: FormBuilder(
+                child: Column(
+                  children: [
+                    DataField(field: _field(fieldname: 'a')),
+                    CheckField(
+                      field: _field(fieldname: 'b', fieldtype: 'Check'),
+                    ),
+                    NumericField(
+                      field: _field(fieldname: 'c', fieldtype: 'Float'),
+                    ),
+                  ],
                 ),
               ),
             ),
           ),
         ),
-      );
-      await tester.pump();
-    },
-  );
+      ),
+    );
+    await tester.pump();
+  });
 
   testWidgets('FieldStyle.showLabel=false — label Row not rendered', (
     tester,
   ) async {
     await tester.pumpWidget(
       _wrap(
-        DataField(
-          field: _field(),
-          style: const FieldStyle(showLabel: false),
-        ),
+        DataField(field: _field(), style: const FieldStyle(showLabel: false)),
       ),
     );
     await tester.pump();

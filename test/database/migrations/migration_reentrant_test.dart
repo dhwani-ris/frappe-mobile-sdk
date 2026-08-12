@@ -123,10 +123,10 @@ void main() {
       expect(pragma.first.values.first, 5);
 
       // sdk_meta row recovered via INSERT OR REPLACE, then schema_version
-      // updated to 5 by the full v2→v5 migration chain.
+      // updated to 6 by the full v2→v6 migration chain.
       final meta = await reopened.query('sdk_meta', where: 'id = 1');
       expect(meta, hasLength(1));
-      expect(meta.first['schema_version'], 5);
+      expect(meta.first['schema_version'], 6);
 
       await reopened.close();
     },

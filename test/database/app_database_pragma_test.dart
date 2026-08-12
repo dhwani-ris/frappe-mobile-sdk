@@ -65,12 +65,15 @@ void main() {
     expect(result.first.values.first, equals(1));
   });
 
-  test('_onConfigure is idempotent — second call returns same values', () async {
-    await AppDatabaseTestSeam.runOnConfigure(db);
-    await AppDatabaseTestSeam.runOnConfigure(db);
-    final walResult = await db.rawQuery('PRAGMA journal_mode');
-    expect(walResult.first.values.first, equals('wal'));
-    final syncResult = await db.rawQuery('PRAGMA synchronous');
-    expect(syncResult.first.values.first, equals(1));
-  });
+  test(
+    '_onConfigure is idempotent — second call returns same values',
+    () async {
+      await AppDatabaseTestSeam.runOnConfigure(db);
+      await AppDatabaseTestSeam.runOnConfigure(db);
+      final walResult = await db.rawQuery('PRAGMA journal_mode');
+      expect(walResult.first.values.first, equals('wal'));
+      final syncResult = await db.rawQuery('PRAGMA synchronous');
+      expect(syncResult.first.values.first, equals(1));
+    },
+  );
 }

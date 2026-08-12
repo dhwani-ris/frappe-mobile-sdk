@@ -25,6 +25,7 @@ import '../sync/mobile_error_poster.dart';
 import '../sync/mobile_error_record.dart' show excTypeFromBody;
 import '../sync/sync_state_notifier.dart';
 import 'error_capture.dart';
+import 'offline_repository.dart';
 import 'session_user_service.dart';
 import 'sync_controller.dart';
 import '../utils/sdk_log.dart';
@@ -388,25 +389,80 @@ class SyncEngineBuilder {
       onDrainComplete: () => errorLogPoster.flush(errorLogCollector.drain()),
     );
 
-    // PullEngine is built but not auto-invoked. The list-http callback
-    // wraps client.doctype.list; PullPageFetcher uses it when the engine
-    // eventually runs.
-    Future<List<Map<String, dynamic>>> listHttp(
+    // The list-http callback backs the closure PullEngine. A flat
+    // `frappe.client.get_list` returns PARENT scalar fields only — child-table
+    // arrays are dropped — so a parent that declares any Table / Table
+    // MultiSelect field must be fetched via `mobile_sync.get_docs_with_children`
+    // (listFullDocs) to embed its children. PullApply already writes embedded
+    // child arrays into docs__<child>; without this branch every child table
+    // stays empty offline (broken form prefill / not truly offline-first).
+    Future<ListHttpPage> listHttp(
       String doctype,
       Map<String, Object?> params,
     ) async {
+      final limitPageLength =
+          params['limit_page_length'] as int? ?? pullPageSize;
+      final limitStart = params['limit_start'] as int? ?? 0;
+      final filters = (params['filters'] as List?)?.cast<List<dynamic>>();
+      final orderBy = params['order_by'] as String?;
+
+      bool hasChildren = false;
+      try {
+        final meta = await metaResolver(doctype);
+        hasChildren = metaHasChildTableFields(meta);
+      } catch (e, st) {
+        // Do NOT silently degrade to the flat list() path — that reintroduces
+        // the empty-child-table bug this branch exists to prevent (a form
+        // prefilled with blank child tables is worse than a visible failure).
+        // Log and fail this doctype's pull; PullEngine's mid-pull catch records
+        // it and retries next cycle without aborting the other doctypes.
+        // (PullEngine resolves the same meta just before calling this, so
+        // reaching here means a transient resolve failure.)
+        sdkLog(
+          'SyncEngineBuilder.listHttp($doctype): meta resolve failed — failing '
+          'the pull rather than fetching without children — $e\n$st',
+        );
+        rethrow;
+      }
+
+      // The child-bearing path reports `namesScanned` so PullPageFetcher can
+      // advance the offset by names consumed and recognise a fully
+      // permission-filtered page as "skip", not "end of stream". It also reports
+      // the SCANNED window's `(modified, name)` high-water mark, which is the
+      // only thing that lets the INCREMENTAL pull (where `limit_start` is pinned
+      // at 0, so there is no offset to step) move past a window whose every name
+      // the per-doc gate denied. The flat path returns every row it lists, so it
+      // leaves all three null.
+      if (hasChildren) {
+        final page = await client.doctype.listFullDocsPage(
+          doctype,
+          filters: filters,
+          limitStart: limitStart,
+          limitPageLength: limitPageLength,
+          orderBy: orderBy,
+        );
+        return ListHttpPage(
+          page.docs,
+          namesScanned: page.namesScanned,
+          scannedMaxModified: page.scannedMaxModified,
+          scannedMaxName: page.scannedMaxName,
+        );
+      }
+
       final result = await client.doctype.list(
         doctype,
-        filters: (params['filters'] as List?)?.cast<List<dynamic>>(),
+        filters: filters,
         fields: (params['fields'] as List?)?.cast<String>(),
-        orderBy: params['order_by'] as String?,
-        limitPageLength: params['limit_page_length'] as int? ?? pullPageSize,
-        limitStart: params['limit_start'] as int? ?? 0,
+        orderBy: orderBy,
+        limitPageLength: limitPageLength,
+        limitStart: limitStart,
       );
-      return result
-          .whereType<Map>()
-          .map((e) => Map<String, dynamic>.from(e))
-          .toList();
+      return ListHttpPage(
+        result
+            .whereType<Map>()
+            .map((e) => Map<String, dynamic>.from(e))
+            .toList(),
+      );
     }
 
     final pullEngine = PullEngine(

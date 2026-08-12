@@ -22,23 +22,20 @@ void main() {
     await expectLater(sdk.logout(), throwsA(isA<StateError>()));
   });
 
-  test(
-    'security getter throws the canonical "not initialized" error pre-init '
-    '(B4: guarded like every other service getter)',
-    () {
-      final sdk = FrappeSDK(baseUrl: 'http://test');
-      // Must surface the shared, actionable message — not an opaque
-      // "Null check operator used on a null value".
-      expect(
-        () => sdk.security,
-        throwsA(
-          isA<Exception>().having(
-            (e) => e.toString(),
-            'message',
-            contains('SDK not initialized'),
-          ),
+  test('security getter throws the canonical "not initialized" error pre-init '
+      '(B4: guarded like every other service getter)', () {
+    final sdk = FrappeSDK(baseUrl: 'http://test');
+    // Must surface the shared, actionable message — not an opaque
+    // "Null check operator used on a null value".
+    expect(
+      () => sdk.security,
+      throwsA(
+        isA<Exception>().having(
+          (e) => e.toString(),
+          'message',
+          contains('SDK not initialized'),
         ),
-      );
-    },
-  );
+      ),
+    );
+  });
 }

@@ -3,8 +3,20 @@ import 'package:flutter_form_builder/flutter_form_builder.dart';
 import 'base_field.dart';
 import 'field_helpers.dart';
 
+/// How close to `maxLength` the input must get before the character counter
+/// is revealed. Below this the counter stays hidden so the field matches the
+/// web UI's clean look; a field whose cap is smaller than this window (a short
+/// explicit `DocField.length`) always shows it — every keystroke is "near the
+/// cap" there.
+const int _counterRevealWindow = 20;
+
 /// Widget for Data field type
 class DataField extends BaseField {
+  /// When false (e.g. a Single doctype, which Frappe stores as mediumtext),
+  /// skip the implicit varchar(140) cap on a `Data` field whose
+  /// `DocField.length` is unset. Default true — cap, matching Frappe's
+  /// non-Single behaviour.
+  final bool capLength;
   const DataField({
     super.key,
     required super.field,
@@ -12,11 +24,13 @@ class DataField extends BaseField {
     super.onChanged,
     super.enabled,
     super.style,
+    this.capLength = true,
   });
 
   @override
   Widget buildField(BuildContext context) {
     final isPhone = field.fieldtype == 'Phone';
+    final editable = enabled && !field.readOnly;
 
     // Ensure phone values start with + (required by Frappe)
     String? initialValue = value?.toString() ?? field.defaultValue ?? '';
@@ -35,7 +49,7 @@ class DataField extends BaseField {
       key: ValueKey('data_${field.fieldname}'),
       name: field.fieldname ?? '',
       initialValue: initialValue,
-      enabled: enabled && !field.readOnly,
+      enabled: editable,
       inputFormatters: style?.inputFormatters,
       keyboardType: isPhone ? TextInputType.phone : TextInputType.text,
       decoration:
@@ -50,9 +64,44 @@ class DataField extends BaseField {
                 : null,
             helperMaxLines: 2,
           ),
-      maxLength: (field.length != null && field.length! > 0)
-          ? field.length
+      // Frappe `Data` columns are varchar(140) by default (implicit when
+      // DocField.length is unset) — cap on-device so free-text can't overflow
+      // and fail server-side with a 417 (CharacterLengthExceededError) only at
+      // sync. [capLength] is false for Single doctypes, which Frappe stores as
+      // mediumtext and exempts from the cap entirely (regardless of any
+      // explicit length).
+      maxLength: capLength
+          ? ((field.length != null && field.length! > 0) ? field.length : 140)
           : null,
+      // The cap must not be SILENT: `maxLength` makes the field simply stop
+      // registering keystrokes, so with no counter the user gets no reason.
+      // Show the counter only once they are within [_counterRevealWindow]
+      // characters of the cap — below that the field stays as clean as the web
+      // UI, which is the common case. A non-editable field never truncates a
+      // keystroke, so it stays counter-free at any length (this also covers
+      // FieldFactory's `default:` branch, which renders unsupported field types
+      // as a disabled DataField holding an arbitrarily long value).
+      buildCounter:
+          (
+            BuildContext context, {
+            required int currentLength,
+            required bool isFocused,
+            int? maxLength,
+          }) {
+            if (maxLength == null || !editable) return null;
+            if (currentLength < maxLength - _counterRevealWindow) return null;
+            final atCap = currentLength >= maxLength;
+            return Text(
+              '$currentLength/$maxLength',
+              semanticsLabel: '$currentLength of $maxLength characters',
+              style: TextStyle(
+                fontSize: 12,
+                color: atCap
+                    ? Theme.of(context).colorScheme.error
+                    : Theme.of(context).hintColor,
+              ),
+            );
+          },
       validator: field.reqd
           ? (value) {
               final required = requiredValidator(value, field.displayLabel);

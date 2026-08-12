@@ -376,13 +376,30 @@ class FormController extends ChangeNotifier {
       orElse: () => DocField(fieldtype: '_missing_'),
     );
     if (!_isDynamic(f) && !f.reqd && !f.readOnly) return FieldUiState.editable;
+    // `depends_on` keeps the `onError: true` default — an unparseable
+    // expression SHOWS the field rather than silently hiding data.
     final visible = DependsOnEvaluator.evaluate(f.dependsOn, _rawValues);
+    // The other two must invert it: erring towards required blocks the save
+    // with nothing the user can do about it, and erring towards locked makes
+    // the field permanently uneditable. FormBuilder's `_isFieldRequired` /
+    // `_isFieldReadOnly` already pass `false`; reactive mode must agree with
+    // them or the same field disagrees between the two engines.
     final required =
         f.reqd ||
-        DependsOnEvaluator.evaluate2(f.mandatoryDependsOn, _rawValues, false);
+        DependsOnEvaluator.evaluate2(
+          f.mandatoryDependsOn,
+          _rawValues,
+          false,
+          onError: false,
+        );
     final readOnly =
         f.readOnly ||
-        DependsOnEvaluator.evaluate2(f.readOnlyDependsOn, _rawValues, false);
+        DependsOnEvaluator.evaluate2(
+          f.readOnlyDependsOn,
+          _rawValues,
+          false,
+          onError: false,
+        );
     return FieldUiState(
       visible: visible,
       required: required,
@@ -445,7 +462,18 @@ class FormController extends ChangeNotifier {
     }
     final v = _rawValues[field];
     final ui = uiStateOf(field).value;
-    if ((f.reqd || ui.required) && (v == null || v.toString().isEmpty)) {
+    // "Missing" semantics are shared with the legacy FrappeFormBuilder
+    // mandatory sweep and must agree with it, or reactive and legacy mode
+    // accept different payloads. Trim-aware: a whitespace-only string is
+    // missing (it is also blank server-side). `0` / `false` stay PRESENT
+    // (Frappe treats them as set), an empty List stays missing, and any other
+    // type keeps the original `toString().isEmpty` probe.
+    final missing =
+        v == null ||
+        (v is List && v.isEmpty) ||
+        (v is String && v.trim().isEmpty) ||
+        (v is! List && v is! String && v.toString().isEmpty);
+    if ((f.reqd || ui.required) && missing) {
       return '${f.label ?? field} is required';
     }
     for (final validator in _fieldValidators[field] ?? const []) {

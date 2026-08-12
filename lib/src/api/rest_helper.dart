@@ -273,7 +273,24 @@ class RestHelper {
           requestBody: method != 'GET' ? body : null,
         );
       } on AuthException catch (e) {
-        if (e.statusCode == 401 &&
+        // `includeAuth` is load-bearing, not a tidy-up. Without it the refresh
+        // endpoint re-enters its own refresh: AuthService sends
+        // `mobile_auth.refresh_token` via callPublic -> postPublic -> this same
+        // `_request`, and deliberately leaves the Bearer set (nulling it would
+        // race concurrent requests down to Guest -> 403). So a 401 from the
+        // refresh call itself used to satisfy every condition below, re-invoke
+        // `onTokenExpired`, and — since that callback is single-flighted —
+        // `await` the very future it was already executing inside. Dart does
+        // not detect await-on-self: it hangs silently and `_refreshInFlight` is
+        // never nulled, wedging the session for the process lifetime (worst
+        // case, on the boot-time restoreSession refresh, hanging the splash).
+        //
+        // Gating here is also correct on its own terms: a request that carries
+        // no Authorization header cannot be repaired by refreshing a token, and
+        // firing a real refresh for an `allow_guest` endpoint's 401 could get
+        // that refresh rejected and wipe a logged-in user's stored tokens.
+        if (includeAuth &&
+            e.statusCode == 401 &&
             _bearerToken != null &&
             onTokenExpired != null) {
           final refreshed = await onTokenExpired!();

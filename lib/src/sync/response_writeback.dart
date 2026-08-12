@@ -1,13 +1,15 @@
 import 'package:flutter/foundation.dart';
 import 'package:sqflite/sqflite.dart';
 
+import '../database/schema/system_columns.dart';
 import '../models/outbox_row.dart';
 import 'push_error.dart';
 
 /// Applies a successful Frappe push response to local state. Spec §5.2.
 ///
 /// In a single transaction:
-/// 1. Updates the parent row's `server_name`, `modified`, sets
+/// 1. Updates the parent row's `server_name`, `modified`, the server-owned
+///    audit fields the response carried ([serverAuditColumnNames]), sets
 ///    `sync_status='synced'`, clears error fields.
 /// 2. For each child table, matches existing local rows by
 ///    `(parent_uuid, parentfield, idx)` and writes back the server's
@@ -106,6 +108,48 @@ class ResponseWriteback {
     );
     final hasMore = more.isNotEmpty;
 
+    // Frappe assigns `owner` / `creation` on insert and `modified_by` on every
+    // save, and the push response is the first place a client legitimately
+    // learns the AUTHORITATIVE values for a doc it just created.
+    //
+    // A device-created row already carries a local PREDICTION of these fields
+    // (`LocalWriter._resolveParentAudit` stamps the session user + now, so the
+    // creator's own `owner = <me>` list works before any sync). This writeback
+    // replaces that prediction with the server's own values the moment the push
+    // succeeds, instead of leaving it to stand until the next full pull. If the
+    // server ever disagrees with the prediction — e.g. a server-side hook
+    // reassigns `owner` — this is what converges the mirror.
+    // Written regardless of [hasMore]: queued local edits can never change
+    // these fields, so the server's value is correct either way.
+    //
+    // Deliberately UNLIKE `PullApply._copyServerAuditFields`, which keys off
+    // `containsKey` and therefore copies an explicit null: here an omitted key
+    // (or a null/empty value) is SKIPPED. A lean update response that does not
+    // echo these must not blank what an earlier pull correctly persisted.
+    // `?.toString()` rather than `as String?` — a non-string value from a
+    // custom controller must not raise a TypeError inside the push writeback.
+    final auditValues = <String, Object?>{};
+    for (final col in serverAuditColumnNames) {
+      final value = response[col]?.toString();
+      if (value == null || value.isEmpty) continue;
+      auditValues[col] = value;
+    }
+    if (auditValues.isNotEmpty) {
+      // These columns are emitted by `buildParentSchemaDDL` and backfilled by
+      // `AppDatabase._migrateV5ToV6` + `reconcileParentTableForMeta`, so they
+      // are present in practice. But a table provisioned outside those paths
+      // would make the UPDATE below throw `no such column`, rolling back the
+      // ENTIRE writeback and leaving the outbox row to re-push a document the
+      // server already accepted — far worse than a missing `owner`. Filter
+      // against the live schema, the same guard PushEngine's merge path uses.
+      // One PRAGMA (an in-memory schema read), and only when the response
+      // actually carried something to write.
+      final tableCols = (await txn.rawQuery(
+        'PRAGMA table_info("$parentTable")',
+      )).map((r) => r['name'] as String?).toSet();
+      auditValues.removeWhere((col, _) => !tableCols.contains(col));
+    }
+
     await txn.update(
       parentTable,
       <String, Object?>{
@@ -116,6 +160,7 @@ class ResponseWriteback {
         if (!hasMore) 'error_code': null,
         if (!hasMore) 'push_base_payload': null,
         'sync_attempts': 0,
+        ...auditValues,
       },
       where: 'mobile_uuid = ?',
       whereArgs: [row.mobileUuid],

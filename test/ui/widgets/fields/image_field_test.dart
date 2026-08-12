@@ -56,8 +56,13 @@ void main() {
       readOnly: true,
     );
     await _pump(tester, field: readField);
+    // Match the supertype, not the exact runtime type: `find.byType` compares
+    // runtimeType exactly, and Flutter before 3.38 builds `OutlinedButton.icon`
+    // as a private `OutlinedButton` subclass, which `byType` would miss.
     final buttons = tester
-        .widgetList<OutlinedButton>(find.byType(OutlinedButton))
+        .widgetList<OutlinedButton>(
+          find.byWidgetPredicate((w) => w is OutlinedButton),
+        )
         .toList();
     expect(buttons, hasLength(2));
     expect(buttons.every((b) => b.onPressed == null), isTrue);

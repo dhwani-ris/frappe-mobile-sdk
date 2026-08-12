@@ -10,9 +10,13 @@ Pod::Spec.new do |s|
   s.license          = { :file => '../LICENSE' }
   s.author           = { 'Dhwani RIS' => 'info@dhwaniris.com' }
   s.source           = { :path => '.' }
-  s.source_files     = 'Classes/**/*'
+  s.source_files     = 'frappe_mobile_sdk/Sources/frappe_mobile_sdk/**/*.swift'
   s.dependency 'Flutter'
-  s.platform         = :ios, '12.0'
+  # Keep in lockstep with frappe_mobile_sdk/Package.swift's `.iOS("13.0")`.
+  # Diverging floors mean the same plugin resolves differently depending on
+  # whether the host integrates via CocoaPods or SPM. 13.0 is also Flutter's
+  # own minimum, so nothing is lost by raising it here.
+  s.platform         = :ios, '13.0'
   s.pod_target_xcconfig = {
     'DEFINES_MODULE' => 'YES',
     'EXCLUDED_ARCHS[sdk=iphonesimulator*]' => 'i386'

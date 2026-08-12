@@ -11,7 +11,8 @@ void main() {
   });
 
   Future<TranslationService> makeService() async =>
-      TranslationService.forTesting()..injectDao(await TranslationDao.forTesting());
+      TranslationService.forTesting()
+        ..injectDao(await TranslationDao.forTesting());
 
   group('loadFromCache', () {
     test('populates _cache from DAO', () async {
@@ -68,29 +69,32 @@ void main() {
       await svc.dao.close();
     });
 
-    test('emits onChanged on every loadFromCache call that finds rows', () async {
-      // Verifies the contract that _doRefresh is meant to honour: once the
-      // in-memory cache is populated, onChanged fires every time — even on
-      // repeated calls (analogous to _doRefresh firing after bulkUpsert
-      // throws but the cache is still valid from loadTranslations).
-      final svc = await makeService();
-      await svc.dao.bulkUpsert('hi', {'Submit': 'सबमिट'});
-      final events = <void>[];
-      svc.onChanged.listen((_) => events.add(null));
+    test(
+      'emits onChanged on every loadFromCache call that finds rows',
+      () async {
+        // Verifies the contract that _doRefresh is meant to honour: once the
+        // in-memory cache is populated, onChanged fires every time — even on
+        // repeated calls (analogous to _doRefresh firing after bulkUpsert
+        // throws but the cache is still valid from loadTranslations).
+        final svc = await makeService();
+        await svc.dao.bulkUpsert('hi', {'Submit': 'सबमिट'});
+        final events = <void>[];
+        svc.onChanged.listen((_) => events.add(null));
 
-      svc.setCurrentLangForTesting('hi');
-      await svc.loadFromCache('hi');
-      await Future<void>.delayed(Duration.zero);
-      expect(events, hasLength(1));
-      expect(svc.translate('Submit'), 'सबमिट');
+        svc.setCurrentLangForTesting('hi');
+        await svc.loadFromCache('hi');
+        await Future<void>.delayed(Duration.zero);
+        expect(events, hasLength(1));
+        expect(svc.translate('Submit'), 'सबमिट');
 
-      // A second load (simulating a cache-refresh) must also emit.
-      await svc.loadFromCache('hi');
-      await Future<void>.delayed(Duration.zero);
-      expect(events, hasLength(2));
+        // A second load (simulating a cache-refresh) must also emit.
+        await svc.loadFromCache('hi');
+        await Future<void>.delayed(Duration.zero);
+        expect(events, hasLength(2));
 
-      await svc.dao.close();
-    });
+        await svc.dao.close();
+      },
+    );
   });
 
   group('setLocale', () {
@@ -109,22 +113,24 @@ void main() {
       await svc.dao.close();
     });
 
-    test('reloads from SQLite even when _cache already has an entry for lang',
-        () async {
-      // Simulates: login cached stale/empty data, user switches locale offline.
-      // setLocale must NOT skip loadFromCache just because _cache.containsKey.
-      final svc = await makeService();
-      // Pre-seed an empty in-memory entry (as if a previous wrong API call ran)
-      // by injecting it directly via the testing helper path.
-      svc.setCurrentLangForTesting('hi'); // set lang first
-      // populate SQLite with correct translations (as if refreshAllAsync ran)
-      await svc.dao.bulkUpsert('hi', {'Child Name': 'बच्चे का नाम'});
-      // Now set locale again — must reload from SQLite unconditionally.
-      await svc.setLocale('hi');
-      expect(svc.translate('Child Name'), 'बच्चे का नाम');
-      await Future<void>.delayed(Duration.zero);
-      await svc.dao.close();
-    });
+    test(
+      'reloads from SQLite even when _cache already has an entry for lang',
+      () async {
+        // Simulates: login cached stale/empty data, user switches locale offline.
+        // setLocale must NOT skip loadFromCache just because _cache.containsKey.
+        final svc = await makeService();
+        // Pre-seed an empty in-memory entry (as if a previous wrong API call ran)
+        // by injecting it directly via the testing helper path.
+        svc.setCurrentLangForTesting('hi'); // set lang first
+        // populate SQLite with correct translations (as if refreshAllAsync ran)
+        await svc.dao.bulkUpsert('hi', {'Child Name': 'बच्चे का नाम'});
+        // Now set locale again — must reload from SQLite unconditionally.
+        await svc.setLocale('hi');
+        expect(svc.translate('Child Name'), 'बच्चे का नाम');
+        await Future<void>.delayed(Duration.zero);
+        await svc.dao.close();
+      },
+    );
   });
 
   group('clearAll', () {
@@ -151,21 +157,23 @@ void main() {
   });
 
   group('refreshAllAsync dispose safety', () {
-    test('refreshAllAsync returns early if disposed — no write after dispose',
-        () async {
-      final svc = await makeService();
-      // Immediately dispose; _doRefreshAll should bail when _disposed is true.
-      await svc.dispose();
+    test(
+      'refreshAllAsync returns early if disposed — no write after dispose',
+      () async {
+        final svc = await makeService();
+        // Immediately dispose; _doRefreshAll should bail when _disposed is true.
+        await svc.dispose();
 
-      // Should not throw; _disposed guard short-circuits the whole method.
-      final errors = <Object>[];
-      await runZonedGuarded(() async {
-        svc.refreshAllAsync();
-        await Future<void>.delayed(const Duration(milliseconds: 10));
-      }, (e, _) => errors.add(e));
+        // Should not throw; _disposed guard short-circuits the whole method.
+        final errors = <Object>[];
+        await runZonedGuarded(() async {
+          svc.refreshAllAsync();
+          await Future<void>.delayed(const Duration(milliseconds: 10));
+        }, (e, _) => errors.add(e));
 
-      expect(errors, isEmpty);
-    });
+        expect(errors, isEmpty);
+      },
+    );
   });
 
   group('dispose safety', () {

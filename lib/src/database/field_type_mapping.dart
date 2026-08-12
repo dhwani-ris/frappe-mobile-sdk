@@ -22,9 +22,19 @@ const _textTypes = <String>{
   'Geolocation',
 };
 
-const _integerTypes = <String>{'Int', 'Check', 'Duration', 'Rating'};
+const _integerTypes = <String>{'Int', 'Check', 'Duration'};
 
-const _realTypes = <String>{'Float', 'Currency', 'Percent'};
+/// `Rating` belongs here, not with the integers: Frappe persists a Rating as a
+/// **0..1 fraction** (`stars / max_stars`), so real values like `0.6` are the
+/// norm, not the exception.
+///
+/// Declaring the column INTEGER did not corrupt anything in practice — SQLite's
+/// type affinity keeps a value it cannot losslessly convert, so `0.6` was stored
+/// as a real anyway — but the declared type contradicted the data and would
+/// truncate under any stricter engine or affinity change. Existing installs keep
+/// their INTEGER columns and continue to work for exactly that reason, so this
+/// needs no migration.
+const _realTypes = <String>{'Float', 'Currency', 'Percent', 'Rating'};
 
 const _textDateTypes = <String>{'Date', 'Datetime', 'Time'};
 

@@ -50,9 +50,7 @@ void main() {
 
     final raw = db.rawDatabase;
     await raw.execute('DROP TABLE IF EXISTS _fb_test');
-    await raw.execute(
-      'CREATE TABLE _fb_test (id INTEGER PRIMARY KEY)',
-    );
+    await raw.execute('CREATE TABLE _fb_test (id INTEGER PRIMARY KEY)');
     await raw.insert('_fb_test', {'id': 42});
     final rows = await raw.query('_fb_test');
     expect(rows.length, 1);
@@ -61,25 +59,28 @@ void main() {
     await db.close();
   });
 
-  test('concurrent getInstance calls return same instance (no double-open)', () async {
-    int createCount = 0;
-    Future<DatabaseFactory> countingResolver(
-      void Function(Object, StackTrace)? _,
-    ) async {
-      createCount++;
-      return databaseFactoryFfi;
-    }
+  test(
+    'concurrent getInstance calls return same instance (no double-open)',
+    () async {
+      int createCount = 0;
+      Future<DatabaseFactory> countingResolver(
+        void Function(Object, StackTrace)? _,
+      ) async {
+        createCount++;
+        return databaseFactoryFfi;
+      }
 
-    final results = await Future.wait([
-      AppDatabase.getInstance(factoryResolver: countingResolver),
-      AppDatabase.getInstance(factoryResolver: countingResolver),
-      AppDatabase.getInstance(factoryResolver: countingResolver),
-    ]);
+      final results = await Future.wait([
+        AppDatabase.getInstance(factoryResolver: countingResolver),
+        AppDatabase.getInstance(factoryResolver: countingResolver),
+        AppDatabase.getInstance(factoryResolver: countingResolver),
+      ]);
 
-    expect(identical(results[0], results[1]), isTrue);
-    expect(identical(results[1], results[2]), isTrue);
-    expect(createCount, equals(1));
+      expect(identical(results[0], results[1]), isTrue);
+      expect(identical(results[1], results[2]), isTrue);
+      expect(createCount, equals(1));
 
-    await results[0].close();
-  });
+      await results[0].close();
+    },
+  );
 }

@@ -45,6 +45,13 @@ class DocTypeMeta {
   /// bool `true`, or the string `"1"`) all resolve correctly.
   bool get translatedDoctype => parseBool(metaData?['translated_doctype']);
 
+  /// True for a Frappe **Single** doctype (`issingle`). Single doctypes store
+  /// their values as `mediumtext`, so Frappe exempts them from the implicit
+  /// `Data` varchar(140) length cap in both its web control and server
+  /// `_validate_length`. Used to skip the on-device 140-char cap for Singles.
+  /// Uses [parseBool] for Frappe's int/bool/string boolean encodings.
+  bool get isSingle => parseBool(metaData?['issingle']);
+
   DocTypeMeta({
     required this.name,
     this.label,

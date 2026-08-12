@@ -1,5 +1,6 @@
 import '../database/field_type_mapping.dart';
 import '../database/normalize_for_search.dart';
+import '../database/schema/system_columns.dart';
 import '../models/doc_type_meta.dart';
 import 'filter_errors.dart';
 import 'frappe_timespan.dart';
@@ -57,6 +58,34 @@ class FilterParser {
     'parent_doctype': 'TEXT',
     'parentfield': 'TEXT',
     'idx': 'INTEGER',
+  };
+
+  /// Frappe's server-owned audit fields, present only on PARENT tables — see
+  /// `parent_schema.dart` / `serverAuditColumnNames`. Added to the whitelist
+  /// when `!meta.isTable`.
+  ///
+  /// Historically these columns were not materialized at all, so `toSql`
+  /// REJECTED a filter referencing one with `Unknown column` — such a filter
+  /// was unusable offline rather than permissive, and callers worked around it
+  /// by omitting the clause. An intermediate revision dropped the clause
+  /// silently instead, which is strictly worse: dropping an AND clause makes
+  /// an offline result a SUPERSET of the server query, degrading
+  /// `owner = <current user>` to a no-op. Both are gone — the clauses now
+  /// emit real, bound SQL.
+  ///
+  /// Note the NULL semantics that follow: comparisons go through
+  /// `IFNULL(<col>, '')`, so a row whose audit column is still NULL (a mirror
+  /// created before these columns existed, not yet re-pulled) does NOT match
+  /// an `owner = <user>` clause.
+  ///
+  /// Deliberately NOT added for child tables: `child_schema.dart` emits no
+  /// such columns, so whitelisting them there would generate SQL against a
+  /// column that does not exist. A child-table filter on them therefore
+  /// throws `Unknown column`, like any other absent column.
+  static const Map<String, String> _parentAuditColumns = {
+    'owner': 'TEXT',
+    'creation': 'TEXT',
+    'modified_by': 'TEXT',
   };
 
   static ParsedQuery toSql({
@@ -191,6 +220,28 @@ class FilterParser {
 
     switch (op) {
       case '=':
+        // Server-owned audit columns get the BARE form so SQLite can use an
+        // index on them. `IFNULL(owner, '') = ?` is non-sargable, and
+        // `owner = <current user>` is the single most likely production filter
+        // on a large mirror table — with the wrapper it was a guaranteed full
+        // scan on the main isolate.
+        //
+        // Observably equivalent for every realistic query: a NULL column is
+        // excluded either way (`NULL = 'alice'` yields NULL, which is not true,
+        // exactly as `'' = 'alice'` is false). The only divergence is an
+        // explicit `= ''`, and Frappe never stores an empty string in `owner` /
+        // `creation` / `modified_by` — it stores NULL or a real value.
+        //
+        // Deliberately NOT applied to `!=`: there `IFNULL` is the more useful
+        // semantic (a NULL owner IS "not alice"), and dropping it would start
+        // excluding rows the current form includes.
+        if (serverAuditColumnNames.contains(col)) {
+          return ParsedQuery(sql: '$col = ?', params: [value]);
+        }
+        return ParsedQuery(
+          sql: '${_ifnullExpr(col, isNumeric)} = ?',
+          params: [value],
+        );
       case '!=':
         return ParsedQuery(
           sql: '${_ifnullExpr(col, isNumeric)} $op ?',
@@ -287,7 +338,11 @@ class FilterParser {
   static Map<String, String> _columnTypes(DocTypeMeta meta) {
     final map = <String, String>{};
     map.addAll(_systemColumns);
-    if (meta.isTable) map.addAll(_childSystemColumns);
+    if (meta.isTable) {
+      map.addAll(_childSystemColumns);
+    } else {
+      map.addAll(_parentAuditColumns);
+    }
     for (final f in meta.fields) {
       final n = f.fieldname;
       if (n == null || n.isEmpty) continue;

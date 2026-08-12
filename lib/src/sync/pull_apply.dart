@@ -65,6 +65,26 @@ const _locallyDirtyStatuses = <String>[
   'blocked',
 ];
 
+/// Copies Frappe's server-owned audit fields ([serverAuditColumnNames]) from
+/// a pulled server row [from] into the `docs__<doctype>` row map [into].
+///
+/// Only keys the server actually sent are copied. That matters for the
+/// sequential path, whose UPDATE leaves an omitted column untouched: a page
+/// fetched without these fields must not blank values an earlier pull already
+/// persisted. Nothing is ever invented locally — the server is their only
+/// writer. Called BEFORE the meta loop, which skips these names (they are in
+/// [systemParentColumnNames]) so a duplicate field declaration cannot reach
+/// back and clobber what the server sent.
+void _copyServerAuditFields({
+  required Map<String, dynamic> from,
+  required Map<String, Object?> into,
+}) {
+  for (final col in serverAuditColumnNames) {
+    if (!from.containsKey(col)) continue;
+    into[col] = from[col];
+  }
+}
+
 /// Back-compat alias for [ChildTableInfo]. Retained so existing call
 /// sites (`offline_repository.dart`, `pull_engine.dart`, the test suite)
 /// keep compiling after the M1/D2 consolidation.
@@ -381,6 +401,7 @@ class PullApply {
         'local_modified': nowMs,
         'pulled_at': nowMs,
       };
+      _copyServerAuditFields(from: r, into: parentRow);
 
       for (final f in parentMeta.fields) {
         final name = f.fieldname;
@@ -557,6 +578,7 @@ class PullApply {
         'local_modified': nowMs,
         'pulled_at': nowMs,
       };
+      _copyServerAuditFields(from: r, into: parentRow);
 
       for (final f in parentMeta.fields) {
         final name = f.fieldname;

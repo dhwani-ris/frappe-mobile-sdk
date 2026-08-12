@@ -46,6 +46,13 @@ class DoctypePermissionEntity {
     };
   }
 
+  /// Coerce a Frappe Check flag to bool. Frappe serialises Check fields as
+  /// int `1`/`0` (e.g. `frappe.get_all` on `DocPerm`), JSON bool `true`/`false`
+  /// (e.g. permission dicts built from `has_permission`), or string `"1"`/`"0"`
+  /// depending on the endpoint. Accept all three so the SDK parses permissions
+  /// from any Frappe backend out of the box.
+  static bool _flag(dynamic v) => v == true || v == 1 || v == '1';
+
   /// From API map e.g. { "read": true, "write": true, ... }
   static DoctypePermissionEntity fromApiMap(
     String doctype,
@@ -53,13 +60,13 @@ class DoctypePermissionEntity {
   ) {
     return DoctypePermissionEntity(
       doctype: doctype,
-      read: map['read'] == true,
-      write: map['write'] == true,
-      create: map['create'] == true,
-      delete: map['delete'] == true,
-      submit: map['submit'] == true,
-      cancel: map['cancel'] == true,
-      amend: map['amend'] == true,
+      read: _flag(map['read']),
+      write: _flag(map['write']),
+      create: _flag(map['create']),
+      delete: _flag(map['delete']),
+      submit: _flag(map['submit']),
+      cancel: _flag(map['cancel']),
+      amend: _flag(map['amend']),
     );
   }
 }

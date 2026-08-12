@@ -49,6 +49,41 @@ class FieldFactory {
   LinkFieldCoordinator? linkFieldCoordinator;
   FieldStyle? defaultStyle;
 
+  /// When false, drop the length cap on `Data` fields entirely — Frappe stores
+  /// **Single** doctypes as `mediumtext` and exempts them from the cap
+  /// regardless of any explicit `DocField.length`. Default true (cap), matching
+  /// Frappe's non-Single behaviour, where the cap is `DocField.length` when set
+  /// and the implicit `varchar(140)` when not.
+  ///
+  /// Note the asymmetry, which is deliberate and matches the server: `false`
+  /// ignores an explicit `length` rather than honouring it. An earlier version
+  /// of this doc said only the *implicit* cap was skipped, which contradicted
+  /// the implementation in `data_field.dart`.
+  ///
+  /// Carried as instance state rather than a [createField] parameter ON PURPOSE:
+  /// `createField` is documented as overridable, and Dart requires an override
+  /// to redeclare every named parameter of the method it overrides. Adding one
+  /// here would break every existing subclass at compile time — a default value
+  /// does NOT help, because a caller holding a `FieldFactory` reference may
+  /// still pass the argument explicitly. Same rationale as [errorTextResolver].
+  bool capDataLength = true;
+
+  /// Supplies the inline error for a field, by fieldname. Used for child-table
+  /// fieldtypes (`Table` / `Table MultiSelect`), which are NOT
+  /// `FormBuilderField`s — so `FormBuilderState.invalidate()` is a silent no-op
+  /// for them and they must render their own error.
+  ///
+  /// Instance state rather than a [createField] parameter for the
+  /// subclass-compatibility reason documented on [capDataLength].
+  String? Function(String fieldname)? errorTextResolver;
+
+  /// Inline error for [field], or null when none applies.
+  String? _errorTextFor(DocField field) {
+    final fn = field.fieldname;
+    if (fn == null || fn.isEmpty) return null;
+    return errorTextResolver?.call(fn);
+  }
+
   FieldFactory({
     this.linkOptionService,
     this.linkFieldCoordinator,
@@ -92,6 +127,7 @@ class FieldFactory {
           onChanged: onChanged,
           enabled: enabled,
           style: fieldStyle,
+          capLength: capDataLength,
         );
 
       case FieldTypes.phone:
@@ -138,6 +174,10 @@ class FieldFactory {
           parentFormData: parentFormData ?? const {},
           getLinkFilterBuilder: getLinkFilterBuilder,
           style: fieldStyle,
+          // Not a FormBuilderField → `invalidate()` cannot reach it, so the
+          // form builder's mandatory sweep routes its required-empty message
+          // here (same channel as 'Table' below).
+          errorText: _errorTextFor(field),
         );
 
       case FieldTypes.date:
@@ -217,6 +257,7 @@ class FieldFactory {
           getMeta: getMeta,
           formBuilder: childTableFormBuilder,
           style: fieldStyle,
+          errorText: _errorTextFor(field),
         );
 
       case 'Duration':
@@ -263,6 +304,8 @@ class FieldFactory {
           enabled: enabled,
           style: fieldStyle,
           uploadFile: uploadFile,
+          fileUrlBase: fileUrlBase,
+          imageHeaders: imageHeaders,
         );
 
       case FieldTypes.attachImage:
@@ -323,6 +366,7 @@ class _TableFieldBase extends BaseField {
   final List<dynamic> value;
   final Future<DocTypeMeta> Function(String doctype) getMeta;
   final ChildTableFormBuilder formBuilder;
+  final String? errorText;
 
   const _TableFieldBase({
     required super.field,
@@ -332,6 +376,7 @@ class _TableFieldBase extends BaseField {
     required this.getMeta,
     required this.formBuilder,
     super.style,
+    this.errorText,
   });
 
   @override
@@ -346,6 +391,7 @@ class _TableFieldBase extends BaseField {
       enabled: enabled,
       getMeta: getMeta,
       formBuilder: formBuilder,
+      errorText: errorText,
     );
   }
 

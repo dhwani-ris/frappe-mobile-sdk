@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:frappe_mobile_sdk/src/sync/push_error.dart';
 import 'package:frappe_mobile_sdk/src/models/outbox_row.dart';
@@ -60,6 +62,24 @@ void main() {
     final unk = ServerRejection(status: 500, rawBody: '{}');
     expect(unk.toErrorCode(), ErrorCode.UNKNOWN);
   });
+
+  test('ServerRejection.message surfaces server text AND keeps the HTTP status '
+      'discoverable (host substring-classification bridge)', () {
+    final r = ServerRejection(
+      status: 417,
+      rawBody: '{"message":"District is required"}',
+    );
+    expect(r.message, contains('District is required'));
+    expect(r.message, contains('417'));
+  });
+
+  test(
+    'ServerRejection.message on a malformed body still carries the status',
+    () {
+      final r = ServerRejection(status: 417, rawBody: 'not-json');
+      expect(r.message, contains('417'));
+    },
+  );
 
   test('TimeoutError maps to ErrorCode.TIMEOUT', () {
     final e = TimeoutError(message: 'connection timed out');
@@ -170,5 +190,83 @@ void main() {
       'when exc_type is absent', () {
     final e = ServerRejection(status: 417, rawBody: '{}');
     expect(e.toErrorCode(), ErrorCode.VALIDATION);
+  });
+
+  // ---------------------------------------------------------------------
+  // ServerRejection.message — EXACT-STRING contract.
+  //
+  // `message` is what markPaused/markFailed persist into
+  // outbox.error_message, so hosts read and sometimes substring-classify it.
+  // These pin the byte-for-byte output of every branch so the value can
+  // never drift (e.g. under a caching/memoisation refactor of the getter).
+  // ---------------------------------------------------------------------
+
+  test('ServerRejection.message: _server_messages body → exact '
+      '"<human> (HTTP <status>)"', () {
+    // Frappe double-encodes _server_messages: a JSON string containing a list
+    // of JSON strings, each carrying `message`.
+    final rawBody = jsonEncode({
+      '_server_messages': jsonEncode([
+        jsonEncode({'message': 'District is required'}),
+      ]),
+    });
+    final r = ServerRejection(status: 417, rawBody: rawBody);
+    expect(r.message, 'District is required (HTTP 417)');
+  });
+
+  test('ServerRejection.message: plain `message` key body → exact '
+      '"<human> (HTTP <status>)"', () {
+    final r = ServerRejection(
+      status: 417,
+      rawBody: '{"message":"District is required"}',
+    );
+    expect(r.message, 'District is required (HTTP 417)');
+  });
+
+  test('ServerRejection.message: body extracting to "Unknown Error" → exact '
+      'generic label', () {
+    // '{}' has no _server_messages / exception / message key, so
+    // extractErrorMessage() returns literally 'Unknown Error' — which the
+    // getter treats as "no usable text" and replaces with the generic label.
+    final r = ServerRejection(status: 500, rawBody: '{}');
+    expect(r.message, 'ServerRejection status=500');
+  });
+
+  test('ServerRejection.message: body extracting to an EMPTY string → exact '
+      'generic label', () {
+    final r = ServerRejection(status: 417, rawBody: '{"message":""}');
+    expect(r.message, 'ServerRejection status=417');
+  });
+
+  test('ServerRejection.message: non-JSON body → exact generic label, '
+      'no throw', () {
+    final r = ServerRejection(status: 417, rawBody: 'not-json');
+    expect(() => r.message, returnsNormally);
+    expect(r.message, 'ServerRejection status=417');
+  });
+
+  test('ServerRejection.message: EMPTY rawBody → exact generic label, '
+      'no throw', () {
+    final r = ServerRejection(status: 422, rawBody: '');
+    expect(() => r.message, returnsNormally);
+    expect(r.message, 'ServerRejection status=422');
+  });
+
+  test('ServerRejection.message: reading TWICE is stable and never throws on '
+      'the second read (lazy-init hazard)', () {
+    // A memoised getter whose initializer throws must not poison later reads.
+    final malformed = ServerRejection(status: 417, rawBody: 'not-json');
+    final first = malformed.message;
+    final second = malformed.message;
+    expect(second, first);
+    expect(second, 'ServerRejection status=417');
+    expect(() => malformed.message, returnsNormally);
+
+    final ok = ServerRejection(
+      status: 417,
+      rawBody: '{"message":"District is required"}',
+    );
+    expect(ok.message, ok.message);
+    expect(ok.message, 'District is required (HTTP 417)');
   });
 }

@@ -17,6 +17,14 @@ import 'package:frappe_mobile_sdk/src/sync/pull_page_fetcher.dart';
 import 'package:frappe_mobile_sdk/src/sync/sync_state_notifier.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
+/// Adapts a plain-rows fake to the [ListHttpFn] page shape. `namesScanned` is
+/// left null, matching the flat `get_list` path where every listed row is
+/// returned.
+ListHttpFn rowsFake(
+  Future<List<Map<String, dynamic>>> Function(String, Map<String, Object?>) fn,
+) =>
+    (d, p) async => ListHttpPage(await fn(d, p));
+
 void main() {
   setUpAll(() {
     sqfliteFfiInit();
@@ -72,10 +80,10 @@ void main() {
       outboxDao: OutboxDao(appDb.rawDatabase),
       pool: ConcurrencyPool(maxConcurrent: 1),
       fetcher: PullPageFetcher(
-        listHttp: (dt, _) async {
+        listHttp: rowsFake((dt, _) async {
           fetched.add(dt);
           return const <Map<String, dynamic>>[];
-        },
+        }),
       ),
       pageSize: 100,
       notifier: SyncStateNotifier(),

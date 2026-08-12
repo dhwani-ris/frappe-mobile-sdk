@@ -341,4 +341,121 @@ void main() {
       expect(m.translatedDoctype, isFalse);
     });
   });
+
+  group('DocTypeMeta.isSingle', () {
+    test('issingle=1 (int) → true', () {
+      final m = DocTypeMeta.fromJson({
+        'name': 'X',
+        'fields': [],
+        'issingle': 1,
+      });
+      expect(m.isSingle, isTrue);
+    });
+
+    test('issingle=true (bool) → true', () {
+      final m = DocTypeMeta.fromJson({
+        'name': 'X',
+        'fields': [],
+        'issingle': true,
+      });
+      expect(m.isSingle, isTrue);
+    });
+
+    test('issingle absent → false', () {
+      final m = DocTypeMeta.fromJson({'name': 'X', 'fields': []});
+      expect(m.isSingle, isFalse);
+    });
+  });
+
+  group('DocField.isVirtual', () {
+    test('is_virtual=1 (int) → true', () {
+      final m = DocTypeMeta.fromJson({
+        'name': 'X',
+        'fields': [
+          {'fieldname': 'a', 'fieldtype': 'Data', 'is_virtual': 1},
+        ],
+      });
+      expect(m.fields.single.isVirtual, isTrue);
+    });
+
+    test('is_virtual=true (bool) and "1" (String) → true', () {
+      final m = DocTypeMeta.fromJson({
+        'name': 'X',
+        'fields': [
+          {'fieldname': 'a', 'fieldtype': 'Data', 'is_virtual': true},
+          {'fieldname': 'b', 'fieldtype': 'Data', 'is_virtual': '1'},
+        ],
+      });
+      expect(m.fields.map((f) => f.isVirtual), everyElement(isTrue));
+    });
+
+    test('is_virtual=0 / absent → false (default preserves old behavior)', () {
+      final m = DocTypeMeta.fromJson({
+        'name': 'X',
+        'fields': [
+          {'fieldname': 'a', 'fieldtype': 'Data', 'is_virtual': 0},
+          {'fieldname': 'b', 'fieldtype': 'Data'},
+        ],
+      });
+      expect(m.fields.map((f) => f.isVirtual), everyElement(isFalse));
+    });
+
+    test('camelCase isVirtual key is accepted', () {
+      final m = DocTypeMeta.fromJson({
+        'name': 'X',
+        'fields': [
+          {'fieldname': 'a', 'fieldtype': 'Data', 'isVirtual': 1},
+        ],
+      });
+      expect(m.fields.single.isVirtual, isTrue);
+    });
+
+    test('survives a toJson/fromJson round-trip via the meta cache', () {
+      // MetaService persists DocTypeMeta.toJson() into the local meta cache,
+      // so a dropped key would lose the flag on the next cold start.
+      final original = DocTypeMeta(
+        name: 'X',
+        fields: [
+          DocField(fieldname: 'real', fieldtype: 'Currency'),
+          DocField(fieldname: 'virt', fieldtype: 'Currency', isVirtual: true),
+        ],
+      );
+      final back = DocTypeMeta.fromJson(original.toJson());
+
+      expect(back.fields.length, 2);
+      expect(back.fields[0].isVirtual, isFalse);
+      expect(back.fields[1].isVirtual, isTrue);
+      // The new key must not disturb any neighbouring field.
+      expect(back.fields[1].fieldname, 'virt');
+      expect(back.fields[1].fieldtype, 'Currency');
+    });
+
+    test('other DocField flags still round-trip alongside is_virtual', () {
+      final original = DocTypeMeta(
+        name: 'X',
+        fields: [
+          DocField(
+            fieldname: 'a',
+            fieldtype: 'Data',
+            label: 'A',
+            reqd: true,
+            readOnly: true,
+            hidden: true,
+            inListView: true,
+            searchIndex: true,
+            isVirtual: true,
+          ),
+        ],
+      );
+      final back = DocTypeMeta.fromJson(original.toJson()).fields.single;
+
+      expect(back.label, 'A');
+      expect(back.reqd, isTrue);
+      expect(back.readOnly, isTrue);
+      expect(back.hidden, isTrue);
+      expect(back.inListView, isTrue);
+      expect(back.searchIndex, isTrue);
+      expect(back.isVirtual, isTrue);
+    });
+  });
 }

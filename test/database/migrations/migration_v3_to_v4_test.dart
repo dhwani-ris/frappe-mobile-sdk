@@ -134,10 +134,7 @@ void main() {
         offline_enabled_set_at INTEGER
       )
     ''');
-    await db.insert('sdk_meta', {
-      'id': 1,
-      'schema_version': 3,
-    });
+    await db.insert('sdk_meta', {'id': 1, 'schema_version': 3});
   }
 
   test(
@@ -200,10 +197,10 @@ void main() {
       final colNames = kvCols.map((r) => r['name'] as String).toSet();
       expect(colNames, containsAll(<String>{'lang', 'src', 'tgt'}));
 
-      // 3d. sdk_meta.schema_version updated to 5 (full v3→v5 chain ran).
+      // 3d. sdk_meta.schema_version updated to 6 (full v3→v6 chain ran).
       final meta = await v4.query('sdk_meta', where: 'id = 1');
       expect(meta, hasLength(1));
-      expect(meta.first['schema_version'], 5);
+      expect(meta.first['schema_version'], 6);
 
       // 3e. Existing data preserved — auth_tokens still intact.
       final at = await v4.query('auth_tokens');
@@ -224,19 +221,17 @@ void main() {
     },
   );
 
-  test(
-    'v3 → v4: _migrateV3ToV4 is idempotent (kv already exists)',
-    () async {
-      // Simulates the v2→v4 path where _migrateV2ToV3 already created kv
-      // via systemTablesDDL, then _migrateV3ToV4 runs again. Must not throw.
-      final v3 = await openDatabase(
-        dbPath,
-        version: 3,
-        onCreate: v3OnCreate,
-        singleInstance: false,
-      );
-      // Manually create kv as _migrateV2ToV3 would have.
-      await v3.execute('''
+  test('v3 → v4: _migrateV3ToV4 is idempotent (kv already exists)', () async {
+    // Simulates the v2→v4 path where _migrateV2ToV3 already created kv
+    // via systemTablesDDL, then _migrateV3ToV4 runs again. Must not throw.
+    final v3 = await openDatabase(
+      dbPath,
+      version: 3,
+      onCreate: v3OnCreate,
+      singleInstance: false,
+    );
+    // Manually create kv as _migrateV2ToV3 would have.
+    await v3.execute('''
         CREATE TABLE IF NOT EXISTS kv (
           lang TEXT NOT NULL,
           src  TEXT NOT NULL,
@@ -244,20 +239,19 @@ void main() {
           PRIMARY KEY (lang, src)
         )
       ''');
-      await v3.close();
+    await v3.close();
 
-      // Reopening at v5 should succeed without "table already exists" error.
-      final v4 = await openDatabase(
-        dbPath,
-        version: 5,
-        onUpgrade: AppDatabaseTestSeam.runOnUpgrade,
-        singleInstance: false,
-      );
-      final kvAfter = await v4.rawQuery(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='kv'",
-      );
-      expect(kvAfter, hasLength(1));
-      await v4.close();
-    },
-  );
+    // Reopening at v5 should succeed without "table already exists" error.
+    final v4 = await openDatabase(
+      dbPath,
+      version: 5,
+      onUpgrade: AppDatabaseTestSeam.runOnUpgrade,
+      singleInstance: false,
+    );
+    final kvAfter = await v4.rawQuery(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='kv'",
+    );
+    expect(kvAfter, hasLength(1));
+    await v4.close();
+  });
 }

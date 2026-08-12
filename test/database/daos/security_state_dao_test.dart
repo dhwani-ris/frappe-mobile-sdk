@@ -69,24 +69,31 @@ void main() {
     await db.close();
   });
 
-  test('writeState does not create a second row (UPDATE-then-INSERT-OR-IGNORE guard)', () async {
-    final db = await AppDatabase.inMemoryDatabase();
-    await db.securityStateDao.writeState(
-      wallTimeMs: 100,
-      monotonicMs: 50,
-      runAtMs: 100,
-    );
-    await db.securityStateDao.writeState(
-      wallTimeMs: 200,
-      monotonicMs: null,
-      runAtMs: 200,
-    );
-    final rows = await db.rawDatabase.rawQuery(
-      'SELECT COUNT(*) AS c FROM security_state',
-    );
-    expect(rows.first['c'], 1,
-        reason: 'INSERT OR REPLACE would create a second row on conflict; '
-            'UPDATE-then-INSERT-OR-IGNORE must not');
-    await db.close();
-  });
+  test(
+    'writeState does not create a second row (UPDATE-then-INSERT-OR-IGNORE guard)',
+    () async {
+      final db = await AppDatabase.inMemoryDatabase();
+      await db.securityStateDao.writeState(
+        wallTimeMs: 100,
+        monotonicMs: 50,
+        runAtMs: 100,
+      );
+      await db.securityStateDao.writeState(
+        wallTimeMs: 200,
+        monotonicMs: null,
+        runAtMs: 200,
+      );
+      final rows = await db.rawDatabase.rawQuery(
+        'SELECT COUNT(*) AS c FROM security_state',
+      );
+      expect(
+        rows.first['c'],
+        1,
+        reason:
+            'INSERT OR REPLACE would create a second row on conflict; '
+            'UPDATE-then-INSERT-OR-IGNORE must not',
+      );
+      await db.close();
+    },
+  );
 }

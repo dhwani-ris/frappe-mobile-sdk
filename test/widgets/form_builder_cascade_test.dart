@@ -122,11 +122,9 @@ void main() {
       await tester.enterText(find.byKey(const ValueKey('data_a')), 'hello');
       await tester.pumpAndSettle();
 
-      expect(
-        sources['a'],
-        [ChangeSource.user],
-        reason: 'the field the user typed into is ChangeSource.user',
-      );
+      expect(sources['a'], [
+        ChangeSource.user,
+      ], reason: 'the field the user typed into is ChangeSource.user');
       expect(
         sources['b'],
         [ChangeSource.reaction],

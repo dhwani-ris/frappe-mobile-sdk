@@ -1,6 +1,6 @@
 name: frappe_mobile_sdk
 description: Flutter SDK for offline-first Frappe/ERPNext mobile apps with auth, API access, dynamic forms, and sync-aware local data operations.
-version: 1.3.0
+version: 2.0.0-beta.2
 homepage: https://github.com/dhwani-ris/frappe-mobile-sdk
 repository: https://github.com/dhwani-ris/frappe-mobile-sdk
 issue_tracker: https://github.com/dhwani-ris/frappe-mobile-sdk/issues
@@ -10,7 +10,21 @@ platforms:
   ios:
 
 environment:
-  sdk: ">=3.10.4 <4.0.0"
+  # Floor verified by running `pub get` + `analyze` + `test` against Flutter
+  # 3.35.7. It is set by a framework API, not by a language feature: `lib/` uses
+  # `DropdownButtonFormField(initialValue:)`, which only exists from Flutter
+  # 3.35 onward (3.32 and earlier expose `value`, now deprecated). Flutter
+  # 3.35.0 ships Dart 3.9.0, hence the sdk pair.
+  #
+  # Supersedes the `flutter: ">=1.10.0"` placeholder added to unblock publish
+  # validation: that value satisfied the validator but claimed support back to
+  # Flutter 1.x, which was never true. This bound is measured, and it satisfies
+  # the same validator.
+  #
+  # No upper bound on `flutter`: a ceiling breaks the moment a newer Flutter
+  # ships, and pub.dev penalises a constraint that excludes the latest stable.
+  sdk: ">=3.9.0 <4.0.0"
+  flutter: ">=3.35.0"
 
 dependencies:
   flutter:
@@ -28,8 +42,10 @@ dependencies:
   # State Management
   provider: ^6.1.1
 
-  # Form building
-  flutter_form_builder: ^10.3.0+2
+  # Form building. Range spans the whole 10.x line so an app on the SDK's minimum
+  # Flutter resolves 10.1/10.2 while a current app resolves 10.3; pinning
+  # `^10.3.0+2` would drag the floor up to Flutter 3.38.
+  flutter_form_builder: ">=10.1.0 <11.0.0"
 
   # Date formatting
   intl: ^0.20.2
@@ -49,11 +65,18 @@ dependencies:
   # Open OAuth URL in browser
   url_launcher: ^6.2.0
 
-  # Deep links for OAuth redirect (auto-capture code)
-  app_links: ^7.0.0
+  # Deep links for OAuth redirect (auto-capture code).
+  # Range, not caret: 6.4.1 is the oldest release carrying both APIs we use
+  # (`getInitialLink`, `uriLinkStream`), and pinning `^7` would raise the
+  # package's Flutter floor to 3.38.1 for no benefit.
+  app_links: ">=6.4.1 <8.0.0"
 
-  # Package metadata (version, package name) for app status checks
-  package_info_plus: ^9.0.0
+  # Package metadata (version, package name) for app status checks.
+  # Spans both majors: only `PackageInfo.fromPlatform()` is used, unchanged
+  # across 9.x and 10.x. Allowing 10.x is what earns the pub.dev
+  # "dependencies supported in latest version" check; keeping 9.x in range is
+  # what lets consumers on older Flutter resolve at all.
+  package_info_plus: ">=9.0.0 <11.0.0"
 
   # UUID generation
   uuid: ^4.3.3
@@ -64,17 +87,19 @@ dependencies:
   # Image picker for image fields
   image_picker: ^1.1.2
 
+  # Open downloaded attachments (PDF/doc/etc.) in the device's default app
+  open_filex: ^4.7.0
+
   # HTML rendering for HTML field type
   flutter_widget_from_html: ^0.17.2
 
-  # GPS location for Geolocation field type
-  geolocator: ^13.0.2
+  # GPS location for Geolocation field type.
+  # Spans both majors: every call site already uses the `locationSettings:`
+  # form, so nothing here depends on the parameters 14.0.0 removed.
+  geolocator: ">=13.0.2 <15.0.0"
 
   # Unicode diacritic stripping for search normalization
   diacritic: ^0.1.5
-
-  # Device tier detection for adaptive concurrency pool sizing
-  device_info_plus: ^12.0.0
 
   # Security: Android root + iOS jailbreak detection
   root_checker_plus: ^1.0.0
@@ -83,16 +108,19 @@ dependencies:
   # version-skew conflicts (PR#36 round-4 M8). meta stays on 1.x.
   meta: ">=1.9.0 <3.0.0"
 
-  # SQLite FFI for offline database access
+  # SQLite FFI for offline database access. Pulls `sqlite3` transitively — it is
+  # deliberately not listed here: nothing in lib/ or test/ imports it directly,
+  # and declaring `sqlite3: ^3.0.0` forced the package's Flutter floor up to 3.38
+  # (its `sdk: >=3.9.999` means Dart 3.10, which first ships in Flutter 3.38).
   sqflite_common_ffi: ^2.3.0
-
-  # Native SQLite bindings (transitive, now explicit for clarity)
-  sqlite3: ^3.0.0
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
+
+  # imported by test/api/attachment_service_test.dart
+  path_provider_platform_interface: ^2.1.2
 
   # Pre-commit: format + analyze before commit (run: dart run flutter_pre_commit)
   flutter_pre_commit: ^0.2.4
