@@ -115,6 +115,14 @@ Major release: offline-first foundation, server-driven offline-mode toggle, and 
 - `system_tables.dart` — all `CREATE TABLE` statements use `IF NOT EXISTS`; `sdk_meta` seed uses `INSERT OR IGNORE` for migration idempotency.
 - `pull_apply.dart` — conflict flag now only fires when the server `modified` timestamp is strictly after the local `modified` (previously flagged any dirty row unconditionally).
 - `SyncController.pause()` / `resume()` — `syncNow` now checks the `isPaused` flag before running.
+- `FrappeAppGuard` — a re-check (on resume, or on a `recheckToken` change) no longer replaces `child` with a spinner. The guard is typically mounted above the host's navigator, so that unmounted every route and discarded in-progress form state. The spinner is now shown only for the very first check; later checks run in the background and swap the tree only when the new verdict actually blocks.
+- `FrappeAppGuard` — a blocked verdict now survives a re-check that cannot reach the server, instead of being cleared before the request ran. A build the server has already ruled out can no longer be made usable by going offline. First-check fail-open is unchanged: a transport failure with no prior verdict still renders `child`.
+- `FrappeAppGuard` — status responses carry a generation, so a slow earlier check can no longer overwrite the verdict of a newer one.
+
+### Added (app guard)
+
+- `FrappeAppGuard.statusFetcher` — optional `AppStatusFetcher` seam replacing the internal `AppStatusService` call; lets a host reuse an authenticated client and makes the guard's verdict paths testable. Defaults to the previous behaviour.
+- `FrappeAppGuard.recheckThrottle` — minimum gap between resume-triggered re-checks, default 1 minute (previously a private constant).
 
 ### Notes for upgraders
 

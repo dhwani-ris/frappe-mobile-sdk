@@ -48,6 +48,28 @@ class ForceUpdateInfo {
   });
 }
 
+/// Fetches the server's app-status verdict for [FrappeAppGuard].
+///
+/// Supplied via [FrappeAppGuard.statusFetcher]. Defaults to
+/// `AppStatusService(baseUrl).fetchAppStatus()`.
+typedef AppStatusFetcher = Future<AppStatus> Function();
+
+/// What the guard is currently rendering. `null` state means "no verdict yet",
+/// which is the only time a spinner is shown.
+enum _GuardVerdict {
+  /// Render [FrappeAppGuard.child].
+  allowed,
+
+  /// `enabled == false`, or the server answered 417/404.
+  notConfigured,
+
+  /// Package or version mismatch against the server's floor.
+  forceUpdate,
+
+  /// `maintenance_mode == true`.
+  maintenance,
+}
+
 class FrappeAppGuard extends StatefulWidget {
   /// Base URL of Frappe server
   final String baseUrl;
@@ -86,6 +108,20 @@ class FrappeAppGuard extends StatefulWidget {
   /// session — and therefore the answer — may have changed.
   final Object? recheckToken;
 
+  /// Optional: substitute the status call.
+  ///
+  /// Defaults to `AppStatusService(baseUrl).fetchAppStatus()`. Supply this to
+  /// reuse an already-authenticated client, or in tests to drive the guard's
+  /// verdicts directly. When set, [baseUrl] is not required to be non-empty.
+  final AppStatusFetcher? statusFetcher;
+
+  /// Minimum gap between resume-triggered re-checks.
+  ///
+  /// A surveyor switching to the camera and back would otherwise generate a
+  /// request per switch. Does not apply to [recheckToken] changes, which are
+  /// always honoured.
+  final Duration recheckThrottle;
+
   const FrappeAppGuard({
     super.key,
     required this.baseUrl,
@@ -96,6 +132,8 @@ class FrappeAppGuard extends StatefulWidget {
     this.forceUpdateTitle,
     this.forceUpdateBuilder,
     this.recheckToken,
+    this.statusFetcher,
+    this.recheckThrottle = const Duration(minutes: 1),
   });
 
   @override
@@ -104,18 +142,20 @@ class FrappeAppGuard extends StatefulWidget {
 
 class _FrappeAppGuardState extends State<FrappeAppGuard>
     with WidgetsBindingObserver {
-  bool _isChecking = true;
-  bool _isAppBlocked = false;
-  bool _forceUpdateRequired = false;
-  bool _maintenanceMode = false;
+  /// Null until the first check resolves. The spinner is shown for exactly
+  /// that window and never again: the guard is mounted above the host's
+  /// navigator, so re-rendering a spinner later would unmount every route and
+  /// discard in-progress form state.
+  _GuardVerdict? _verdict;
+
   String? _errorMessage;
   String? _storeUrl;
   String? _updateTitle;
 
-  /// Guards against a status call on every single resume — a surveyor
-  /// switching between the camera and the app would otherwise generate a
-  /// request per switch.
-  static const _recheckThrottle = Duration(minutes: 1);
+  /// Bumped for every check that starts. A response whose generation is no
+  /// longer current is dropped, so a slow earlier call can never overwrite the
+  /// verdict of a newer one.
+  int _checkGeneration = 0;
 
   DateTime? _lastCheckedAt;
 
@@ -148,64 +188,63 @@ class _FrappeAppGuardState extends State<FrappeAppGuard>
     }
   }
 
-  /// Re-runs the check, resetting to the loading state so a newly-blocked
-  /// build cannot keep interacting with the app while the call is in flight.
+  /// Re-runs the check in the background.
+  ///
+  /// Deliberately does NOT reset to the loading state. The child stays mounted
+  /// while the call is in flight and is only replaced if the new verdict
+  /// actually blocks — a re-check that says "fine", or one that cannot reach
+  /// the server, is invisible to the user and costs no form data.
   void _recheck({bool force = false}) {
     final last = _lastCheckedAt;
     if (!force &&
         last != null &&
-        DateTime.now().difference(last) < _recheckThrottle) {
+        DateTime.now().difference(last) < widget.recheckThrottle) {
       return;
     }
-    setState(() {
-      _isChecking = true;
-      _isAppBlocked = false;
-      _forceUpdateRequired = false;
-      _maintenanceMode = false;
-      _errorMessage = null;
-    });
     _checkAppStatus();
   }
 
   Future<void> _checkAppStatus() async {
-    if (widget.baseUrl.isEmpty) {
-      setState(() => _isChecking = false);
+    final generation = ++_checkGeneration;
+
+    if (widget.statusFetcher == null && widget.baseUrl.isEmpty) {
+      _settle(generation, _GuardVerdict.allowed);
       return;
     }
 
     _lastCheckedAt = DateTime.now();
 
     try {
-      final service = AppStatusService(widget.baseUrl);
-      final status = await service.fetchAppStatus();
+      final fetch =
+          widget.statusFetcher ??
+          () => AppStatusService(widget.baseUrl).fetchAppStatus();
+      final status = await fetch();
       final info =
           (widget.currentPackageName == null || widget.currentVersion == null)
           ? await PackageInfo.fromPlatform()
           : null;
 
       if (!status.enabled) {
-        if (!mounted) return;
-        setState(() {
-          _isAppBlocked = true;
-          _errorMessage =
+        _settle(
+          generation,
+          _GuardVerdict.notConfigured,
+          errorMessage:
               widget.appNotConfiguredMessage ??
-              'This app is not configured for mobile access.';
-          _isChecking = false;
-        });
+              'This app is not configured for mobile access.',
+        );
         return;
       }
 
       if (status.maintenanceMode) {
-        if (!mounted) return;
-        setState(() {
-          _maintenanceMode = true;
-          _errorMessage =
+        _settle(
+          generation,
+          _GuardVerdict.maintenance,
+          errorMessage:
               (status.maintenanceMessage != null &&
                   status.maintenanceMessage!.trim().isNotEmpty)
               ? status.maintenanceMessage
-              : 'This app is temporarily down for maintenance. Please try again later.';
-          _isChecking = false;
-        });
+              : 'This app is temporarily down for maintenance. Please try again later.',
+        );
         return;
       }
 
@@ -237,38 +276,61 @@ class _FrappeAppGuardState extends State<FrappeAppGuard>
           }
         }
 
-        if (!mounted) return;
-        setState(() {
-          _forceUpdateRequired = true;
-          _updateTitle =
-              widget.forceUpdateTitle ?? status.appTitle ?? 'Update required';
-          _storeUrl = storeUrl;
-          _isChecking = false;
-        });
+        _settle(
+          generation,
+          _GuardVerdict.forceUpdate,
+          updateTitle:
+              widget.forceUpdateTitle ?? status.appTitle ?? 'Update required',
+          storeUrl: storeUrl,
+        );
         return;
       }
 
-      if (!mounted) return;
-      setState(() => _isChecking = false);
+      _settle(generation, _GuardVerdict.allowed);
     } catch (e, st) {
       debugPrint('AppGuard: status check failed — $e\n$st');
-      // Treat 417 (ValidationException) and 404 as "app not configured"
+      // Treat 417 (ValidationException) and 404 as "app not configured".
+      // The server answered, so this verdict is authoritative.
       if (e is ValidationException ||
           (e is ApiException && (e.statusCode == 417 || e.statusCode == 404))) {
-        if (!mounted) return;
-        setState(() {
-          _isAppBlocked = true;
-          _errorMessage =
+        _settle(
+          generation,
+          _GuardVerdict.notConfigured,
+          errorMessage:
               widget.appNotConfiguredMessage ??
-              'This app is not configured for mobile access.';
-          _isChecking = false;
-        });
+              'This app is not configured for mobile access.',
+        );
         return;
       }
-      // Ignore other errors (network, etc.) to avoid blocking app on transient failures.
-      if (!mounted) return;
-      setState(() => _isChecking = false);
+
+      if (!mounted || generation != _checkGeneration) return;
+
+      // Transport failure (offline, DNS, timeout). Fail open on the FIRST
+      // check — an offline user must never be blocked by a gate they cannot
+      // reach. On a re-check, keep the verdict already on screen instead:
+      // that leaves the child untouched, and stops a build the server has
+      // already ruled out from becoming usable by going offline.
+      if (_verdict == null) {
+        _settle(generation, _GuardVerdict.allowed);
+      }
     }
+  }
+
+  /// Applies [verdict] unless the widget is gone or a newer check has started.
+  void _settle(
+    int generation,
+    _GuardVerdict verdict, {
+    String? errorMessage,
+    String? storeUrl,
+    String? updateTitle,
+  }) {
+    if (!mounted || generation != _checkGeneration) return;
+    setState(() {
+      _verdict = verdict;
+      _errorMessage = errorMessage;
+      _storeUrl = storeUrl;
+      _updateTitle = updateTitle;
+    });
   }
 
   Future<void> _openStore() async {
@@ -282,11 +344,15 @@ class _FrappeAppGuardState extends State<FrappeAppGuard>
 
   @override
   Widget build(BuildContext context) {
-    if (_isChecking) {
+    final verdict = _verdict;
+
+    // First check only — nothing is on screen yet, so a spinner is safe here
+    // and stops unguarded content from flashing past.
+    if (verdict == null) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
-    if (_forceUpdateRequired) {
+    if (verdict == _GuardVerdict.forceUpdate) {
       final builder = widget.forceUpdateBuilder;
       if (builder != null) {
         return builder(
@@ -335,7 +401,7 @@ class _FrappeAppGuardState extends State<FrappeAppGuard>
       );
     }
 
-    if (_maintenanceMode) {
+    if (verdict == _GuardVerdict.maintenance) {
       return Scaffold(
         appBar: AppBar(title: const Text('Maintenance')),
         body: Center(
@@ -364,7 +430,7 @@ class _FrappeAppGuardState extends State<FrappeAppGuard>
       );
     }
 
-    if (_isAppBlocked) {
+    if (verdict == _GuardVerdict.notConfigured) {
       return Scaffold(
         appBar: AppBar(title: const Text('App Not Available')),
         body: Center(
