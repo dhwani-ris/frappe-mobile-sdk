@@ -6,6 +6,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../api/exceptions.dart';
 import '../services/app_status_service.dart';
+import 'app_guard_version.dart';
 
 /// App guard widget that checks server-side app status on launch.
 ///
@@ -24,6 +25,29 @@ import '../services/app_status_service.dart';
 ///   ),
 /// )
 /// ```
+/// Everything a host app needs to render its own force-update screen.
+///
+/// Passed to [FrappeAppGuard.forceUpdateBuilder]. [openStore] is the guard's
+/// own launcher, so the host does not need `url_launcher` or to know how the
+/// store URL was resolved.
+class ForceUpdateInfo {
+  /// Server-supplied title, or the guard's default.
+  final String? title;
+
+  /// Resolved update destination — the server's `store_url` when set,
+  /// otherwise a platform store URL derived from the package name.
+  final String? storeUrl;
+
+  /// Opens [storeUrl] in an external application. A no-op when there is none.
+  final Future<void> Function() openStore;
+
+  const ForceUpdateInfo({
+    required this.title,
+    required this.storeUrl,
+    required this.openStore,
+  });
+}
+
 class FrappeAppGuard extends StatefulWidget {
   /// Base URL of Frappe server
   final String baseUrl;
@@ -47,6 +71,21 @@ class FrappeAppGuard extends StatefulWidget {
   /// Optional: Custom title for force update screen
   final String? forceUpdateTitle;
 
+  /// Optional: render the force-update screen yourself.
+  ///
+  /// When null the guard renders its own stock screen. Supply this when the
+  /// screen needs the host's design system, translated copy, or extra
+  /// actions — for example a "sync now" button that drains a pending outbox
+  /// before the surveyor leaves for the store.
+  final Widget Function(BuildContext context, ForceUpdateInfo info)?
+  forceUpdateBuilder;
+
+  /// Optional: change this value to force a fresh status check.
+  ///
+  /// Compared with `!=` in `didUpdateWidget`. Useful after a login, when the
+  /// session — and therefore the answer — may have changed.
+  final Object? recheckToken;
+
   const FrappeAppGuard({
     super.key,
     required this.baseUrl,
@@ -55,13 +94,16 @@ class FrappeAppGuard extends StatefulWidget {
     this.currentVersion,
     this.appNotConfiguredMessage,
     this.forceUpdateTitle,
+    this.forceUpdateBuilder,
+    this.recheckToken,
   });
 
   @override
   State<FrappeAppGuard> createState() => _FrappeAppGuardState();
 }
 
-class _FrappeAppGuardState extends State<FrappeAppGuard> {
+class _FrappeAppGuardState extends State<FrappeAppGuard>
+    with WidgetsBindingObserver {
   bool _isChecking = true;
   bool _isAppBlocked = false;
   bool _forceUpdateRequired = false;
@@ -70,9 +112,58 @@ class _FrappeAppGuardState extends State<FrappeAppGuard> {
   String? _storeUrl;
   String? _updateTitle;
 
+  /// Guards against a status call on every single resume — a surveyor
+  /// switching between the camera and the app would otherwise generate a
+  /// request per switch.
+  static const _recheckThrottle = Duration(minutes: 1);
+
+  DateTime? _lastCheckedAt;
+
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _checkAppStatus();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didUpdateWidget(FrappeAppGuard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.recheckToken != oldWidget.recheckToken) {
+      _recheck(force: true);
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    if (state == AppLifecycleState.resumed) {
+      _recheck();
+    }
+  }
+
+  /// Re-runs the check, resetting to the loading state so a newly-blocked
+  /// build cannot keep interacting with the app while the call is in flight.
+  void _recheck({bool force = false}) {
+    final last = _lastCheckedAt;
+    if (!force &&
+        last != null &&
+        DateTime.now().difference(last) < _recheckThrottle) {
+      return;
+    }
+    setState(() {
+      _isChecking = true;
+      _isAppBlocked = false;
+      _forceUpdateRequired = false;
+      _maintenanceMode = false;
+      _errorMessage = null;
+    });
     _checkAppStatus();
   }
 
@@ -81,6 +172,8 @@ class _FrappeAppGuardState extends State<FrappeAppGuard> {
       setState(() => _isChecking = false);
       return;
     }
+
+    _lastCheckedAt = DateTime.now();
 
     try {
       final service = AppStatusService(widget.baseUrl);
@@ -125,10 +218,10 @@ class _FrappeAppGuardState extends State<FrappeAppGuard> {
           expectedPackage != null &&
           expectedPackage.isNotEmpty &&
           expectedPackage != currentPackage;
-      final versionMismatch =
-          expectedVersion != null &&
-          expectedVersion.isNotEmpty &&
-          expectedVersion != currentVersion;
+      final versionMismatch = appUpdateRequired(
+        expected: expectedVersion,
+        current: currentVersion,
+      );
 
       if (packageMismatch || versionMismatch) {
         String? storeUrl = status.storeUrl;
@@ -194,6 +287,17 @@ class _FrappeAppGuardState extends State<FrappeAppGuard> {
     }
 
     if (_forceUpdateRequired) {
+      final builder = widget.forceUpdateBuilder;
+      if (builder != null) {
+        return builder(
+          context,
+          ForceUpdateInfo(
+            title: _updateTitle,
+            storeUrl: _storeUrl,
+            openStore: _openStore,
+          ),
+        );
+      }
       return Scaffold(
         appBar: AppBar(title: const Text('Update Required')),
         body: Center(
