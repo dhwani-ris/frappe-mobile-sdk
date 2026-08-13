@@ -46,6 +46,7 @@ export 'src/sdk/frappe_sdk.dart';
 // Services
 export 'src/services/auth_service.dart';
 export 'src/services/app_status_service.dart';
+export 'src/ui/app_guard_version.dart';
 export 'src/services/meta_service.dart';
 export 'src/services/permission_service.dart';
 export 'src/services/translation_service.dart';
