@@ -25,14 +25,25 @@ class MetaDiffer {
       final sqlType = sqliteColumnTypeFor(type);
       if (sqlType == null) continue;
 
-      if (!oldByName.containsKey(name)) {
+      // The question is not "is this fieldname new?" but "is this COLUMN new?".
+      // A field can be present in both metas and still have no column in the
+      // table we built from the old one: Table, Table MultiSelect and Password
+      // all map to null. Treating that as a type change sends it to a bucket
+      // MetaMigration only logs, so the column is never created — and then
+      // every write to it is silently dropped and the field never reaches the
+      // wire. See test/meta_differ_column_gain_test.dart for the Swasti
+      // report this comes from.
+      final oldField = oldByName[name];
+      final hadColumn =
+          oldField != null && sqliteColumnTypeFor(oldField.fieldtype) != null;
+      if (!hadColumn) {
         added.add(AddedField(name: name, sqlType: sqlType));
         if (isLinkFieldType(type)) addedIsLocal.add(name);
-      } else {
-        final oldType = oldByName[name]!.fieldtype;
-        if (oldType != type) {
-          typeChanged.add(name);
-        }
+      } else if (oldField.fieldtype != type) {
+        // A real type change: the column exists with the wrong affinity, which
+        // needs a table rebuild rather than an ALTER. Still unimplemented, so
+        // MetaMigration logs it — but that is now the only case that lands here.
+        typeChanged.add(name);
       }
     }
 
