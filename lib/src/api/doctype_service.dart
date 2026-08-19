@@ -180,7 +180,9 @@ class DoctypeService {
   /// `doc.check_permission("read")`), so denied / missing names are
   /// silently dropped — return length may be < input length.
   ///
-  /// Must be kept in sync with `MAX_BATCH` on the server (200).
+  /// Batch size is chosen by [listFullDocs], which starts at
+  /// [defaultBulkFetchBatchSize] and backs off if the server reports a
+  /// smaller `MAX_BATCH`. Do not hard-code a cap here.
   Future<List<Map<String, dynamic>>> bulkGetWithChildren(
     String doctype,
     List<String> names,
@@ -259,6 +261,16 @@ class DoctypeService {
         // once per page.
         final cap = _batchCapFromError(e);
         if (cap != null && cap > 0 && cap < chunkSize) {
+          // Logged once per session, at the moment the cap is learned. A
+          // silent back-off means a field device that is quietly paying five
+          // round-trips per page looks identical to one that is not — and
+          // "it worked but slowly" is exactly the failure we could not
+          // diagnose from logs before.
+          debugPrint(
+            'DoctypeService: server caps bulk fetch at $cap '
+            '(asked for $chunkSize) — backing off for this session. '
+            'Deploy mobile_control >= the set-based bulk_fetch to remove it.',
+          );
           _bulkFetchBatchSize = cap;
           continue;
         }
