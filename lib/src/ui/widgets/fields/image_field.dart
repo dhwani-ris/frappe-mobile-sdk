@@ -7,9 +7,16 @@ import 'package:flutter_form_builder/flutter_form_builder.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import '../../../models/doc_field.dart';
+import '../../../models/image_pick_source.dart';
+import '../../../services/media_resolver.dart';
+import '../../../sync/attachment_error_classifier.dart';
+import '../../../utils/attachment_paths.dart';
+import '../../../utils/media_store.dart';
+import '../../../utils/attachment_pick.dart';
 import '../../../utils/sdk_log.dart';
 import 'base_field.dart';
 import 'field_helpers.dart';
+import 'media_resolve_builder.dart';
 
 /// Shows [image] full-screen in a zoomable, dismissible viewer with a dark
 /// scrim and a close (X) button. Pinch-zoom / pan via [InteractiveViewer];
@@ -116,6 +123,41 @@ class ImageField extends BaseField {
   /// Auth headers (e.g. from [FrappeClient.requestHeaders]) so private file URLs load.
   final Map<String, String>? imageHeaders;
 
+  /// Synchronous last-known connectivity. Offline → the captured image is kept
+  /// as a durable local path for save-time queueing instead of inline upload.
+  /// Null → treated as online.
+  final bool Function()? isOnline;
+
+  /// Map of `pending_attachments.id` → durable local file path, used to render
+  /// a preview for a `pending:<id>` field value (an offline-picked image not
+  /// yet uploaded). Loaded from the document; display-only — never alters the
+  /// stored marker value.
+  final Map<int, String>? pendingAttachmentPaths;
+
+  /// Resolves a field value to a LOCAL file for the preview: a cache hit, or a
+  /// download stored in the cache on the way through.
+  ///
+  /// When it yields a path the preview renders from disk instead of
+  /// [Image.network], which is what makes a pulled document's image visible
+  /// offline. Optional and additive — hosts that wire nothing keep the previous
+  /// network-only behaviour. Display-only: never changes the stored value.
+  ///
+  /// A function rather than a [MediaResolver] so this widget stays off the
+  /// DAO/filesystem stack; pass `myResolver.resolve`.
+  final ResolveMediaFn? mediaResolver;
+
+  /// Returns true when the SDK is in offline-first mode.
+  ///
+  /// When it does, a pick is ALWAYS staged and queued rather than uploaded
+  /// inline, whatever the connectivity — offline-first promises that data entry
+  /// never blocks on the network, and an inline upload would also put the
+  /// attachment outside the push gate and the media cache. Null is treated as
+  /// "not offline mode", preserving the previous behaviour.
+  final bool Function()? isOfflineMode;
+
+  /// Which pick sources to offer. Null means [ImagePickSource.both].
+  final ImagePickSource Function()? imagePickSource;
+
   const ImageField({
     super.key,
     required super.field,
@@ -126,6 +168,11 @@ class ImageField extends BaseField {
     this.uploadFile,
     this.fileUrlBase,
     this.imageHeaders,
+    this.isOnline,
+    this.pendingAttachmentPaths,
+    this.mediaResolver,
+    this.isOfflineMode,
+    this.imagePickSource,
   });
 
   /// Only Frappe server file paths or full URLs are treated as server URLs.
@@ -153,27 +200,13 @@ class ImageField extends BaseField {
     return u.startsWith('http://') || u.startsWith('https://');
   }
 
-  /// Build display URL: full URLs (S3, http(s)) use as-is.
-  /// /private/files/ and /files/ use download_file API so auth works; other / paths get base prepended.
-  String? _fullImageUrl(String? path) {
-    if (path == null || path.isEmpty) return path;
-    final p = path.trim();
-    if (p.isEmpty) return path;
-    if (p.startsWith('http://') || p.startsWith('https://')) return p;
-    if (!p.startsWith('/') ||
-        fileUrlBase == null ||
-        fileUrlBase!.trim().isEmpty) {
-      return p;
-    }
-    final base = fileUrlBase!.trim();
-    final baseNoSlash = base.endsWith('/')
-        ? base.substring(0, base.length - 1)
-        : base;
-    if (p.startsWith('/private/files/') || p.startsWith('/files/')) {
-      return '$baseNoSlash/api/method/frappe.handler.download_file?file_url=${Uri.encodeComponent(p)}';
-    }
-    return '$baseNoSlash$p';
-  }
+  /// Display URL for a stored image value.
+  ///
+  /// Delegates to [frappeFileFetchUrl] — this used to be a private copy of that
+  /// logic, one of three. `/private/files/` has to route through
+  /// `download_file` to carry auth, so a drift between the copies was a
+  /// private-file 404. Pinned by `attachment_paths_test.dart`.
+  String? _fullImageUrl(String? path) => frappeFileFetchUrl(path, fileUrlBase);
 
   /// Surfaces [message] to the user. `sdkLog` is `kDebugMode`-only, so without
   /// this a release-build failure was completely invisible: the user took a
@@ -198,35 +231,58 @@ class ImageField extends BaseField {
     File file, {
     ScaffoldMessengerState? messenger,
   }) async {
-    if (uploadFile != null) {
-      try {
-        final url = await uploadFile!(file);
-        if (url != null && url.isNotEmpty) {
-          fieldState.didChange(url);
-          onChanged?.call(url);
-          return true;
-        }
-        // Upload "succeeded" but returned nothing usable. Previously this path
-        // returned false with NO log at all — silent even in debug.
-        sdkLog('ImageField: uploadFile returned an empty URL for ${file.path}');
-        if (messenger != null) {
-          _notify(messenger, 'Upload failed — the photo was not attached.');
-        }
-      } catch (e, st) {
-        // Do not fall back to local path; leave field unchanged so wrong URL is never sent
-        sdkLog('ImageField: uploadFile failed — $e\n$st');
-        if (messenger != null) {
-          _notify(
-            messenger,
-            'Could not upload the photo. Check your connection and try again.',
-          );
-        }
+    // Durable-copy-first (survives camera-process kill / cache reclaim); upload
+    // inline when online, else keep the local path for save-time queueing.
+    //
+    // This deliberately REPLACES the older "do not fall back to local path;
+    // leave field unchanged so a wrong URL is never sent" rule. A local path is
+    // now a valid stored value: the offline attachment producer queues it at
+    // save time and rewrites the field once the upload lands.
+    // `resolvePickedAttachment` absorbs the null-uploader, failed-upload and
+    // empty-URL branches that used to be spelled out here, falling back to the
+    // durable copy in all three — so none of them is a user-visible failure any
+    // more, and none of them notifies.
+    final String? stored;
+    try {
+      stored = await resolvePickedAttachment(
+        picked: file,
+        online: isOnline?.call() ?? true,
+        offlineModeEnabled: isOfflineMode?.call() ?? false,
+        uploadFile: uploadFile,
+      );
+    } on AttachmentTooLargeException catch (e) {
+      // Surfaced at pick time so the user can retake at a lower resolution,
+      // rather than discovering it as a blocked document after sync.
+      if (messenger != null) _notify(messenger, attachmentTooLargeMessage(e));
+      return false;
+    } catch (e, st) {
+      sdkLog('ImageField: attach failed — $e\n$st');
+      if (messenger != null) {
+        _notify(
+          messenger,
+          isTerminalAttachmentError(e)
+              ? 'The server rejected this photo, so it was not attached.'
+              : 'Could not attach the photo. Check your connection and '
+                    'storage permissions.',
+        );
       }
       return false;
     }
-    fieldState.didChange(file.path);
-    onChanged?.call(file.path);
-    return true;
+    if (stored != null && stored.isNotEmpty) {
+      // Reclaim the file this pick replaces (guarded by isStagedPath).
+      await MediaStore.discardReplacedValue(fieldState.value);
+      fieldState.didChange(stored);
+      onChanged?.call(stored);
+      return true;
+    }
+    // Only reachable when the durable copy itself yielded nothing, so there is
+    // no local path to queue either — the pick is genuinely lost. Previously
+    // this path returned false with NO log at all.
+    sdkLog('ImageField: could not store the picked file ${file.path}');
+    if (messenger != null) {
+      _notify(messenger, 'Upload failed — the photo was not attached.');
+    }
+    return false;
   }
 
   /// Handle to the capture marker, or null when the cache dir is unavailable
@@ -345,10 +401,28 @@ class ImageField extends BaseField {
           ? (value) => requiredValidator(value, field.displayLabel)
           : null,
       builder: (FormFieldState<String> fieldState) {
-        final raw = fieldState.value ?? imagePath;
+        // `hasInteractedByUser` is the ONLY thing that distinguishes "the
+        // user cleared this" from "never touched". Trusting fieldState.value
+        // alone made a discard work but broke a value arriving AFTER the first
+        // build (an async document load): initialValue applies once, the
+        // field's key is stable so its State survives the rebuild, and the new
+        // widget value was ignored. Falling back unconditionally to the widget
+        // value — the previous behaviour — made an explicit clear impossible
+        // to represent instead. Neither alone is correct.
+        final raw = fieldState.hasInteractedByUser
+            ? fieldState.value
+            : (imagePath ?? fieldState.value);
         final currentValue = raw?.toString().trim();
-        final isUrl = _isServerUrl(currentValue);
-        final displayUrl = isUrl ? _fullImageUrl(currentValue) : null;
+        // Resolve a `pending:<id>` marker to its durable local file for the
+        // preview ONLY; the stored value stays `currentValue`. Server URLs and
+        // plain local paths pass through unchanged. Null => not yet resolvable
+        // (file gone / map stale) => broken-image placeholder, value kept.
+        final displaySource = attachmentDisplaySource(
+          currentValue,
+          pendingAttachmentPaths,
+        );
+        final isUrl = _isServerUrl(displaySource);
+        final displayUrlRaw = isUrl ? _fullImageUrl(displaySource) : null;
 
         // BaseField.build (the enclosing widget) already renders the
         // external label with required-asterisk; the inline label that
@@ -357,186 +431,239 @@ class ImageField extends BaseField {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             if (currentValue != null && currentValue.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 8.0),
-                child: GestureDetector(
-                  // Viewing is always allowed — even when the field is
-                  // read-only/disabled the user can still open the full-screen
-                  // viewer (QA #11).
-                  onTap: () {
-                    if (_isFullUrl(displayUrl)) {
-                      showFullScreenImage(context, displayUrl!, imageHeaders);
-                    } else if (!isUrl) {
-                      showFullScreenImageProvider(
-                        context,
-                        FileImage(File(currentValue)),
-                      );
-                    }
-                  },
-                  child: Stack(
-                    children: [
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(8),
-                        child: _isFullUrl(displayUrl)
-                            ? Image.network(
-                                displayUrl!,
-                                height: 150,
-                                width: double.infinity,
-                                fit: BoxFit.cover,
-                                headers: imageHeaders,
-                                errorBuilder: (context, error, stackTrace) {
-                                  return Container(
+              // A resolved cache path makes the preview render from DISK rather
+              // than over the network, which is what lets a pulled document's
+              // image appear offline. Null (resolving / offline miss / failed
+              // fetch) keeps the previous network-or-placeholder behaviour.
+              MediaResolveBuilder(
+                resolver: mediaResolver,
+                value: currentValue,
+                pendingPaths: pendingAttachmentPaths,
+                builder: (context, cachedPath) {
+                  final localPath =
+                      cachedPath ?? (isUrl ? null : displaySource);
+                  final isLocalFile = localPath != null;
+                  final displayUrl = isLocalFile ? null : displayUrlRaw;
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 8.0),
+                    child: GestureDetector(
+                      // Viewing is always allowed — even when the field is
+                      // read-only/disabled the user can still open the full-screen
+                      // viewer (QA #11).
+                      onTap: () {
+                        if (_isFullUrl(displayUrl)) {
+                          showFullScreenImage(
+                            context,
+                            displayUrl!,
+                            imageHeaders,
+                          );
+                        } else if (isLocalFile) {
+                          showFullScreenImageProvider(
+                            context,
+                            FileImage(File(localPath)),
+                          );
+                        }
+                      },
+                      child: Stack(
+                        children: [
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(8),
+                            child: _isFullUrl(displayUrl)
+                                ? Image.network(
+                                    displayUrl!,
+                                    height: 150,
+                                    width: double.infinity,
+                                    fit: BoxFit.cover,
+                                    headers: imageHeaders,
+                                    errorBuilder: (context, error, stackTrace) {
+                                      return Container(
+                                        height: 150,
+                                        color: Colors.grey[300],
+                                        child: const Icon(Icons.broken_image),
+                                      );
+                                    },
+                                  )
+                                : isLocalFile
+                                ? Image.file(
+                                    File(localPath),
+                                    height: 150,
+                                    width: double.infinity,
+                                    fit: BoxFit.cover,
+                                    errorBuilder: (context, error, stackTrace) {
+                                      return Container(
+                                        height: 150,
+                                        color: Colors.grey[300],
+                                        child: const Icon(Icons.broken_image),
+                                      );
+                                    },
+                                  )
+                                : Container(
                                     height: 150,
                                     color: Colors.grey[300],
-                                    child: const Icon(Icons.broken_image),
-                                  );
-                                },
-                              )
-                            : !isUrl
-                            ? Image.file(
-                                File(currentValue),
-                                height: 150,
-                                width: double.infinity,
-                                fit: BoxFit.cover,
-                                errorBuilder: (context, error, stackTrace) {
-                                  return Container(
-                                    height: 150,
-                                    color: Colors.grey[300],
-                                    child: const Icon(Icons.broken_image),
-                                  );
-                                },
-                              )
-                            : Container(
-                                height: 150,
-                                color: Colors.grey[300],
-                                child: const Center(
-                                  child: Icon(Icons.broken_image, size: 48),
+                                    child: const Center(
+                                      child: Icon(Icons.broken_image, size: 48),
+                                    ),
+                                  ),
+                          ),
+                          // 'Tap to view' affordance — only shown when the image is
+                          // actually viewable full-screen.
+                          if (_isFullUrl(displayUrl) || isLocalFile)
+                            Positioned(
+                              right: 8,
+                              bottom: 8,
+                              child: Container(
+                                padding: const EdgeInsets.all(4),
+                                decoration: BoxDecoration(
+                                  color: Colors.black54,
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                child: const Icon(
+                                  Icons.fullscreen,
+                                  color: Colors.white,
+                                  size: 20,
                                 ),
                               ),
+                            ),
+                        ],
                       ),
-                      // 'Tap to view' affordance — only shown when the image is
-                      // actually viewable full-screen.
-                      if (_isFullUrl(displayUrl) || !isUrl)
-                        Positioned(
-                          right: 8,
-                          bottom: 8,
-                          child: Container(
-                            padding: const EdgeInsets.all(4),
-                            decoration: BoxDecoration(
-                              color: Colors.black54,
-                              borderRadius: BorderRadius.circular(6),
-                            ),
-                            child: const Icon(
-                              Icons.fullscreen,
-                              color: Colors.white,
-                              size: 20,
-                            ),
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
+                    ),
+                  );
+                },
               ),
             Row(
               children: [
-                OutlinedButton.icon(
-                  onPressed: enabled && !field.readOnly
-                      ? () async {
-                          // pickImage throws on a denied gallery permission —
-                          // a routine case, not an edge one. Unguarded it became
-                          // an unhandled async error from onPressed with nothing
-                          // shown to the user.
-                          final messenger = ScaffoldMessenger.of(context);
-                          try {
+                if ((imagePickSource?.call() ?? ImagePickSource.both)
+                    .allowsGallery)
+                  OutlinedButton.icon(
+                    onPressed: enabled && !field.readOnly
+                        ? () async {
+                            // pickImage throws on a denied gallery permission —
+                            // a routine case, not an edge one. Unguarded it became
+                            // an unhandled async error from onPressed with nothing
+                            // shown to the user.
+                            final messenger = ScaffoldMessenger.of(context);
+                            try {
+                              final picker = ImagePicker();
+                              final result = await picker.pickImage(
+                                source: ImageSource.gallery,
+                              );
+                              if (result != null) {
+                                await _onImagePicked(
+                                  fieldState,
+                                  File(result.path),
+                                  messenger: messenger,
+                                );
+                              }
+                            } catch (e, st) {
+                              sdkLog(
+                                'ImageField: gallery pick failed — $e\n$st',
+                              );
+                              _notify(
+                                messenger,
+                                'Could not open the gallery. Check photo '
+                                'permissions in Settings.',
+                              );
+                            }
+                          }
+                        : null,
+                    icon: const Icon(Icons.photo_library),
+                    label: const Text('Gallery'),
+                  ),
+                if ((imagePickSource?.call() ?? ImagePickSource.both) ==
+                    ImagePickSource.both)
+                  const SizedBox(width: 8),
+                if ((imagePickSource?.call() ?? ImagePickSource.both)
+                    .allowsCamera)
+                  OutlinedButton.icon(
+                    onPressed: enabled && !field.readOnly
+                        ? () async {
+                            final messenger = ScaffoldMessenger.of(context);
                             final picker = ImagePicker();
-                            final result = await picker.pickImage(
-                              source: ImageSource.gallery,
-                            );
-                            if (result != null) {
-                              await _onImagePicked(
-                                fieldState,
-                                File(result.path),
-                                messenger: messenger,
-                              );
+                            // Android can kill the host activity mid-capture
+                            // and stash the result; without recovering it the
+                            // FIRST capture is silently dropped and users must
+                            // shoot twice ("camera-twice" bug). The stash is
+                            // app-wide, so only the field named by the marker
+                            // written before that capture may claim it —
+                            // otherwise field B's tap could pick up field A's
+                            // photo.
+                            if (await _restoreInterruptedCapture(
+                              context,
+                              picker,
+                              fieldState,
+                            )) {
+                              return;
                             }
-                          } catch (e, st) {
-                            sdkLog('ImageField: gallery pick failed — $e\n$st');
-                            _notify(
-                              messenger,
-                              'Could not open the gallery. Check photo '
-                              'permissions in Settings.',
-                            );
-                          }
-                        }
-                      : null,
-                  icon: const Icon(Icons.photo_library),
-                  label: const Text('Gallery'),
-                ),
-                const SizedBox(width: 8),
-                OutlinedButton.icon(
-                  onPressed: enabled && !field.readOnly
-                      ? () async {
-                          final messenger = ScaffoldMessenger.of(context);
-                          final picker = ImagePicker();
-                          // Android can kill the host activity mid-capture
-                          // and stash the result; without recovering it the
-                          // FIRST capture is silently dropped and users must
-                          // shoot twice ("camera-twice" bug). The stash is
-                          // app-wide, so only the field named by the marker
-                          // written before that capture may claim it —
-                          // otherwise field B's tap could pick up field A's
-                          // photo.
-                          if (await _restoreInterruptedCapture(
-                            context,
-                            picker,
-                            fieldState,
-                          )) {
-                            return;
-                          }
-                          await _writeCaptureMarker();
-                          try {
-                            final result = await picker.pickImage(
-                              source: ImageSource.camera,
-                            );
-                            if (result != null) {
-                              // A photo came back inside this run, so nothing is
-                              // stashed — the marker has done its job.
+                            await _writeCaptureMarker();
+                            try {
+                              final result = await picker.pickImage(
+                                source: ImageSource.camera,
+                              );
+                              if (result != null) {
+                                // A photo came back inside this run, so nothing is
+                                // stashed — the marker has done its job.
+                                await _clearCaptureMarker();
+                                await _onImagePicked(
+                                  fieldState,
+                                  File(result.path),
+                                  messenger: messenger,
+                                );
+                              }
+                              // A null result is ambiguous: the user cancelled, OR
+                              // Android recreated the activity and stashed the
+                              // photo (pickImage then completes with null). The
+                              // marker is deliberately LEFT in place — clearing it
+                              // here would make that stashed photo unrecoverable,
+                              // which is the very bug this marker exists to fix.
+                              // A plain cancel costs one empty retrieveLostData()
+                              // on the next tap, and the age bound expires it.
+                            } catch (e, st) {
                               await _clearCaptureMarker();
-                              await _onImagePicked(
-                                fieldState,
-                                File(result.path),
-                                messenger: messenger,
+                              // Previously rethrown from inside onPressed — an
+                              // unhandled async error with no user-visible
+                              // message. A denied camera permission is the common
+                              // trigger, so report it instead of crashing the
+                              // zone.
+                              sdkLog(
+                                'ImageField: camera capture failed — $e\n$st',
+                              );
+                              _notify(
+                                messenger,
+                                'Could not open the camera. Check camera '
+                                'permissions in Settings.',
                               );
                             }
-                            // A null result is ambiguous: the user cancelled, OR
-                            // Android recreated the activity and stashed the
-                            // photo (pickImage then completes with null). The
-                            // marker is deliberately LEFT in place — clearing it
-                            // here would make that stashed photo unrecoverable,
-                            // which is the very bug this marker exists to fix.
-                            // A plain cancel costs one empty retrieveLostData()
-                            // on the next tap, and the age bound expires it.
-                          } catch (e, st) {
-                            await _clearCaptureMarker();
-                            // Previously rethrown from inside onPressed — an
-                            // unhandled async error with no user-visible
-                            // message. A denied camera permission is the common
-                            // trigger, so report it instead of crashing the
-                            // zone.
-                            sdkLog(
-                              'ImageField: camera capture failed — $e\n$st',
-                            );
-                            _notify(
-                              messenger,
-                              'Could not open the camera. Check camera '
-                              'permissions in Settings.',
-                            );
                           }
-                        }
-                      : null,
-                  icon: const Icon(Icons.camera_alt),
-                  label: const Text('Camera'),
-                ),
+                        : null,
+                    icon: const Icon(Icons.camera_alt),
+                    label: const Text('Camera'),
+                  ),
+                // Discard. Only when there IS something to remove and the
+                // field is editable. A mandatory field can still be cleared —
+                // requiredValidator catches it at save, which is the right
+                // place; blocking the clear would trap a user who wants to
+                // replace via discard-then-pick.
+                if (currentValue != null &&
+                    currentValue.isNotEmpty &&
+                    enabled &&
+                    !field.readOnly) ...[
+                  const SizedBox(width: 8),
+                  IconButton(
+                    tooltip: 'Remove photo',
+                    icon: const Icon(Icons.close),
+                    onPressed: () async {
+                      // Clear FIRST. The user's action must take effect even if
+                      // reclaiming the bytes fails — a leftover file is an
+                      // orphan the sweep collects, whereas a failed reclaim
+                      // aborting this callback would leave the attachment in
+                      // place while the user believes it is gone.
+                      final discarded = currentValue;
+                      fieldState.didChange(null);
+                      onChanged?.call(null);
+                      await MediaStore.discardValue(discarded);
+                    },
+                  ),
+                ],
               ],
             ),
             fieldErrorText(fieldState),

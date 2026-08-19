@@ -9,6 +9,8 @@ import '../../../models/link_filter_result.dart';
 import '../../../services/link_option_service.dart';
 import '../../../services/link_field_coordinator.dart';
 import 'attach_field.dart';
+import '../../../models/image_pick_source.dart';
+import '../../../services/media_resolver.dart';
 import 'base_field.dart';
 import 'button_field.dart';
 import 'check_field.dart';
@@ -112,6 +114,11 @@ class FieldFactory {
     LinkFilterBuilder? Function(String doctype, String fieldname)?
     getLinkFilterBuilder,
     ValueChanged<bool>? onIsLocalChanged,
+    bool Function()? isOnline,
+    Map<int, String>? pendingAttachmentPaths,
+    ResolveMediaFn? mediaResolver,
+    bool Function()? isOfflineMode,
+    ImagePickSource Function()? imagePickSource,
   }) {
     if (field.hidden) {
       return null;
@@ -306,6 +313,10 @@ class FieldFactory {
           uploadFile: uploadFile,
           fileUrlBase: fileUrlBase,
           imageHeaders: imageHeaders,
+          isOnline: isOnline,
+          pendingAttachmentPaths: pendingAttachmentPaths,
+          mediaResolver: mediaResolver,
+          isOfflineMode: isOfflineMode,
         );
 
       case FieldTypes.attachImage:
@@ -319,6 +330,11 @@ class FieldFactory {
           uploadFile: uploadFile,
           fileUrlBase: fileUrlBase,
           imageHeaders: imageHeaders,
+          isOnline: isOnline,
+          pendingAttachmentPaths: pendingAttachmentPaths,
+          mediaResolver: mediaResolver,
+          isOfflineMode: isOfflineMode,
+          imagePickSource: imagePickSource,
         );
 
       case FieldTypes.html:

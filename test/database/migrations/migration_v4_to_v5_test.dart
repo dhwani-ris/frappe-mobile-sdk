@@ -166,11 +166,11 @@ void main() {
       expect(stateRows.first['id'], 1);
 
       // sdk_meta schema_version must be bumped to 6 — `_onUpgrade` branches on
-      // oldVersion only, so a v4 device runs the full v4→v6 chain.
+      // oldVersion only, so a v4 device runs the full v4→v7 chain.
       final meta = await v5db.rawQuery(
         'SELECT schema_version FROM sdk_meta WHERE id = 1',
       );
-      expect(meta.first['schema_version'], 6);
+      expect(meta.first['schema_version'], 7);
 
       await v5db.close();
     },

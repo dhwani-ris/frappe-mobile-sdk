@@ -5,6 +5,7 @@ This folder is the entry point for everything you need to understand, adopt, or 
 If you only have one minute, read [the TL;DR](#tldr) below.
 If you are upgrading from 1.x, jump to [Migrating from 1.x](migrating-from-1.x.md).
 If you want to know how the new internals work, read [Architecture](architecture.md).
+If you are working with attachments, read [Attachments](attachments.md).
 
 ---
 
@@ -13,6 +14,7 @@ If you want to know how the new internals work, read [Architecture](architecture
 - **Major release.** Public API broke. Bump dependencies and follow the upgrade guide.
 - **Offline-first foundation.** Per-doctype SQLite tables (`docs__<doctype>`), an `outbox` push queue, and a single read path through `UnifiedResolver`.
 - **Server-driven offline-mode toggle.** New `offline_enabled` Check field on the server's `Mobile Configuration`. **Default is off** (online-only). Companion server release: `frappe-mobile-control` 1.x.
+- **Offline attachments with an on-device media cache.** Pick and save offline; the pipeline uploads at sync, writes the resolved `file_url` back into the local mirror, and keeps the bytes as the preview cache so an attachment opened once stays viewable offline. Schema v6 → v7 adds `media_cache`. See [attachments.md](attachments.md).
 - **Schema bump v2 → v3.** Single transactional migration step. Legacy `documents` table is dropped.
 - **`DocumentDao` removed.** Replaced by `OfflineRepository` + `UnifiedResolver`.
 - **New sync UI surface.** `SyncStatusBar`, `SyncErrorsScreen`, `SyncProgressScreen`, `OfflineTransitionGuard`, delete-cascade and logout-guard dialogs.
@@ -27,6 +29,7 @@ doc/release-2.0/
 ├── README.md             ← you are here
 ├── whats-new.md          ← feature-by-feature, with examples
 ├── architecture.md       ← diagrams: services, init flow, read path, sync, schema
+├── attachments.md        ← attachment lifecycle, File relinking, media cache
 ├── breaking-changes.md   ← removed / renamed / signature-changed APIs
 ├── schema-migration.md   ← v2 → v3 schema migration in detail
 ├── migrating-from-1.x.md ← step-by-step upgrade checklist
@@ -37,6 +40,7 @@ doc/release-2.0/
 |---|---|
 | [whats-new.md](whats-new.md) | You want to know what features 2.0 ships and how to use them. |
 | [architecture.md](architecture.md) | You want diagrams of the new internals (init flow, read path, push/pull, schema). |
+| [attachments.md](attachments.md) | You're working with Attach / Attach Image / Image fields, or need the offline upload and media-cache internals. |
 | [breaking-changes.md](breaking-changes.md) | You're touching SDK APIs and need a quick reference for what changed. |
 | [schema-migration.md](schema-migration.md) | You manage the database upgrade path or you're debugging a migration. |
 | [migrating-from-1.x.md](migrating-from-1.x.md) | You're upgrading an existing 1.x app to 2.0 and want a checklist. |

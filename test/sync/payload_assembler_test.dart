@@ -245,4 +245,89 @@ void main() {
       );
     },
   );
+
+  group('child rows carry their mobile_uuid', () {
+    // The parent's uuid was re-added explicitly after the system-column strip;
+    // children were stripped and never re-added, so the server stored child
+    // `mobile_uuid` as NULL and the pull path's child adopt branch could only
+    // ever fire for a value someone set in Desk. `mobile_control` already
+    // provisions the field on child doctypes (unique, read_only), so the wire
+    // was the only missing half.
+    OutboxRow rowFor(OutboxOperation op) => OutboxRow(
+      id: 1,
+      doctype: 'Sales Order',
+      mobileUuid: 'u-so-1',
+      operation: op,
+      state: OutboxState.pending,
+      retryCount: 0,
+      createdAt: DateTime.utc(2026, 1, 1),
+    );
+
+    Future<List<dynamic>> itemsFor(OutboxOperation op) async {
+      final payload = await PayloadAssembler.assemble(
+        db: db,
+        row: rowFor(op),
+        parentMeta: parentMeta,
+        parentTable: 'docs__sales_order',
+        childMetasByFieldname: {
+          'items': _ChildInfo('SO Item', childMeta, 'docs__so_item'),
+        },
+        resolveServerName: (_, _) async => null,
+      );
+      return payload['items'] as List;
+    }
+
+    test('on INSERT, each child sends its own uuid', () async {
+      final items = await itemsFor(OutboxOperation.insert);
+      expect(items.length, 2);
+      expect(items[0]['mobile_uuid'], 'c-1');
+      expect(items[1]['mobile_uuid'], 'c-2');
+    });
+
+    test('on UPDATE too — the uuid is not insert-only', () async {
+      final items = await itemsFor(OutboxOperation.update);
+      expect(items[0]['mobile_uuid'], 'c-1');
+      expect(items[1]['mobile_uuid'], 'c-2');
+    });
+
+    test('each child keeps its OWN uuid, never the parent\'s', () async {
+      // The bug this guards is a copy-paste of `row.mobileUuid` into the child
+      // seed, which would give every child the parent's uuid and collide on the
+      // server's UNIQUE index the moment a second child was sent.
+      final items = await itemsFor(OutboxOperation.insert);
+      final uuids = items.map((i) => i['mobile_uuid']).toList();
+      expect(uuids, ['c-1', 'c-2']);
+      expect(uuids.toSet().length, 2, reason: 'uuids must be distinct');
+      expect(uuids, isNot(contains('u-so-1')));
+    });
+
+    test('an empty child uuid is omitted rather than sent blank', () async {
+      // `mobile_uuid` is UNIQUE server-side, and MariaDB permits many NULLs but
+      // not many ''. Sending a blank would fail the second such row's insert,
+      // so omit the key entirely and let the server keep NULL.
+      await db.insert('docs__so_item', {
+        'mobile_uuid': 'c-3',
+        'parent_uuid': 'u-so-1',
+        'parent_doctype': 'Sales Order',
+        'parentfield': 'items',
+        'idx': 2,
+        'item_code': 'C',
+        'qty': 1,
+      });
+      await db.update(
+        'docs__so_item',
+        {'mobile_uuid': ''},
+        where: 'mobile_uuid = ?',
+        whereArgs: ['c-3'],
+      );
+
+      final items = await itemsFor(OutboxOperation.insert);
+      final blank = items.firstWhere((i) => i['item_code'] == 'C');
+      expect(
+        (blank as Map).containsKey('mobile_uuid'),
+        isFalse,
+        reason: 'a blank uuid must not reach a UNIQUE column',
+      );
+    });
+  });
 }

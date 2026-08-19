@@ -22,13 +22,17 @@ class AttachmentService {
       'folder': 'Home',
     };
 
+    // Frappe's `upload_file` reads form_dict.doctype / .docname / .file_name —
+    // verified against 16.25.0, 16.26.3 and 17.0.0-dev. The older dt/dn/filename
+    // keys are silently ignored, which produced a File row that looked attached
+    // but was not.
     if (doctype != null && docname != null) {
-      fields['dt'] = doctype;
-      fields['dn'] = docname;
+      fields['doctype'] = doctype;
+      fields['docname'] = docname;
     }
 
     if (fileName != null) {
-      fields['filename'] = fileName;
+      fields['file_name'] = fileName;
     }
 
     final response = await _restHelper.uploadFile(
@@ -36,6 +40,11 @@ class AttachmentService {
       'file',
       file,
       fields: fields,
+      // The multipart part name is what Frappe ultimately stores: it overwrites
+      // form_dict.file_name whenever a file part is present. Staged files are
+      // named <uuid><ext>, so without this every upload lands server-side as an
+      // opaque uuid regardless of what the user picked.
+      filename: fileName,
     );
 
     return unwrapMessage<Map<String, dynamic>>(response);

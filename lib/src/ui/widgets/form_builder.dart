@@ -5,6 +5,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_form_builder/flutter_form_builder.dart';
 import '../../models/doc_type_meta.dart';
+import '../../models/image_pick_source.dart';
+import '../../services/media_resolver.dart';
 import '../../models/doc_field.dart';
 import '../../models/link_filter_result.dart';
 import '../../constants/field_types.dart';
@@ -209,6 +211,28 @@ class FrappeFormBuilder extends StatefulWidget {
   /// Auth headers for loading private file URLs (e.g. [FrappeClient.requestHeaders])
   final Map<String, String>? imageHeaders;
 
+  /// Synchronous last-known connectivity, forwarded to Attach/Image fields so
+  /// an offline pick is stored as a durable local path (queued at save) rather
+  /// than uploaded inline. Null → fields treat as online.
+  final bool Function()? isOnline;
+
+  /// Map of `pending_attachments.id` → durable local path, forwarded to
+  /// Attach/Image fields so a `pending:<id>` value (offline pick not yet
+  /// uploaded) previews from its local file. Display-only.
+  final Map<int, String>? pendingAttachmentPaths;
+
+  /// Resolves an attach-field value to a local file for display, enabling
+  /// offline previews. Forwarded to Attach / Attach Image / Image fields.
+  final ResolveMediaFn? mediaResolver;
+
+  /// Returns true when the SDK is in offline-first mode; forwarded to
+  /// Attach / Attach Image / Image so a pick is queued rather than uploaded
+  /// inline. See [AttachField.isOfflineMode].
+  final bool Function()? isOfflineMode;
+
+  /// Which pick sources image fields offer. Null means both.
+  final ImagePickSource Function()? imagePickSource;
+
   /// Fetches a linked document by doctype and name (for fetch_from).
   /// Try local repository first, then server. Return null if not found.
   final Future<Map<String, dynamic>?> Function(
@@ -301,6 +325,11 @@ class FrappeFormBuilder extends StatefulWidget {
     this.parentFormData,
     this.getLinkFilterBuilder,
     this.cascadeProgrammaticChanges = false,
+    this.isOnline,
+    this.pendingAttachmentPaths,
+    this.mediaResolver,
+    this.isOfflineMode,
+    this.imagePickSource,
   });
 
   @override
@@ -1364,6 +1393,11 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
       uploadFile: widget.uploadFile,
       fileUrlBase: widget.fileUrlBase,
       imageHeaders: widget.imageHeaders,
+      isOnline: widget.isOnline,
+      pendingAttachmentPaths: widget.pendingAttachmentPaths,
+      mediaResolver: widget.mediaResolver,
+      isOfflineMode: widget.isOfflineMode,
+      imagePickSource: widget.imagePickSource,
       getMeta: widget.getMeta,
       parentFormData: effectiveParentFormData,
       getLinkFilterBuilder: widget.getLinkFilterBuilder,
@@ -1377,8 +1411,14 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
                   getMeta: widget.getMeta,
                   linkOptionService: widget.linkOptionService,
                   useLinkFieldCoordinator: widget.useLinkFieldCoordinator,
+                  uploadFile: widget.uploadFile,
                   fileUrlBase: widget.fileUrlBase,
                   imageHeaders: widget.imageHeaders,
+                  isOnline: widget.isOnline,
+                  pendingAttachmentPaths: widget.pendingAttachmentPaths,
+                  mediaResolver: widget.mediaResolver,
+                  isOfflineMode: widget.isOfflineMode,
+                  imagePickSource: widget.imagePickSource,
                   // fetch linked document for child doctype.
                   fetchLinkedDocument: widget.fetchLinkedDocument,
                   translate: widget.translate,
@@ -2210,6 +2250,11 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
           uploadFile: widget.uploadFile,
           fileUrlBase: widget.fileUrlBase,
           imageHeaders: widget.imageHeaders,
+          isOnline: widget.isOnline,
+          pendingAttachmentPaths: widget.pendingAttachmentPaths,
+          mediaResolver: widget.mediaResolver,
+          isOfflineMode: widget.isOfflineMode,
+          imagePickSource: widget.imagePickSource,
           getMeta: widget.getMeta,
           getLinkFilterBuilder: widget.getLinkFilterBuilder,
           onButtonPressed: widget.onButtonPressed,
@@ -2228,8 +2273,14 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
                       getMeta: widget.getMeta,
                       linkOptionService: widget.linkOptionService,
                       useLinkFieldCoordinator: widget.useLinkFieldCoordinator,
+                      uploadFile: widget.uploadFile,
                       fileUrlBase: widget.fileUrlBase,
                       imageHeaders: widget.imageHeaders,
+                      isOnline: widget.isOnline,
+                      pendingAttachmentPaths: widget.pendingAttachmentPaths,
+                      mediaResolver: widget.mediaResolver,
+                      isOfflineMode: widget.isOfflineMode,
+                      imagePickSource: widget.imagePickSource,
                       fetchLinkedDocument: widget.fetchLinkedDocument,
                       translate: widget.translate,
                       onButtonPressed: widget.onButtonPressed,

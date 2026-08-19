@@ -395,7 +395,7 @@ void main() {
         expect(rows.first['owner'], isNull);
 
         final meta = await v6db.query('sdk_meta', where: 'id = 1');
-        expect(meta.first['schema_version'], 6);
+        expect(meta.first['schema_version'], 7);
       },
     );
 
@@ -539,7 +539,7 @@ void main() {
           containsAll(serverAuditColumnNames),
         );
         final meta = await db.query('sdk_meta', where: 'id = 1');
-        expect(meta.first['schema_version'], 6);
+        expect(meta.first['schema_version'], 7);
       },
     );
 
@@ -591,7 +591,7 @@ void main() {
         containsAll(serverAuditColumnNames),
       );
       final meta = await db.query('sdk_meta', where: 'id = 1');
-      expect(meta.first['schema_version'], 6);
+      expect(meta.first['schema_version'], 7);
     });
   });
 

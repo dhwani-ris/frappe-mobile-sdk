@@ -16,10 +16,13 @@ import '../models/meta_diff.dart';
 import '../models/offline_mode.dart';
 import '../models/offline_mode_notifier.dart';
 import '../database/daos/outbox_dao.dart';
+import '../database/daos/media_cache_dao.dart';
+import '../database/daos/pending_attachment_dao.dart';
 import '../models/outbox_row.dart';
 import '../sync/payload_serializer.dart';
 import '../sync/pull_apply.dart';
 import 'local_writer.dart';
+import 'media_resolver.dart';
 import 'meta_migration.dart';
 import '../utils/sdk_log.dart';
 
@@ -703,7 +706,16 @@ class OfflineRepository {
       }
     }
 
-    await tryDelete('pending_attachments', 'top_parent_uuid = ?');
+    // Routed through the DAO so the staged `outbox/` files are reclaimed too,
+    // not just the rows. `media_cache` is deliberately untouched.
+    try {
+      await PendingAttachmentDao(db).deleteForTopParent(mobileUuid);
+    } on DatabaseException catch (e, st) {
+      sdkLog(
+        'OfflineRepository.hardDeleteLocalMirror: attachment cleanup failed '
+        'for $doctype/$mobileUuid (best-effort) — $e\n$st',
+      );
+    }
     await tryDelete(normalizeDoctypeTableName(doctype), 'mobile_uuid = ?');
 
     final parentMeta = await _loadMeta(doctype);
@@ -758,11 +770,7 @@ class OfflineRepository {
         // fails the txn must roll back, otherwise we'd commit a
         // hard-deleted docs__ row alongside orphan pending_attachments
         // whose `top_parent_uuid` no longer resolves.
-        await txn.delete(
-          'pending_attachments',
-          where: 'top_parent_uuid = ?',
-          whereArgs: [mobileUuid],
-        );
+        await PendingAttachmentDao(txn).deleteForTopParent(mobileUuid);
         try {
           await txn.delete(
             tableName,
@@ -816,11 +824,7 @@ class OfflineRepository {
       // the server-side doc is gone, so uploading attachments against
       // it would either fail (parent missing) or land orphan File rows
       // that the server then cascade-deletes. Cleaner to drop them now.
-      await txn.delete(
-        'pending_attachments',
-        where: 'top_parent_uuid = ?',
-        whereArgs: [mobileUuid],
-      );
+      await PendingAttachmentDao(txn).deleteForTopParent(mobileUuid);
       try {
         await txn.update(
           tableName,
@@ -1172,6 +1176,46 @@ class OfflineRepository {
   ///
   /// The DB fetch (this method) and the merge ([mergeChildRowsIntoData]) are
   /// split so the merge can be unit-tested with plain maps, no database.
+  /// Returns `pending_attachments.id` → durable `local_path` for every queued
+  /// attachment under [topParentUuid] (parent + child rows). The UI uses this
+  /// to preview an offline-picked file whose field still holds a `pending:<id>`
+  /// marker, rendering it from the local copy until the push pipeline uploads
+  /// it and rewrites the field to a server `file_url`. Empty when the table is
+  /// absent or nothing is queued.
+  /// Builds a [MediaResolver] over this repository's database.
+  ///
+  /// Lives here because the `media_cache` table is this layer's concern and the
+  /// database handle stays private. The caller supplies [fetch] (which needs the
+  /// API client's base URL and auth headers) and [isOnline].
+  MediaResolver mediaResolver({
+    required MediaFetchFn fetch,
+    required bool Function() isOnline,
+  }) => MediaResolver(
+    cache: MediaCacheDao(_database.rawDatabase),
+    fetch: fetch,
+    isOnline: isOnline,
+  );
+
+  Future<Map<int, String>> pendingAttachmentLocalPaths(
+    String topParentUuid,
+  ) async {
+    final db = _database.rawDatabase;
+    if (!await sqliteTableExists(db, 'pending_attachments')) return {};
+    final rows = await db.query(
+      'pending_attachments',
+      columns: ['id', 'local_path'],
+      where: 'top_parent_uuid = ?',
+      whereArgs: [topParentUuid],
+    );
+    final out = <int, String>{};
+    for (final r in rows) {
+      final id = r['id'] as int?;
+      final path = r['local_path'] as String?;
+      if (id != null && path != null && path.isNotEmpty) out[id] = path;
+    }
+    return out;
+  }
+
   Future<Document> attachChildRows(
     String doctype,
     Document doc,

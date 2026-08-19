@@ -1,4 +1,4 @@
-// DDL for SDK system tables (outbox, pending_attachments, sdk_meta)
+// DDL for SDK system tables (outbox, pending_attachments, media_cache, sdk_meta)
 // plus an extension block for the pre-existing doctype_meta table.
 // Returned as raw DDL string lists; AppDatabase executes them in its
 // onCreate / onUpgrade handlers inside a transaction.
@@ -50,6 +50,31 @@ List<String> systemTablesDDL() => <String>[
   'CREATE INDEX IF NOT EXISTS ix_attach_state ON pending_attachments(state)',
   'CREATE INDEX IF NOT EXISTS ix_attach_parent ON pending_attachments(parent_uuid, parent_fieldname)',
   'CREATE INDEX IF NOT EXISTS ix_attach_top_parent ON pending_attachments(top_parent_uuid, state)',
+  // Content store index for the on-device media cache.
+  //
+  // Keyed by `file_url` — NOT by parent — because Frappe dedupes uploads by
+  // content hash and returns the same url for identical bytes, so two
+  // documents can legitimately share one cached file. Keying per-parent would
+  // store those bytes twice and turn deletion into a refcount problem.
+  //
+  // Cache rows are NON-AUTHORITATIVE: a row whose file is missing is a cache
+  // miss, never an error, and document deletion never touches this table.
+  '''
+      CREATE TABLE IF NOT EXISTS media_cache (
+        file_url TEXT PRIMARY KEY,
+        local_path TEXT NOT NULL,
+        size_bytes INTEGER,
+        mime_type TEXT,
+        is_private INTEGER NOT NULL DEFAULT 1,
+        source TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        last_accessed_at INTEGER
+      )
+      ''',
+  // Written from day one so Phase 2's LRU eviction has real data the day the
+  // policy lands, rather than starting blind.
+  'CREATE INDEX IF NOT EXISTS ix_media_cache_accessed ON media_cache(last_accessed_at)',
+  'CREATE INDEX IF NOT EXISTS ix_media_cache_source ON media_cache(source)',
   '''
       CREATE TABLE IF NOT EXISTS sdk_meta (
         id INTEGER PRIMARY KEY CHECK (id = 1),

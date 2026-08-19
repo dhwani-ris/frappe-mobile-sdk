@@ -34,9 +34,16 @@
 ///
 /// **If a future iteration needs row-level child merge**, the load-
 /// bearing pieces are:
-///   - extend `Custom Field` install in `mobile_control` to ship
-///     `mobile_uuid` onto every child DocType (already wired for parents)
-///     so children gain stable identity across server round-trips;
+///   - ~~extend `Custom Field` install in `mobile_control` to ship
+///     `mobile_uuid` onto every child DocType~~ and ~~send it on the wire~~ —
+///     **both done.** `mobile_control._ensure_mobile_uuid_fields` already
+///     provisions the field on child doctypes as well as parents (UNIQUE,
+///     read_only), and `PayloadAssembler` now re-adds each child's own
+///     `mobile_uuid` to its payload row, so children DO have stable identity
+///     across a server round-trip. Note the field was provisioned long before
+///     the client sent it, so any child row written before that change still
+///     has `mobile_uuid = NULL` server-side and matches by position only until
+///     its parent is next pushed;
 ///   - drive matching from `mobile_uuid → server_name → position` (same
 ///     priority used by `ResponseWriteback` and `PullApply`);
 ///   - apply [mergeFields] cell-wise per matched pair and pass unmatched

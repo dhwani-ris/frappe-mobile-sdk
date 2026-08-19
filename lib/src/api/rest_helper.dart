@@ -447,6 +447,7 @@ class RestHelper {
     String fieldName,
     File file, {
     Map<String, String>? fields,
+    String? filename,
   }) async {
     var uri = Uri.parse('$baseUrl$endpoint');
     var request = http.MultipartRequest('POST', uri);
@@ -464,7 +465,12 @@ class RestHelper {
       fieldName,
       stream,
       length,
-      filename: basename(file.path),
+      // Falls back to the on-disk basename, which for a staged attachment IS
+      // the name the user picked: `MediaStore.stageToOutbox` keeps the original
+      // filename and puts uniqueness in the generated parent directory. (It
+      // once renamed to `<uuid><ext>`, which lost the name permanently and made
+      // every upload land server-side as an opaque uuid.)
+      filename: filename ?? basename(file.path),
     );
 
     request.files.add(multipartFile);

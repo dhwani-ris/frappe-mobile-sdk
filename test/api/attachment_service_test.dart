@@ -64,14 +64,17 @@ void main() {
       expect(out['file_url'], '/files/x.txt');
       expect(captured['is_private'], '1');
       expect(captured['folder'], 'Home');
-      expect(captured['filename'], 'note.txt');
-      expect(captured.containsKey('dt'), isFalse);
-      expect(captured.containsKey('dn'), isFalse);
+      // Frappe's upload_file reads form_dict.file_name — verified against
+      // 16.25.0, 16.26.3 and 17.0.0-dev. The old `filename` key was ignored.
+      expect(captured['file_name'], 'note.txt');
+      expect(captured.containsKey('filename'), isFalse);
+      expect(captured.containsKey('doctype'), isFalse);
+      expect(captured.containsKey('docname'), isFalse);
     },
   );
 
   test(
-    'uploadFile attaches dt + dn when both doctype and docname given',
+    'uploadFile sends doctype + docname (the keys Frappe actually reads)',
     () async {
       final captured = <String, String>{};
       final client = MockClient.streaming((req, stream) async {
@@ -95,8 +98,12 @@ void main() {
       final f = await _tempFile('hi', 'doc.txt');
       final svc = makeSvc(client);
       await svc.uploadFile(f, doctype: 'Customer', docname: 'CUST-1');
-      expect(captured['dt'], 'Customer');
-      expect(captured['dn'], 'CUST-1');
+      // `dt`/`dn` are silently ignored by Frappe, which would produce an
+      // unattached File — the trap this branch used to set for its next caller.
+      expect(captured['doctype'], 'Customer');
+      expect(captured['docname'], 'CUST-1');
+      expect(captured.containsKey('dt'), isFalse);
+      expect(captured.containsKey('dn'), isFalse);
     },
   );
 
@@ -155,4 +162,34 @@ void main() {
     final f = await _tempFile('hi', 'slow.txt');
     await expectLater(svc.uploadFile(f), throwsA(isException));
   });
+
+  test(
+    'the multipart part carries the ORIGINAL filename, not the staged uuid',
+    () async {
+      // Frappe reassigns filename = file.filename whenever a file part is
+      // present, so the multipart name — not form_dict.file_name — decides the
+      // stored name. Staged files are named <uuid>.jpg, so passing the part
+      // name through is the only thing that preserves "Site Photo.jpg".
+      String? partFilename;
+      final client = MockClient.streaming((req, stream) async {
+        final body = utf8.decode(await stream.toBytes(), allowMalformed: true);
+        partFilename = RegExp(
+          r'name="file"; filename="([^"]+)"',
+        ).firstMatch(body)?.group(1);
+        return http.StreamedResponse(
+          Stream.value(
+            utf8.encode(
+              jsonEncode({
+                'message': {'file_url': '/x'},
+              }),
+            ),
+          ),
+          200,
+        );
+      });
+      final f = await _tempFile('bytes', 'a1b2c3d4-uuid.jpg');
+      await makeSvc(client).uploadFile(f, fileName: 'Site Photo.jpg');
+      expect(partFilename, 'Site Photo.jpg');
+    },
+  );
 }

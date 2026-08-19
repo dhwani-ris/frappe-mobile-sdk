@@ -74,6 +74,7 @@ void main() {
 
       final pipeline = AttachmentPipeline(
         dao: dao,
+        db: db,
         uploader: (file, {doctype, docname, isPrivate = true, fileName}) async {
           capturedDoctype = doctype;
           capturedDocname = docname;
@@ -83,7 +84,7 @@ void main() {
         fileFromPath: (p) => _FakeFile(p),
       );
 
-      await pipeline.uploadPendingForTopParent('survey-1');
+      await pipeline.resolveForTopParent('survey-1');
 
       expect(
         capturedDoctype,
@@ -125,6 +126,7 @@ void main() {
 
       final pipeline = AttachmentPipeline(
         dao: dao,
+        db: db,
         uploader: (file, {doctype, docname, isPrivate = true, fileName}) async {
           return {
             'name': 'FILE-${file.path}',
@@ -135,7 +137,7 @@ void main() {
         fileFromPath: (p) => _FakeFile(p),
       );
 
-      final result = await pipeline.uploadPendingForTopParent('P');
+      final result = await pipeline.resolveForTopParent('P');
       expect(result.keys, containsAll(<int>{id1, id2}));
       expect(result[id1]!.fileUrl, contains('/files'));
     },
@@ -161,6 +163,7 @@ void main() {
       var uploads = 0;
       final pipeline = AttachmentPipeline(
         dao: failDao,
+        db: db,
         uploader: (file, {doctype, docname, isPrivate = true, fileName}) async {
           uploads++;
           return {'name': 'FILE-1', 'file_url': '/private/files/z.jpg'};
@@ -169,7 +172,7 @@ void main() {
         fileFromPath: (p) => _FakeFile(p),
       );
 
-      final result = await pipeline.uploadPendingForTopParent('P');
+      final result = await pipeline.resolveForTopParent('P');
 
       expect(
         uploads,
@@ -177,7 +180,24 @@ void main() {
         reason: 'a markDone failure must not re-upload the binary',
       );
       expect(result.values.single.fileUrl, '/private/files/z.jpg');
-      expect(failDao.markDoneCalls, greaterThanOrEqualTo(2));
+
+      // markDone now runs inside the step-4 transaction on a txn-scoped DAO,
+      // so the injected fake is bypassed entirely — which is required, since
+      // reading through the outer Database while holding a txn deadlocks
+      // sqflite. The H3 guarantee itself is unchanged and asserted above
+      // (`uploads == 1`); recovery simply moved from an in-loop retry to the
+      // next dispatch resuming off the committed url.
+      final second = await pipeline.resolveForTopParent('P');
+      expect(
+        uploads,
+        1,
+        reason: 'a second dispatch must never re-upload a committed url',
+      );
+      expect(
+        second,
+        isEmpty,
+        reason: 'the row reached done, so nothing is outstanding',
+      );
     },
   );
 
@@ -195,6 +215,7 @@ void main() {
       var attempts = 0;
       final pipeline = AttachmentPipeline(
         dao: dao,
+        db: db,
         uploader: (file, {doctype, docname, isPrivate = true, fileName}) async {
           attempts++;
           throw Exception('network');
@@ -203,7 +224,7 @@ void main() {
         fileFromPath: (p) => _FakeFile(p),
       );
       await expectLater(
-        pipeline.uploadPendingForTopParent('P'),
+        pipeline.resolveForTopParent('P'),
         throwsA(isA<BlockedByUpstream>()),
       );
       expect(attempts, 3);
@@ -230,6 +251,7 @@ void main() {
     var attempts = 0;
     final pipeline = AttachmentPipeline(
       dao: dao,
+      db: db,
       uploader: (file, {doctype, docname, isPrivate = true, fileName}) async {
         attempts++;
         throw Exception('network');
@@ -238,9 +260,7 @@ void main() {
       fileFromPath: (p) => _FakeFile(p),
     );
     await expectLater(
-      pipeline
-          .uploadPendingForTopParent('P')
-          .timeout(const Duration(seconds: 3)),
+      pipeline.resolveForTopParent('P').timeout(const Duration(seconds: 3)),
       throwsA(isA<BlockedByUpstream>()),
     );
     expect(attempts, 3);
@@ -278,14 +298,18 @@ void main() {
     expect((out['items'] as List).first['photo'], '/files/Y');
   });
 
-  test(
-    'inlinePayload leaves pending:<id> alone when the id has no resolved entry',
-    () {
-      final payload = <String, Object?>{'logo': 'pending:42'};
-      final out = AttachmentPipeline.inlinePayload(payload, resolved: {});
-      expect(out['logo'], 'pending:42');
-    },
-  );
+  // CONTRACT CHANGE: this used to assert the marker passed through unchanged.
+  // That silent passthrough is precisely how the literal string "pending:42"
+  // was written into Frappe as an attach-field value — indistinguishable from
+  // a real one. An unresolved marker reaching the payload is never correct, so
+  // it now throws and the push gate is what prevents it arising.
+  test('inlinePayload THROWS when a marker has no resolved entry', () {
+    final payload = <String, Object?>{'logo': 'pending:42'};
+    expect(
+      () => AttachmentPipeline.inlinePayload(payload, resolved: {}),
+      throwsA(isA<StateError>()),
+    );
+  });
 
   // Regression: fileName! at attachment_pipeline.dart:124 threw a null-assert
   // when a row had serverFileUrl set (upload already done) but serverFileName
@@ -312,6 +336,7 @@ void main() {
       int uploadCalls = 0;
       final pipeline = AttachmentPipeline(
         dao: dao,
+        db: db,
         uploader:
             (file, {doctype, docname, fileName, isPrivate = false}) async {
               uploadCalls++;
@@ -323,10 +348,7 @@ void main() {
       );
 
       // Must not throw — should fall back to fileUrl as the fileName.
-      await expectLater(
-        pipeline.uploadPendingForTopParent('uuid-parent'),
-        completes,
-      );
+      await expectLater(pipeline.resolveForTopParent('uuid-parent'), completes);
       // Upload must NOT be re-attempted (fileUrl already set).
       expect(
         uploadCalls,

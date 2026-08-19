@@ -86,8 +86,12 @@ typedef PayloadTransformerFn =
 ///   ThreeWayMerge against ours and the outbox payload's base, persist
 ///   merged values, retry the row exactly once. Exhausted → `markConflict`.
 /// - `LinkExistsError` (DELETE): `markFailed` with structured JSON.
-/// - `BlockedByUpstream`: `markBlocked` (retried on next run after upstream
-///   completes).
+/// - `BlockedByUpstream`: `markBlocked`. Raised when a Link target has no
+///   `server_name` yet, when an attachment upload failed terminally, or when a
+///   non-INSERT row's own document has not been created server-side. NOT
+///   auto-retried — the drain reads only `pending`, so a blocked row re-enters
+///   the queue via `SyncController.retry` / `retryAll` (where it sorts at
+///   RetryPriority 2) or via a re-save, which `OutboxDao.recordSave` collapses.
 /// - `ServerRejection` (permission/validation/mandatory): `markFailed`
 ///   with the corresponding ErrorCode.
 class PushEngine {
@@ -270,39 +274,100 @@ class PushEngine {
     }
   }
 
-  /// Splits a dispatch tier into independently-runnable units. INSERT rows
-  /// that share a doctype are chained into ONE sequential unit so the
-  /// server increments that doctype's naming-series counter (`tabSeries`)
-  /// one row at a time — N concurrent same-series INSERTs deadlock on that
-  /// counter row (MySQL/MariaDB 1213). Rows of different doctypes, and all
-  /// non-INSERT operations (which don't touch `tabSeries`), stay separate
-  /// units so cross-doctype throughput is preserved; the [pool] still caps
-  /// overall concurrency. Tiering already guarantees rows within a tier are
-  /// mutually independent, so the order within a same-doctype chain is
-  /// arbitrary but always safe.
+  /// `created_at ASC, id ASC` — the order [OutboxDao.findByState] reads the
+  /// outbox in, and the order rows must reach the server in.
+  static int _byQueueOrder(OutboxRow a, OutboxRow b) {
+    final cmp = a.createdAt.compareTo(b.createdAt);
+    return cmp != 0 ? cmp : a.id.compareTo(b.id);
+  }
+
+  /// Splits a dispatch tier into independently-runnable units, preserving
+  /// `created_at ASC` everywhere it is observable.
+  ///
+  /// Rows are read from the outbox in queue order and must leave in queue
+  /// order. Tiering does not provide that — it only orders rows against
+  /// *other documents'* uuids — so the ordering rules live here:
+  ///
+  /// 1. **Within a unit**, rows run strictly in `created_at, id` order. That
+  ///    one rule also delivers per-document ordering for free: the enqueue
+  ///    side stamps a document's rows in sequence — `saveDocument` writes the
+  ///    INSERT/UPDATE row first and its SUBMIT/CANCEL row at
+  ///    `created_at + 1ms` precisely so it lands after — so queue order
+  ///    already implies "INSERT before everything else for that document".
+  ///    Operations after the INSERT need the `server_name` that only its
+  ///    writeback can produce.
+  /// 2. **Units are emitted in queue order too**, keyed on their first row, so
+  ///    the FIFO [pool] starts them in `created_at` order.
+  /// 3. **Documents with an INSERT in this tier share one unit per doctype**,
+  ///    so the server increments that doctype's naming-series counter
+  ///    (`tabSeries`) one row at a time — N concurrent same-series INSERTs
+  ///    deadlock on that counter row (MySQL/MariaDB 1213). Because that unit's
+  ///    rows are sorted as a whole, the grouping cannot let one document's
+  ///    later operation overtake another document's earlier one.
+  ///
+  /// Documents with no INSERT here get their own unit and run concurrently, so
+  /// cross-doctype throughput is preserved; the [pool] still caps concurrency.
+  /// Strict global `created_at` order ACROSS doctypes is deliberately not
+  /// provided — that would mean abandoning rule 3 and serialising every
+  /// doctype behind every other.
+  ///
+  /// Map keys are records, not concatenated strings: `(doctype, mobile_uuid)`
+  /// is the identity the outbox uses everywhere else (`recordSave`, the
+  /// supersede pass, the writeback's has-more probe), and a record compares
+  /// structurally, so no separator can collide with a doctype name that
+  /// contains one.
   List<Future<void> Function()> _dispatchUnits(List<OutboxRow> tier) {
-    final insertsByDoctype = <String, List<OutboxRow>>{};
-    final units = <Future<void> Function()>[];
+    final docsWithInsert = <(String, String)>{};
     for (final r in tier) {
       if (r.operation == OutboxOperation.insert) {
-        (insertsByDoctype[r.doctype] ??= <OutboxRow>[]).add(r);
-      } else {
-        units.add(() => _process(r));
+        docsWithInsert.add((r.doctype, r.mobileUuid));
       }
     }
-    for (final group in insertsByDoctype.values) {
-      if (group.length == 1) {
-        final only = group.first;
-        units.add(() => _process(only));
-      } else {
-        units.add(() async {
-          for (final r in group) {
-            await _process(r);
-          }
-        });
-      }
+
+    final byUnit = <Object, List<OutboxRow>>{};
+    for (final r in tier) {
+      final Object key = docsWithInsert.contains((r.doctype, r.mobileUuid))
+          ? ('doctype', r.doctype)
+          : ('doc', r.doctype, r.mobileUuid);
+      (byUnit[key] ??= <OutboxRow>[]).add(r);
     }
-    return units;
+
+    // No sorting here: queue order is already established upstream and every
+    // step preserves it. [OutboxDao.findByState] applies
+    // `ORDER BY created_at ASC, id ASC` (served straight off
+    // `ix_outbox_state(state, created_at)`, so SQLite does an ordered index
+    // scan rather than a sort); [TierComputer] appends rows to a tier in that
+    // same iteration order; and Dart's default Map/Set are insertion-ordered,
+    // so bucketing keeps each unit's rows ordered AND emits the units
+    // themselves in order of their first row. Re-sorting would only restate
+    // what the index already guarantees. The assert below is the seatbelt: if
+    // a future change upstream ever drops the ORDER BY or reorders a tier,
+    // this fails loudly in debug instead of silently pushing out of order.
+    assert(
+      _isQueueOrdered(tier),
+      'a dispatch tier arrived out of queue order — the outbox read or '
+      'TierComputer stopped preserving `created_at ASC, id ASC`',
+    );
+    return [for (final u in byUnit.values) () => _processChain(u)];
+  }
+
+  /// True when [rows] are in `created_at ASC, id ASC` order. Debug-only
+  /// invariant check for [_dispatchUnits]; not called in release builds.
+  static bool _isQueueOrdered(List<OutboxRow> rows) {
+    for (var i = 1; i < rows.length; i++) {
+      if (_byQueueOrder(rows[i - 1], rows[i]) > 0) return false;
+    }
+    return true;
+  }
+
+  /// Runs one dispatch unit's rows strictly in sequence. A row that fails is
+  /// already recorded by [_process] (it never rethrows for a classified push
+  /// error), so the chain continues — a failed UPDATE must not strand the
+  /// DELETE queued behind it.
+  Future<void> _processChain(List<OutboxRow> chain) async {
+    for (final r in chain) {
+      await _process(r);
+    }
   }
 
   Future<void> _process(OutboxRow row, {bool mergeAttempted = false}) async {
@@ -407,11 +472,23 @@ class PushEngine {
     final attachments = AttachmentPipeline(
       dao: attachmentDao,
       uploader: attachmentUploader,
+      db: db,
       backoff: attachmentBackoff,
+      tableNameFor: (dt) => metaDao.tableNameFor(dt),
+      // Same lazy per-doctype cache the auto-merge persist uses, so the
+      // attachment writeback serializes against the other `docs__` writers
+      // instead of racing them.
+      writeQueueFor: writeQueueResolver == null
+          ? null
+          : (dt) => _writeQueues.putIfAbsent(dt, () => writeQueueResolver!(dt)),
     );
-    final uploaded = await attachments.uploadPendingForTopParent(
-      row.mobileUuid,
-    );
+    // Push gate: throws BlockedByUpstream unless every attachment is `done`.
+    // Runs BEFORE PayloadAssembler.assemble below so the writeback has already
+    // replaced each marker in `docs__` by the time the payload is built.
+    await attachments.resolveForTopParent(row.mobileUuid);
+    // Built from ALL rows, so a marker left by an interrupted writeback still
+    // resolves rather than reaching the wire.
+    final uploaded = await attachments.resolutionMapFor(row.mobileUuid);
 
     final childMetas = await _childMetasFor(meta);
     final parentTable = await metaDao.tableNameFor(row.doctype);
@@ -429,6 +506,29 @@ class PushEngine {
     final docRow = docRows.isEmpty ? const <String, Object?>{} : docRows.first;
     final docServerName = docRow['server_name'] as String?;
     final docRetryCount = (docRow['sync_attempts'] as int?) ?? 0;
+
+    // Every operation except INSERT addresses the doc by its server name, and
+    // the consumer's `send` dereferences it (`dispatchHttpSend` does
+    // `serverName!`). A null here means this doc's own INSERT has not landed:
+    // either it is queued behind this row in the same chain and failed, or an
+    // earlier drain already parked it in `failed` — in which case it is not in
+    // the pending set at all and _dispatchUnits has no chain to order this row
+    // against. Refuse to dispatch. Without this the null-check throws a
+    // TypeError, which is not a PushError, so `_process`'s catch-all recorded
+    // it as `markFailed(UNKNOWN)` — the least actionable code there is
+    // (RetryPriority 7) and, for DELETE, only after the writeback had already
+    // hard-deleted the local mirror. `blocked` is the honest state: it names
+    // the upstream, sorts at RetryPriority 2, and is what `retryAll` picks up
+    // once the INSERT has gone through.
+    if (row.operation != OutboxOperation.insert &&
+        (docServerName == null || docServerName.isEmpty)) {
+      throw BlockedByUpstream(
+        field: 'server_name',
+        targetDoctype: row.doctype,
+        targetUuid: row.mobileUuid,
+        reason: "this document's INSERT has not reached the server yet",
+      );
+    }
 
     // Bump retry counter + last_attempt_at on each attempt.
     await db.update(

@@ -1,6 +1,16 @@
 import '../utils/sql_row_utils.dart';
 
-enum AttachmentState { pending, uploading, done, failed }
+/// Lifecycle of a queued attachment.
+///
+/// `failed` and `rejected` are deliberately distinct. `failed` is transient
+/// (network, 5xx) and is retried automatically on the next dispatch.
+/// `rejected` is terminal (oversized file, permission) and is NEVER
+/// auto-retried — it blocks the parent push with an actionable reason until
+/// the user replaces the attachment, which creates a fresh `pending` row.
+///
+/// Without that split, re-arming `failed` rows would retry a permanently
+/// unuploadable file on every push, forever.
+enum AttachmentState { pending, uploading, done, failed, rejected }
 
 extension AttachmentStateHelpers on AttachmentState {
   String get wireName => name;

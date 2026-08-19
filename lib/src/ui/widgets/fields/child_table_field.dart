@@ -3,6 +3,25 @@ import '../../../models/doc_field.dart';
 import '../../../models/doc_type_meta.dart';
 import '../screen_helpers.dart';
 
+/// Preserves the identity/system columns a child form does not render (e.g.
+/// `mobile_uuid`, `name`) from the pre-edit [original] row onto the
+/// [submitted] row. The child row's `FormController` seeds `_rawValues` only
+/// for docfields, so `buildSubmitData` drops `mobile_uuid`; without this, a
+/// re-saved edited child row gets a fresh local PK and its queued attachment
+/// row is orphaned. A value already present in [submitted] wins (never
+/// overwritten).
+Map<String, dynamic> preserveChildIdentity(
+  Map<String, dynamic> original,
+  Map<String, dynamic> submitted,
+) {
+  const identityKeys = ['mobile_uuid', 'name'];
+  final out = Map<String, dynamic>.from(submitted);
+  for (final k in identityKeys) {
+    if (out[k] == null && original[k] != null) out[k] = original[k];
+  }
+  return out;
+}
+
 /// Builds the form widget for a child table row (add/edit dialog or bottom sheet).
 /// [registerSubmit] is called with the form's submit handler so the host can show Save/Cancel.
 typedef ChildTableFormBuilder =
@@ -297,7 +316,10 @@ class ChildTableField extends StatelessWidget {
         onSubmit: (data) {
           Navigator.pop(ctx);
           final newList = List<dynamic>.from(listValue);
-          newList[index] = data;
+          // Carry the row's local identity (mobile_uuid / name) across the
+          // edit — the child form does not render those columns and would
+          // otherwise drop them, orphaning any queued attachment row.
+          newList[index] = preserveChildIdentity(rowData, data);
           onChanged!(newList);
         },
         onRemove: () {

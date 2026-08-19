@@ -92,6 +92,28 @@ class PayloadAssembler {
       final cleaned = <Map<String, Object?>>[];
       for (final c in children) {
         final out = <String, Object?>{'doctype': info.doctype};
+        // Re-add the child's OWN `mobile_uuid`, mirroring what the parent seed
+        // above does. `mobile_uuid` is in `_systemColumns`, so the strip loop
+        // below drops it — and for children nothing used to put it back, which
+        // meant the server stored child uuids as NULL and a child could not be
+        // matched by identity across a round trip. `mobile_control` already
+        // provisions the field on child doctypes (UNIQUE, read_only), so the
+        // wire was the only missing half; the parent has always sent it under
+        // the same `read_only` flag, which is why the server accepts it.
+        //
+        // Omitted when blank rather than sent as '': the column is UNIQUE, and
+        // MariaDB permits many NULLs but not many empty strings, so a blank
+        // would fail the second such row. A local child row always has a
+        // non-empty uuid (it is that mirror's primary key), so this is a guard
+        // against a malformed row, not an expected path.
+        //
+        // Deliberately the child's own uuid, never `row.mobileUuid`: the parent
+        // uuid is already on the payload root, and reusing it here would collide
+        // on the server's UNIQUE index as soon as a second child was sent.
+        final childUuid = c['mobile_uuid'];
+        if (childUuid is String && childUuid.isNotEmpty) {
+          out['mobile_uuid'] = childUuid;
+        }
         for (final e in c.entries) {
           if (_systemColumns.contains(e.key)) continue;
           if (e.key.endsWith('__norm')) continue;

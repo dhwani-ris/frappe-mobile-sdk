@@ -8,6 +8,7 @@ import '../database/schema/system_columns.dart';
 import '../database/table_name.dart';
 import '../models/doc_type_meta.dart';
 import '../utils/sdk_log.dart';
+import '../utils/uuid_pattern.dart';
 import 'child_table_info.dart';
 
 /// Frappe returns `modified` as `"YYYY-MM-DD HH:MM:SS.ffffff"` with no
@@ -37,6 +38,110 @@ String _asUtc(String raw) {
   // consistently because both parse with the same local-midnight offset.
   if (!raw.contains(':')) return raw;
   return '${raw}Z';
+}
+
+/// The local `mobile_uuid` for a pulled row, given the local uuid already on
+/// file (null when the row is new) and whatever the server sent.
+///
+/// Precedence — local, then incoming, then a fresh mint:
+///
+/// 1. **An existing local uuid always wins.** Outbox rows and
+///    `pending_attachments` reference it, so a pull must never renumber a row
+///    that already exists here.
+/// 2. **A UUID-SHAPED incoming uuid is ADOPTED.** `mobile_control` provisions
+///    `mobile_uuid` as a UNIQUE field on parent and child doctypes alike, so
+///    such a value is a real global identity — the one this device assigned
+///    when it created the document, round-tripped back. Minting a new v4 here
+///    would break that identity across any wipe (logout, reinstall, fresh
+///    device) and defeat the `mobile_uuid` fallback match, which exists to
+///    reconcile a row whose `server_name` writeback was interrupted.
+/// 3. **Otherwise mint.** Two distinct cases fall here, both load-bearing
+///    rather than defensive:
+///
+///    * **Empty or absent.** Desk-origin rows return `mobile_uuid` as null or
+///      `''`, and `mobile_uuid` is the local primary key — adopting `''` would
+///      write an empty PK that the next such row collides with.
+///    * **Present but not UUID-shaped — PARENTS ONLY** (see
+///      [requireUuidShape] below; children keep the emptiness-only test).
+///      Being UUID-shaped is an invariant the
+///      push pipeline depends on: [looksLikeMobileUuid] is what
+///      `UuidRewriter` calls "the complete detector" for a local Link
+///      reference (Frappe server names are never UUID-shaped, SDK uuids always
+///      are), and `PushEngine`'s dependency scan uses the same predicate to
+///      tier a row behind the row it points at. A non-UUID PK is invisible to
+///      both: the rewriter falls back to `__is_local` alone — which its own
+///      comment records as insufficient for `fetch_from`, defaults,
+///      programmatic prefill and back-reference Links — and the dependency
+///      scan drops the edge, so the row lands in its parent's tier and races
+///      it. Reachability is low, because a Link value only carries a
+///      `mobile_uuid` when the target row has no `server_name` and an adopted
+///      row always has one; minting costs nothing and keeps the invariant true
+///      by construction instead of by argument.
+///
+/// Uniqueness is deliberately NOT re-checked here. `mobile_uuid` carries a real
+/// UNIQUE index server-side (verified: a duplicate write fails with MariaDB
+/// error 1062), so two server documents cannot present the same value.
+///
+/// That is a PRECONDITION, not a guarantee this package owns: the index comes
+/// from the `mobile_control` Frappe app (its `_MOBILE_CUSTOM_FIELDS` declares
+/// `mobile_uuid` as `Data` with `"unique": 1`, for workspace doctypes and their
+/// children), while this is a standalone package dependency carrying no
+/// `publish_to: none` — nothing here can enforce it. If a site provisions
+/// `mobile_uuid` without `unique: 1`, `mobile_uuid` is still the
+/// mirror's PK, and two server documents under one value resolve three
+/// different ways — verified, not reasoned:
+///
+/// * **Bulk parent path — silent.** `ConflictAlgorithm.replace` drops the first
+///   document's mirror with no log and no error. The pre-check upstream does not
+///   catch it: it counts locally-dirty and local-only rows, so a clean `synced`
+///   row is replaced without objection. Afterwards the two documents share one
+///   row and swap places on every page carrying either — those swaps DO log,
+///   via the clash tripwire below, because the fallback query now matches. The
+///   bulk page is the only unannounced event.
+/// * **Sequential, both rows in one page — loud.** The plain `INSERT`s are
+///   queued in `txn.batch()` and so invisible to the fallback query below; the
+///   second raises `UNIQUE constraint failed: <table>.mobile_uuid` at
+///   `batch.commit`, which has no `continueOnError` (extended code 1555 as seen
+///   under sqflite FFI; the message is the stable half). The page rolls back,
+///   and both pull paths stop the doctype without advancing its cursor —
+///   `PullEngine` reports it failed mid-pull, `SyncService` raises a `SyncError`
+///   — so it is retried and re-fails every cycle. Reported, not lost.
+/// * **Sequential, rows in different pages — neither.** The fallback matches the
+///   first row, the tripwire logs, and the second document overwrites it.
+///
+/// Children always take the loud path: the bulk child insert is a plain
+/// `INSERT`. Do not relax the server-side index expecting a client-side net.
+///
+/// [requireUuidShape] carries the one deliberate asymmetry between parents and
+/// children, and it is history rather than taste:
+///
+/// * **Parents (true).** Parent adoption is new. Before it every pulled parent
+///   minted its own v4, so the shape invariant held by construction — gating
+///   means introducing adoption cannot weaken it.
+/// * **Children (false).** Child adoption is NOT new: the child paths have
+///   always taken any non-empty incoming value (`hasRawUuid` tested emptiness,
+///   never shape). That is load-bearing — a Link field on another document can
+///   reference a child row by its `mobile_uuid`, so a child whose uuid changed
+///   on re-pull left that Link a permanent orphan, the regression pinned by
+///   `pull_apply_test.dart`'s "child mobile_uuid is preserved across re-pull".
+///   Deployments exist whose child uuids are not v4-shaped, so gating children
+///   would re-break exactly that. Tightening it needs its own change, evidence
+///   and migration — not a side effect of this one.
+///
+/// Shared by all four write paths (parent and child, bulk and sequential) so
+/// the precedence cannot drift between them.
+String resolvePulledMobileUuid({
+  required String? localUuid,
+  required Object? incoming,
+  required Uuid uuidGen,
+  bool requireUuidShape = true,
+}) {
+  if (localUuid != null && localUuid.isNotEmpty) return localUuid;
+  final adopted = incoming?.toString().trim();
+  if (adopted != null && adopted.isNotEmpty) {
+    if (!requireUuidShape || looksLikeMobileUuid(adopted)) return adopted;
+  }
+  return uuidGen.v4();
 }
 
 /// System columns that the per-doctype mirror manages itself. A meta field
@@ -384,9 +489,13 @@ class PullApply {
         continue;
       }
 
-      final uuid = existing.isEmpty
-          ? uuidGen.v4()
-          : existing.first['mobile_uuid'] as String;
+      final uuid = resolvePulledMobileUuid(
+        localUuid: existing.isEmpty
+            ? null
+            : existing.first['mobile_uuid'] as String?,
+        incoming: r['mobile_uuid'],
+        uuidGen: uuidGen,
+      );
 
       final nowMs = DateTime.now().toUtc().millisecondsSinceEpoch;
       final parentRow = <String, Object?>{
@@ -490,8 +599,12 @@ class PullApply {
             preserved = rawChildUuid;
           }
           preserved ??= byPosition[idx];
-          final childUuid =
-              preserved ?? (hasRawUuid ? rawChildUuid : uuidGen.v4());
+          final childUuid = resolvePulledMobileUuid(
+            localUuid: preserved,
+            incoming: rawChildUuid,
+            uuidGen: uuidGen,
+            requireUuidShape: false,
+          );
           final childRow = <String, Object?>{
             'mobile_uuid': childUuid,
             'server_name': serverChildName,
@@ -567,7 +680,11 @@ class PullApply {
       final serverName = r['name'] as String?;
       if (serverName == null || serverName.isEmpty) continue;
 
-      final uuid = existingUuids[serverName] ?? uuidGen.v4();
+      final uuid = resolvePulledMobileUuid(
+        localUuid: existingUuids[serverName],
+        incoming: r['mobile_uuid'],
+        uuidGen: uuidGen,
+      );
 
       final parentRow = <String, Object?>{
         'mobile_uuid': uuid,
@@ -619,9 +736,12 @@ class PullApply {
         for (var idx = 0; idx < list.length; idx++) {
           final cr = Map<String, dynamic>.from(list[idx] as Map);
           final serverChildName = cr['name'] as String?;
-          final rawChildUuid = cr['mobile_uuid']?.toString();
-          final hasRawUuid = rawChildUuid != null && rawChildUuid.isNotEmpty;
-          final childUuid = hasRawUuid ? rawChildUuid : uuidGen.v4();
+          final childUuid = resolvePulledMobileUuid(
+            localUuid: null,
+            incoming: cr['mobile_uuid'],
+            uuidGen: uuidGen,
+            requireUuidShape: false,
+          );
 
           final childRow = <String, Object?>{
             'mobile_uuid': childUuid,

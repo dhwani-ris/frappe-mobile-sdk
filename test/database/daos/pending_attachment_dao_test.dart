@@ -40,7 +40,7 @@ void main() {
     expect(r!.state, AttachmentState.pending);
   });
 
-  test('findPendingForTopParent returns matching rows', () async {
+  test('findUnresolvedForTopParent returns matching rows', () async {
     await dao.enqueue(
       parentDoctype: 'O',
       parentUuid: 'p1',
@@ -57,12 +57,12 @@ void main() {
       topParentDoctype: 'O',
       localPath: '/y.jpg',
     );
-    final rows = await dao.findPendingForTopParent('p1');
+    final rows = await dao.findUnresolvedForTopParent('p1');
     expect(rows.length, 1);
     expect(rows.first.parentUuid, 'p1');
   });
 
-  test('findPendingForTopParent finds attachments queued against parent '
+  test('findUnresolvedForTopParent finds attachments queued against parent '
       'AND against children of that parent', () async {
     final aParent = await dao.enqueue(
       parentDoctype: 'Survey',
@@ -89,7 +89,7 @@ void main() {
       localPath: '/tmp/other.jpg',
     );
 
-    final rows = await dao.findPendingForTopParent('survey-1');
+    final rows = await dao.findUnresolvedForTopParent('survey-1');
     final ids = rows.map((r) => r.id).toSet();
     expect(ids, {aParent, aChild});
   });
@@ -149,4 +149,101 @@ void main() {
       expect(row.topParentDoctype, 'Survey');
     },
   );
+
+  test('findUnresolvedForTopParent returns every non-done state', () async {
+    final ids = <int>[];
+    for (var i = 0; i < 4; i++) {
+      ids.add(
+        await dao.enqueue(
+          parentDoctype: 'Order',
+          parentUuid: 'P1',
+          parentFieldname: 'f$i',
+          topParentUuid: 'P1',
+          topParentDoctype: 'Order',
+          localPath: '/tmp/f$i',
+        ),
+      );
+    }
+    await dao.markUploading(ids[1]);
+    await dao.markDone(ids[2], serverFileName: 'n', serverFileUrl: '/files/n');
+    await dao.markRejected(ids[3], errorMessage: 'too large');
+
+    final unresolved = await dao.findUnresolvedForTopParent('P1');
+    expect(unresolved.map((r) => r.id), containsAll([ids[0], ids[1], ids[3]]));
+    expect(
+      unresolved.map((r) => r.id),
+      isNot(contains(ids[2])),
+      reason: 'done rows have no outstanding work',
+    );
+
+    final all = await dao.findAllForTopParent('P1');
+    expect(all.length, 4, reason: 'the resolution map needs done rows too');
+  });
+
+  test('markRejected is terminal and records an actionable reason', () async {
+    final id = await dao.enqueue(
+      parentDoctype: 'Order',
+      parentUuid: 'P1',
+      parentFieldname: 'photo',
+      topParentUuid: 'P1',
+      topParentDoctype: 'Order',
+      localPath: '/tmp/a',
+    );
+    await dao.markRejected(id, errorMessage: 'File size exceeded');
+    final row = (await dao.findById(id))!;
+    expect(row.state, AttachmentState.rejected);
+    expect(row.errorMessage, 'File size exceeded');
+    expect(row.retryCount, 1);
+  });
+
+  test('a rejected row still blocks: it is returned as unresolved', () async {
+    final id = await dao.enqueue(
+      parentDoctype: 'Order',
+      parentUuid: 'P1',
+      parentFieldname: 'photo',
+      topParentUuid: 'P1',
+      topParentDoctype: 'Order',
+      localPath: '/tmp/a',
+    );
+    await dao.markRejected(id, errorMessage: 'nope');
+    final unresolved = await dao.findUnresolvedForTopParent('P1');
+    expect(
+      unresolved.single.id,
+      id,
+      reason: 'silently skipping it is what shipped a raw marker to Frappe',
+    );
+  });
+
+  test('referencedLocalPaths returns paths from rows in EVERY state', () async {
+    // A failed or rejected row still owns its file — the user can retry or
+    // replace it. Only `done` rows have had their bytes moved to the cache, and
+    // even those must not be swept while the row exists.
+    final ids = <int>[];
+    for (var i = 0; i < 4; i++) {
+      ids.add(
+        await dao.enqueue(
+          parentDoctype: 'Order',
+          parentUuid: 'P1',
+          parentFieldname: 'f$i',
+          topParentUuid: 'P1',
+          topParentDoctype: 'Order',
+          localPath: '/outbox/u$i/file$i.jpg',
+        ),
+      );
+    }
+    await dao.markUploading(ids[1]);
+    await dao.markFailed(ids[2], errorMessage: 'net');
+    await dao.markRejected(ids[3], errorMessage: 'too big');
+
+    expect(await dao.referencedLocalPaths(), {
+      '/outbox/u0/file0.jpg',
+      '/outbox/u1/file1.jpg',
+      '/outbox/u2/file2.jpg',
+      '/outbox/u3/file3.jpg',
+    });
+  });
+
+  test('referencedLocalPaths is empty when nothing is queued', () async {
+    expect(await dao.referencedLocalPaths(), isEmpty);
+  });
 }

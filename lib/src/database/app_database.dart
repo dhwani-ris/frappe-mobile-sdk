@@ -21,7 +21,7 @@ typedef DatabaseFactoryResolver =
     );
 
 class AppDatabase {
-  static const int _version = 6;
+  static const int _version = 7;
 
   /// Singleton instance for the production (on-disk) database. The in-memory
   /// factory does NOT touch this — each call returns an independent instance
@@ -201,6 +201,45 @@ class AppDatabase {
     if (oldVersion < 6) {
       await _migrateV5ToV6(db);
     }
+    if (oldVersion < 7) {
+      await _migrateV6ToV7(db);
+    }
+  }
+
+  /// v6 → v7: add the `media_cache` content store.
+  ///
+  /// Nothing is backfilled. The cache is non-authoritative by construction —
+  /// an empty table just means every lookup is a miss and re-fetches on
+  /// demand — so there is no migration of existing files to perform.
+  ///
+  /// Existing `pending_attachments` rows keep working untouched: they store an
+  /// absolute `local_path`, so a file staged by an older build under the old
+  /// flat layout still uploads and still moves into the cache from wherever it
+  /// actually is.
+  static Future<void> _migrateV6ToV7(Database db) async {
+    await db.transaction((txn) async {
+      await txn.execute('''
+        CREATE TABLE IF NOT EXISTS media_cache (
+          file_url TEXT PRIMARY KEY,
+          local_path TEXT NOT NULL,
+          size_bytes INTEGER,
+          mime_type TEXT,
+          is_private INTEGER NOT NULL DEFAULT 1,
+          source TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          last_accessed_at INTEGER
+        )
+      ''');
+      await txn.execute(
+        'CREATE INDEX IF NOT EXISTS ix_media_cache_accessed ON media_cache(last_accessed_at)',
+      );
+      await txn.execute(
+        'CREATE INDEX IF NOT EXISTS ix_media_cache_source ON media_cache(source)',
+      );
+      await txn.rawUpdate(
+        'UPDATE sdk_meta SET schema_version = 7 WHERE id = 1',
+      );
+    });
   }
 
   /// v5 → v6: materialize Frappe's server-owned audit columns (`owner`,
@@ -505,9 +544,14 @@ class AppDatabase {
 
     // Singleton upsert — same shape as the migration to keep _onCreate
     // and _onUpgrade post-conditions identical.
+    //
+    // Uses the [version] argument rather than a literal: this was hardcoded to
+    // 6 and silently drifted from `_version` on the v6->v7 bump, leaving a
+    // fresh install reporting schema_version=6 while PRAGMA user_version said
+    // 7. Threading the parameter makes the two impossible to disagree.
     await exec.insert('sdk_meta', <String, Object?>{
       'id': 1,
-      'schema_version': 6,
+      'schema_version': version,
     }, conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
