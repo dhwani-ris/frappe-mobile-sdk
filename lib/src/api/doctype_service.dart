@@ -10,8 +10,21 @@ import 'exceptions.dart';
 import 'rest_helper.dart';
 import 'utils.dart';
 
+/// How many names [DoctypeService.listFullDocs] sends per bulk-fetch call.
+///
+/// Kept equal to the pull engine's page size and to `MAX_BATCH` in
+/// `mobile_control/api/bulk_fetch.py`, so one page of a child-bearing
+/// doctype costs one bulk call. The server read is set-based — one query
+/// for the parents plus one per child table — so the batch size no longer
+/// drives server work, only response size.
+const int defaultBulkFetchBatchSize = 1000;
+
 class DoctypeService {
   final RestHelper _restHelper;
+
+  /// Names per bulk-fetch call. Starts at [defaultBulkFetchBatchSize] and
+  /// is lowered — once — if the backend reports a smaller cap.
+  int _bulkFetchBatchSize = defaultBulkFetchBatchSize;
 
   DoctypeService(this._restHelper);
 
@@ -223,16 +236,33 @@ class DoctypeService {
     ];
     if (names.isEmpty) return [];
 
-    // Match the server's MAX_BATCH cap. Each chunk is a single HTTP
-    // round-trip, so this typically reduces a 1000-row pull from
-    // ~1001 calls (1 list + 1000 per-name GETs) down to ~6 calls.
-    const int chunkSize = 200;
+    // Match the server's MAX_BATCH cap (`mobile_control.api.bulk_fetch`),
+    // which equals the pull engine's page size — so one page is one call.
+    // It was 200, which cost five calls per page on top of the names
+    // query; each of those was ~1.1s against prod, and the three heavy
+    // Swasti doctypes all take this path.
     final docs = <Map<String, dynamic>>[];
-    for (var i = 0; i < names.length; i += chunkSize) {
+    var i = 0;
+    while (i < names.length) {
+      final chunkSize = _bulkFetchBatchSize;
       final chunk = names.sublist(i, math.min(i + chunkSize, names.length));
       List<Map<String, dynamic>> batch;
       try {
         batch = await bulkGetWithChildren(doctype, chunk);
+      } on ValidationException catch (e) {
+        // A backend still on the old cap rejects the batch by size. The
+        // app can outrun its server — a device updates from the store the
+        // moment the build is live, whether or not Frappe has been
+        // deployed — so back off to the cap it reports and re-send the
+        // same slice rather than stranding the doctype. The cap is kept on
+        // the service, so a full pull pays this discovery once and not
+        // once per page.
+        final cap = _batchCapFromError(e);
+        if (cap != null && cap > 0 && cap < chunkSize) {
+          _bulkFetchBatchSize = cap;
+          continue;
+        }
+        rethrow;
       } on ApiException catch (e) {
         // Older deployments may not have `mobile_control` (or have a
         // version without `mobile_sync.get_docs_with_children`). Fall
@@ -242,8 +272,25 @@ class DoctypeService {
         batch = await _perNameFallback(doctype, chunk);
       }
       docs.addAll(batch);
+      i += chunk.length;
     }
     return docs;
+  }
+
+  /// The batch cap a server advertises when it refuses an over-sized
+  /// request, or null when the failure was something else.
+  ///
+  /// Matched against the raw error body rather than
+  /// [FrappeException.message]: the message has been through
+  /// `toUserFriendlyMessage`, which rewrites text it recognises.
+  static int? _batchCapFromError(ValidationException e) {
+    final haystack = '${e.message} ${e.errors ?? ''}';
+    final match = RegExp(
+      r'exceeds limit of\s*(\d+)',
+      caseSensitive: false,
+    ).firstMatch(haystack);
+    if (match == null) return null;
+    return int.tryParse(match.group(1)!);
   }
 
   Future<List<Map<String, dynamic>>> _perNameFallback(

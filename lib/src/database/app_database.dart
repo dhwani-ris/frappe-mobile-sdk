@@ -199,9 +199,38 @@ class AppDatabase {
     }
   }
 
-  /// Configure database (enable foreign keys)
+  /// Configure database (enable foreign keys, switch to WAL).
+  ///
+  /// WAL matters because of the initial closure pull. A heavy Swasti
+  /// surveyor's first sync writes ~660,000 rows (104,082 parents +
+  /// 545,367 child rows, 296 MB — measured on prod 2026-08-19), one
+  /// transaction per page, and the default rollback journal creates,
+  /// fsyncs and deletes a journal file for every one of them. A device DB
+  /// pulled off that run reported `journal_mode=delete`; sqflite does not
+  /// set WAL for us.
+  ///
+  /// This is a pure win, not a trade: under WAL a committed transaction
+  /// still survives a process crash at the default `synchronous=FULL`,
+  /// which is left alone. Relaxing `synchronous` to NORMAL was measured
+  /// and deliberately NOT taken — the pull commits one transaction per
+  /// 1000-row page, so there are only ~700 commits in the whole sync and
+  /// fsync count is not where the time goes. The gain WAL does deliver is
+  /// write amplification: the rollback journal writes a pre-image of every
+  /// page it touches, and with seven indexes per table that roughly
+  /// doubles the bytes written. Measured 12-14% on the apply path
+  /// (`test/sync/pull_apply_journal_bench_test.dart`).
+  ///
+  /// `journal_mode` returns a row, so it must go through `rawQuery` —
+  /// `execute` swallows the result and, on some engines, the statement.
   static Future<void> _onConfigure(Database db) async {
     await db.execute('PRAGMA foreign_keys = ON');
+    try {
+      await db.rawQuery('PRAGMA journal_mode = WAL');
+    } catch (e, st) {
+      // A read-only or network-mounted file cannot switch journal modes.
+      // Losing the speed-up is survivable; failing to open is not.
+      debugPrint('AppDatabase: could not enable WAL — $e\n$st');
+    }
   }
 
   /// Fresh-install path. Builds every table in its final v3 shape.
@@ -413,4 +442,20 @@ class AppDatabaseTestSeam {
   ) => AppDatabase._onUpgrade(db, oldVersion, newVersion);
 
   static int get version => AppDatabase._version;
+
+  /// Opens a file-backed database at [path] through the production
+  /// callbacks. `inMemoryDatabase()` cannot stand in for this: SQLite
+  /// forces `journal_mode=memory` there, so pragma behaviour is
+  /// unobservable.
+  static Future<AppDatabase> openAt(String path) async {
+    final db = await openDatabase(
+      path,
+      version: AppDatabase._version,
+      onCreate: AppDatabase._onCreate,
+      onConfigure: AppDatabase._onConfigure,
+      onUpgrade: AppDatabase._onUpgrade,
+      singleInstance: false,
+    );
+    return AppDatabase._(db);
+  }
 }
