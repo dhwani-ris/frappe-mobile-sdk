@@ -158,17 +158,69 @@ class MetaService {
       final entity = await _database.doctypeMetaDao.findByDoctype(doctype);
       if (entity != null) {
         final meta = DocTypeMeta.fromJson(jsonDecode(entity.metaJson));
-        _putInCache(doctype, meta);
-        return meta;
+        // A cached meta with nothing renderable in it is a DEAD END, not a hit.
+        //
+        // This lookup is local-first, so whatever is in SQLite wins forever —
+        // and a row can legitimately get there empty: persisted before the user
+        // had read permission on the doctype, written by an older server that
+        // answered `getdoctype` differently, or truncated by a partial sync.
+        // From then on every form for that doctype renders
+        // "No fields to display" and no amount of reopening, `flutter clean` or
+        // reinstalling fixes it, because nothing ever asks the server again.
+        //
+        // Seen on `Assaying Parameters Child`: the server returns 5 fields with
+        // `parameter_name` visible, while the device showed an empty sheet.
+        //
+        // Treat it as a miss and re-fetch. Costs one request in the broken case
+        // and nothing at all in the normal one.
+        if (_hasRenderableFields(meta)) {
+          _putInCache(doctype, meta);
+          return meta;
+        }
+        sdkLog(
+          'MetaService: cached meta for "$doctype" has no renderable fields — '
+          're-fetching from the server rather than serving an empty form.',
+        );
       }
     }
 
-    final metaData = await _fetchMetaFromServer(doctype);
+    final Map<String, dynamic> metaData;
+    try {
+      metaData = await _fetchMetaFromServer(doctype);
+    } catch (e) {
+      // Offline, or the server refused. Fall back to whatever is cached — an
+      // empty form is still better than an exception the caller cannot handle,
+      // and this path only runs when the cache was already unusable.
+      //
+      // NEVER on forceRefresh: that contract is "bypass cache AND DB and hit
+      // the server", so a caller who asked for fresh metadata has to be told
+      // the fetch failed rather than handed the stale row it just rejected.
+      if (forceRefresh) rethrow;
+      final entity = await _database.doctypeMetaDao.findByDoctype(doctype);
+      if (entity != null) {
+        final meta = DocTypeMeta.fromJson(jsonDecode(entity.metaJson));
+        _putInCache(doctype, meta);
+        return meta;
+      }
+      rethrow;
+    }
     final meta = DocTypeMeta.fromJson(metaData);
     await _upsertMetaJson(doctype, metaData);
     _putInCache(doctype, meta);
     return meta;
   }
+
+  /// Whether [meta] describes a form that can actually render something.
+  ///
+  /// Layout breaks alone are not enough: a meta consisting only of Section/Tab
+  /// breaks produces no tabs in `FrappeFormBuilder._buildTabsFor` and lands on
+  /// the same "No fields to display" dead end as an empty list.
+  static bool _hasRenderableFields(DocTypeMeta meta) => meta.fields.any(
+    (f) =>
+        f.fieldtype != 'Section Break' &&
+        f.fieldtype != 'Column Break' &&
+        f.fieldtype != 'Tab Break',
+  );
 
   /// Prefetch doctypes into DB only (no in-memory cache). Use instead of loading all into memory.
   Future<void> prefetchToDb(List<String> doctypes) async {
@@ -356,7 +408,17 @@ class MetaService {
       final existing = await _database.doctypeMetaDao.findByDoctype(doctype);
 
       if (existing != null) {
-        // Check if timestamp is newer
+        // Has the server's mobile-config stamp for this doctype MOVED since
+        // the last time we recorded it?
+        //
+        // This is deliberately server-vs-server. `doctype_meta_modified_at`
+        // and the row's `modified` are NOT the same clock and must never be
+        // compared: `modified` is the DocType document's own timestamp (from
+        // `getdoctype`'s `docs[0].modified`), while `doctype_meta_modified_at`
+        // tracks the mobile configuration for that doctype. In practice they
+        // sit 47 minutes apart for `Farmer Registration` and FOURTEEN MONTHS
+        // apart for `State`, so a cross-clock comparison reports every doctype
+        // as permanently stale and re-fetches all of them on every launch.
         final serverModifiedAt = mfn.doctypeMetaModifiedAt;
         final needsSync =
             serverModifiedAt != null &&
@@ -368,11 +430,25 @@ class MetaService {
                   existing.serverModifiedAt!,
                 ));
 
-        // Update existing entry with mobile form info
+        // Update existing entry with mobile form info.
+        //
+        // `serverModifiedAt` is deliberately PRESERVED here, not advanced to
+        // `mfn.doctypeMetaModifiedAt`. This row is about to be queued for a
+        // re-fetch that can fail — 401, 417 and transport errors are all live
+        // on this wire, and the fetch loop below catches per doctype and
+        // continues. Advancing the stamp now would mark the doctype fresh while
+        // it still holds the OLD `metaJson`: on the next launch the server's
+        // stamp equals the row's, `needsSync` is false, `metaJson` is non-empty
+        // so the placeholder escape hatch does not fire either, and the doctype
+        // is stale FOREVER — one transient network blip permanently poisons it.
+        //
+        // The stamp is advanced by `resyncMobileConfiguration` only after
+        // `fetchAndStoreInDb` has actually returned, via
+        // `doctypeMetaDao.setServerModifiedAt`.
         final updatedMeta = DoctypeMetaEntity(
           doctype: doctype,
           modified: existing.modified,
-          serverModifiedAt: mfn.doctypeMetaModifiedAt,
+          serverModifiedAt: existing.serverModifiedAt,
           isMobileForm: true,
           metaJson: existing.metaJson,
           groupName: mfn.groupName,
@@ -577,8 +653,18 @@ class MetaService {
       // Update mobile form doctypes and get list of doctypes to sync
       final doctypesToSync = await _updateMobileFormDoctypes(scopedFormNames);
 
-      // Sync all doctypes that need updating
+      // Sync all doctypes that need updating.
+      //
+      // The staleness stamp is advanced HERE, per doctype, and only once the
+      // fetch has actually landed — see the note in `_updateMobileFormDoctypes`
+      // on why writing it at queue time permanently poisons a row whose fetch
+      // fails. A doctype that throws keeps its OLD stamp, so the next launch
+      // sees the server's newer stamp and queues it again.
       if (doctypesToSync.isNotEmpty) {
+        final stampFor = <String, String?>{
+          for (final m in scopedFormNames)
+            m.mobileDoctype: m.doctypeMetaModifiedAt,
+        };
         for (final doctype in doctypesToSync) {
           try {
             await fetchAndStoreInDb(doctype);
@@ -588,6 +674,10 @@ class MetaService {
             );
             onMetaSyncFailure?.call(doctype, e);
             continue;
+          }
+          final stamp = stampFor[doctype];
+          if (stamp != null && stamp.isNotEmpty) {
+            await _database.doctypeMetaDao.setServerModifiedAt(doctype, stamp);
           }
         }
       }

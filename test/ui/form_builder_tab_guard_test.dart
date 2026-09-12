@@ -75,14 +75,85 @@ void main() {
   );
 
   testWidgets(
-    'didUpdateWidget rebuilds when a Tab Break is hidden — same raw count, '
-    'different effective count (M7)',
+    'didUpdateWidget rebuilds when the implicit leading tab appears — same raw '
+    'count, different effective count (M7)',
     (WidgetTester tester) async {
-      // Both metas have the SAME raw Tab Break field count (3) and the same
-      // name, so the old static _tabCount guard would NOT fire. But hiding one
-      // Tab Break drops the effective tab count to 2, which _effectiveTabCount
-      // detects — without it the TabController(length:3) would outlive a
-      // TabBar rendering 2 tabs and assert.
+      // Both metas carry the SAME raw Tab Break count (2) and the same name, so
+      // the old static _tabCount guard would NOT fire. Moving a data field to
+      // sit BEFORE the first Tab Break makes the builder synthesise an implicit
+      // leading "Details" tab, taking the effective count to 3 — which
+      // _effectiveTabCount detects. Without it a TabController(length:3) would
+      // outlive a TabBar rendering 2 tabs and assert.
+      //
+      // This used to be exercised by hiding a middle Tab Break. That no longer
+      // changes the count: a hidden layout break keeps its container, so the
+      // tab is still produced (see `_buildTabsFor`). The implicit leading tab
+      // is now the remaining case where effective and raw counts differ, and it
+      // is what keeps this guard honest.
+      DocField tab(int i) => DocField(
+        fieldname: 'tab_$i',
+        fieldtype: 'Tab Break',
+        label: 'Tab ${i + 1}',
+      );
+      DocField data(int i) =>
+          DocField(fieldname: 'field_$i', fieldtype: 'Data', label: 'F$i');
+
+      DocTypeMeta meta({required bool leadingContent}) => DocTypeMeta(
+        name: 'SameDoc',
+        fields: [
+          if (leadingContent) data(9),
+          tab(0),
+          if (!leadingContent) data(9),
+          data(0),
+          tab(1),
+          data(1),
+        ],
+      );
+
+      DocTypeMeta currentMeta = meta(leadingContent: true); // 3 effective tabs
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: StatefulBuilder(
+              builder: (context, setState) {
+                return Column(
+                  children: [
+                    ElevatedButton(
+                      key: const ValueKey('drop_leading'),
+                      onPressed: () => setState(
+                        () => currentMeta = meta(leadingContent: false),
+                      ),
+                      child: const Text('Drop'),
+                    ),
+                    Expanded(child: FrappeFormBuilder(meta: currentMeta)),
+                  ],
+                );
+              },
+            ),
+          ),
+        ),
+      );
+
+      await tester.pumpAndSettle();
+      expect(find.byType(Tab), findsNWidgets(3));
+
+      await tester.tap(find.byKey(const ValueKey('drop_leading')));
+      await tester.pumpAndSettle();
+
+      // Effective count dropped to 2; controller rebuilt, no assertion.
+      expect(find.byType(Tab), findsNWidgets(2));
+    },
+  );
+
+  testWidgets(
+    'hiding a Tab Break keeps its tab, so the effective count does not change '
+    '(M7b)',
+    (WidgetTester tester) async {
+      // Pins the boundary rule from the other direction: `hidden` on a layout
+      // break suppresses nothing structural here, so the tab survives and the
+      // TabController length is unchanged. Frappe Desk likewise constructs the
+      // container regardless of `hidden` (layout.js render() -> make_tab).
       DocField tab(int i, {bool hidden = false}) => DocField(
         fieldname: 'tab_$i',
         fieldtype: 'Tab Break',
@@ -104,7 +175,7 @@ void main() {
         ],
       );
 
-      DocTypeMeta currentMeta = meta(hideMiddle: false); // 3 effective tabs
+      DocTypeMeta currentMeta = meta(hideMiddle: false);
 
       await tester.pumpWidget(
         MaterialApp(
@@ -134,8 +205,12 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('hide_tab')));
       await tester.pumpAndSettle();
 
-      // Effective tab count dropped to 2; controller rebuilt, no assertion.
-      expect(find.byType(Tab), findsNWidgets(2));
+      expect(
+        find.byType(Tab),
+        findsNWidgets(3),
+        reason: 'the hidden Tab Break still opens its container',
+      );
+      expect(tester.takeException(), isNull);
     },
   );
 }

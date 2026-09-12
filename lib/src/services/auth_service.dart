@@ -491,7 +491,26 @@ class AuthService {
           final updatedMeta = DoctypeMetaEntity(
             doctype: doctype,
             modified: existingMeta.modified,
-            serverModifiedAt: mfn.doctypeMetaModifiedAt,
+            // PRESERVE the recorded stamp — do NOT advance it to
+            // `mfn.doctypeMetaModifiedAt` here.
+            //
+            // `serverModifiedAt` is the staleness signal: `MetaService.
+            // _updateMobileFormDoctypes` decides whether to re-fetch a
+            // doctype's schema by asking whether the server's current stamp is
+            // NEWER than the one on this row. Writing the current stamp here,
+            // while deliberately keeping the OLD `metaJson` two lines below,
+            // made those two values equal before anything compared them — so
+            // `needsSync` was false forever and a doctype whose schema had
+            // changed was never re-fetched. On a real device this left
+            // forms rendering fields hours behind the desk,
+            // and a majority of cached doctypes stale, reported as the mobile
+            // forms "not being in parity with the desk".
+            //
+            // Advancing the stamp is `_updateMobileFormDoctypes`'s job,
+            // because that is the one place that also queues the re-fetch.
+            // Login's job is the mobile-form LIST (isMobileForm, groupName,
+            // sortOrder), which is what the rest of this entity carries.
+            serverModifiedAt: existingMeta.serverModifiedAt,
             isMobileForm: true,
             metaJson: existingMeta.metaJson,
             groupName: mfn.groupName,

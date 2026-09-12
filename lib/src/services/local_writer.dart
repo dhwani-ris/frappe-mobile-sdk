@@ -404,6 +404,23 @@ class LocalWriter {
       final childTable = normalizeDoctypeTableName(childInfo.doctype);
       if (!await sqliteTableExists(txn, childTable)) continue;
 
+      // Columns this child table ACTUALLY has, which is not the same set as
+      // the columns its meta declares. `saveDocument` heals drift on the
+      // PARENT table only (`reconcileParentTableForMeta`) — there is no child
+      // equivalent anywhere in the SDK — so a child doctype that gained a
+      // field after this table was created still has a table without that
+      // column. Writing the meta's view of the fields would then throw
+      // `no such column` from inside this transaction and fail the WHOLE
+      // save, losing the parent record too.
+      //
+      // Read from `txn`, never the outer Database: a query through the outer
+      // handle while this transaction holds the sqflite write queue deadlocks.
+      final childColumns = <String>{};
+      for (final r in await txn.rawQuery('PRAGMA table_info($childTable)')) {
+        final n = r['name'] as String?;
+        if (n != null) childColumns.add(n);
+      }
+
       await txn.delete(
         childTable,
         where: 'parent_uuid = ? AND parentfield = ?',
@@ -442,6 +459,17 @@ class LocalWriter {
           if (cSqlType == null) continue;
           if (_systemChildColumns.contains(cn)) continue;
           if (!cr.containsKey(cn)) continue;
+          if (!childColumns.contains(cn)) {
+            // Drifted schema (see the PRAGMA above). Skip the field rather
+            // than fail the save, and say so — a silently dropped value is
+            // exactly the kind of thing that surfaces later as "the data went
+            // missing".
+            sdkLog(
+              'LocalWriter.writeParentInTxn: $childTable has no column "$cn" '
+              '(schema drift) — dropping that value for this row',
+            );
+            continue;
+          }
 
           var v = _coerce(cr[cn], cSqlType);
           v = await queueIfLocalAttachment(

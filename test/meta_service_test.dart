@@ -322,6 +322,197 @@ void main() {
         expect(survey?.isMobileForm, isFalse);
       },
     );
+
+    // Regression: `serverModifiedAt` IS the staleness signal. A newer stamp
+    // from the server must queue a re-fetch — login used to advance this
+    // column while keeping the old `metaJson`, equalising the two values
+    // before anything compared them, which left QA seeing mobile forms
+    // rendering fields nine hours behind the web desk.
+    test('a NEWER server stamp queues a re-fetch', () async {
+      final db = await AppDatabase.inMemoryDatabase();
+      final metaService = MetaService(FrappeClient('https://fake.test'), db);
+
+      await db.doctypeMetaDao.insertDoctypeMeta(
+        DoctypeMetaEntity(
+          doctype: 'Sales Order',
+          modified: '2026-08-26 13:53:34',
+          serverModifiedAt: '2026-08-26 13:53:34',
+          isMobileForm: true,
+          metaJson: '{"fields":[{"fieldname":"a","fieldtype":"Data"}]}',
+          groupName: 'Farmer',
+          sortOrder: 0,
+        ),
+      );
+
+      final toSync = await metaService.updateMobileFormDoctypesForTest([
+        const MobileFormName(
+          mobileDoctype: 'Sales Order',
+          groupName: 'Farmer',
+          doctypeMetaModifiedAt: '2026-08-26 22:42:50',
+          doctypeIcon: null,
+        ),
+      ]);
+
+      expect(toSync, contains('Sales Order'));
+    });
+
+    // THE POISON GUARD. The previous fix stopped LOGIN from advancing the
+    // stamp, but `_updateMobileFormDoctypes` still advanced it in the same
+    // breath as queuing the re-fetch — so a doctype whose `getdoctype` then
+    // failed (401/417/transport are all live on this wire) was left marked
+    // fresh while holding the OLD metaJson, and nothing re-queued it ever
+    // again. Asserting the RETURN VALUE alone cannot catch that; this re-reads
+    // the row.
+    test('queuing a re-fetch must NOT advance the stamp', () async {
+      final db = await AppDatabase.inMemoryDatabase();
+      final metaService = MetaService(FrappeClient('https://fake.test'), db);
+
+      await db.doctypeMetaDao.insertDoctypeMeta(
+        DoctypeMetaEntity(
+          doctype: 'Sales Order',
+          modified: '2026-08-26 13:53:34',
+          serverModifiedAt: '2026-08-26 13:53:34',
+          isMobileForm: true,
+          metaJson: '{"fields":[{"fieldname":"a","fieldtype":"Data"}]}',
+          groupName: 'Farmer',
+          sortOrder: 0,
+        ),
+      );
+
+      final toSync = await metaService.updateMobileFormDoctypesForTest([
+        const MobileFormName(
+          mobileDoctype: 'Sales Order',
+          groupName: 'Farmer',
+          doctypeMetaModifiedAt: '2026-08-26 22:42:50',
+          doctypeIcon: null,
+        ),
+      ]);
+
+      expect(toSync, contains('Sales Order'));
+
+      final row = await db.doctypeMetaDao.findByDoctype('Sales Order');
+      expect(
+        row!.serverModifiedAt,
+        '2026-08-26 13:53:34',
+        reason:
+            'the stamp may only advance AFTER fetchAndStoreInDb succeeds; '
+            'advancing it at queue time permanently strands a failed fetch',
+      );
+      expect(
+        row.metaJson,
+        contains('fieldname'),
+        reason: 'queuing must not disturb the cached schema',
+      );
+    });
+
+    // A doctype that stays queued across launches is the whole point: prove the
+    // preserved stamp still reports stale on the NEXT pass.
+    test('a doctype left unfetched is queued again on the next pass', () async {
+      final db = await AppDatabase.inMemoryDatabase();
+      final metaService = MetaService(FrappeClient('https://fake.test'), db);
+
+      await db.doctypeMetaDao.insertDoctypeMeta(
+        DoctypeMetaEntity(
+          doctype: 'Purchase Order',
+          modified: '2026-08-26 10:26:46',
+          serverModifiedAt: '2026-08-26 10:26:46',
+          isMobileForm: true,
+          metaJson: '{"fields":[{"fieldname":"a","fieldtype":"Data"}]}',
+          groupName: 'PC',
+          sortOrder: 0,
+        ),
+      );
+
+      const server = [
+        MobileFormName(
+          mobileDoctype: 'Purchase Order',
+          groupName: 'PC',
+          doctypeMetaModifiedAt: '2026-08-26 22:42:53',
+          doctypeIcon: null,
+        ),
+      ];
+
+      expect(
+        await metaService.updateMobileFormDoctypesForTest(server),
+        contains('Purchase Order'),
+      );
+      // Second pass, fetch still never happened.
+      expect(
+        await metaService.updateMobileFormDoctypesForTest(server),
+        contains('Purchase Order'),
+        reason: 'an unfetched doctype must not go quiet after one attempt',
+      );
+    });
+
+    // The stamp DOES advance once the fetch has landed — otherwise the doctype
+    // would re-queue on every launch forever.
+    test('setServerModifiedAt advances the stamp and stops the re-queue',
+        () async {
+      final db = await AppDatabase.inMemoryDatabase();
+      final metaService = MetaService(FrappeClient('https://fake.test'), db);
+
+      await db.doctypeMetaDao.insertDoctypeMeta(
+        DoctypeMetaEntity(
+          doctype: 'Purchase Order',
+          modified: '2026-08-26 10:26:46',
+          serverModifiedAt: '2026-08-26 10:26:46',
+          isMobileForm: true,
+          metaJson: '{"fields":[{"fieldname":"a","fieldtype":"Data"}]}',
+          groupName: 'PC',
+          sortOrder: 0,
+        ),
+      );
+
+      // Simulate a SUCCESSFUL fetch completing.
+      await db.doctypeMetaDao.setServerModifiedAt(
+        'Purchase Order',
+        '2026-08-26 22:42:53',
+      );
+
+      final toSync = await metaService.updateMobileFormDoctypesForTest([
+        const MobileFormName(
+          mobileDoctype: 'Purchase Order',
+          groupName: 'PC',
+          doctypeMetaModifiedAt: '2026-08-26 22:42:53',
+          doctypeIcon: null,
+        ),
+      ]);
+
+      expect(toSync, isNot(contains('Purchase Order')));
+    });
+
+    // Guards the OTHER direction: `modified` is the DocType document's own
+    // timestamp and runs on a DIFFERENT clock from the mobile-config stamp
+    // (observed months apart on some doctypes). Letting it leak into the
+    // decision reports every doctype as permanently stale and re-fetches all
+    // of them on every launch.
+    test('an older `modified` is NOT staleness — different clock', () async {
+      final db = await AppDatabase.inMemoryDatabase();
+      final metaService = MetaService(FrappeClient('https://fake.test'), db);
+
+      await db.doctypeMetaDao.insertDoctypeMeta(
+        DoctypeMetaEntity(
+          doctype: 'State',
+          modified: '2025-06-24 14:52:59',
+          serverModifiedAt: '2026-08-26 22:43:00',
+          isMobileForm: true,
+          metaJson: '{"fields":[{"fieldname":"a","fieldtype":"Data"}]}',
+          groupName: 'Masters',
+          sortOrder: 0,
+        ),
+      );
+
+      final toSync = await metaService.updateMobileFormDoctypesForTest([
+        const MobileFormName(
+          mobileDoctype: 'State',
+          groupName: 'Masters',
+          doctypeMetaModifiedAt: '2026-08-26 22:43:00',
+          doctypeIcon: null,
+        ),
+      ]);
+
+      expect(toSync, isNot(contains('State')));
+    });
   });
 
   group('MetaService.getMobileFormGroups', () {

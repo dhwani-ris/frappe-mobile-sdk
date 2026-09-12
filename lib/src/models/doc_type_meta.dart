@@ -74,9 +74,14 @@ class DocTypeMeta {
         debugPrint(
           'DocTypeMeta.fromJson: DocField parse failed (${field is Map ? field['fieldname'] : 'unknown'}) — $e\n$st',
         );
+        // Keep the raw payload even on the fallback: several app screens read
+        // `meta.toJson()['fields']` and expect full-fidelity maps, and toJson()
+        // replays unmodelled keys from `rawData`. Without this a field that
+        // fails typed parsing would serialise to a two-key stub.
         return DocField(
           fieldname: field['fieldname'] as String?,
           fieldtype: field['fieldtype'] as String? ?? 'Data',
+          rawData: field is Map<String, dynamic> ? field : null,
         );
       }
     }).toList();
@@ -116,12 +121,36 @@ class DocTypeMeta {
   }
 
   Map<String, dynamic> toJson() {
+    // `metaData` is the ENTIRE raw payload this meta was parsed from (see
+    // fromJson), so it carries its own `fields` list. It MUST be spread FIRST:
+    // a later key wins in a Dart map literal, so spreading it last made the raw
+    // payload overwrite `fields` below, and every edit to the typed `fields`
+    // list was silently discarded by the next
+    // `DocTypeMeta.fromJson(meta.toJson())` round-trip — which is exactly what
+    // the render path does before drawing a form. Client scripts that strip or
+    // reorder fields therefore appeared to work and changed nothing on screen.
+    //
+    // `fields` and the `isTable` alias are dropped from the passthrough so the
+    // typed values below are authoritative. Everything else in the raw payload
+    // (permissions, issingle, is_submittable, __workflow_docs, …) still flows
+    // through untouched, and the guarded keys below intentionally fall back to
+    // the raw value when the typed one is null.
+    final passthrough = <String, dynamic>{};
+    final raw = metaData;
+    if (raw != null) {
+      for (final entry in raw.entries) {
+        if (entry.key != 'fields' && entry.key != 'isTable') {
+          passthrough[entry.key] = entry.value;
+        }
+      }
+    }
+
     return {
+      ...passthrough,
       'name': name,
       if (label != null) 'label': label,
       'fields': fields.map((f) => f.toJson()).toList(),
       'istable': isTable ? 1 : 0,
-      ...?metaData,
       if (titleField != null) 'title_field': titleField,
       if (sortField != null) 'sort_field': sortField,
       if (sortOrder != null) 'sort_order': sortOrder,

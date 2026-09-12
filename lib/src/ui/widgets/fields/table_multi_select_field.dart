@@ -169,11 +169,23 @@ class _LoaderState extends State<_Loader> {
 
   List<String> get _selected {
     if (_linkFieldName == null) return [];
-    return widget.rows
-        .whereType<Map<String, dynamic>>()
-        .map((r) => r[_linkFieldName]?.toString() ?? '')
-        .where((v) => v.isNotEmpty)
-        .toList();
+    // De-duplicated, first-occurrence order preserved.
+    //
+    // A Table MultiSelect is a SET on the web side — Frappe's own control
+    // cannot hold the same link twice. The mobile rows can, though: the parent
+    // may re-emit an already-selected value, and a server payload can carry
+    // repeats. Without this the same month rendered as two chips
+    // ("February" twice in Sowing/Harvesting/Processing Season), and because
+    // [_emitCleanValue] writes `_selected` straight back into _formData the
+    // duplicate PERSISTED and compounded on every subsequent emit.
+    final seen = <String>{};
+    final out = <String>[];
+    for (final r in widget.rows.whereType<Map<String, dynamic>>()) {
+      final v = r[_linkFieldName]?.toString() ?? '';
+      if (v.isEmpty) continue;
+      if (seen.add(v)) out.add(v);
+    }
+    return out;
   }
 
   @override

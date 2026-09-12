@@ -144,6 +144,22 @@ class DoctypeMetaDao {
   Future<String?> getTableName(String doctype) =>
       _readStringCol(doctype, 'table_name');
 
+  /// Advances the mobile-config staleness stamp for [doctype].
+  ///
+  /// Call this ONLY after the schema fetch it authorises has actually
+  /// succeeded. `serverModifiedAt` is the signal `_updateMobileFormDoctypes`
+  /// uses to decide whether to re-fetch; writing it before the fetch lands
+  /// marks a doctype fresh while it still holds the old `metaJson`, and nothing
+  /// ever re-queues it.
+  Future<void> setServerModifiedAt(String doctype, String serverModifiedAt) async {
+    await _database.update(
+      'doctype_meta',
+      <String, Object?>{'serverModifiedAt': serverModifiedAt},
+      where: 'doctype = ?',
+      whereArgs: [doctype],
+    );
+  }
+
   Future<void> setMetaWatermark(String doctype, String watermark) async {
     await _database.update(
       'doctype_meta',

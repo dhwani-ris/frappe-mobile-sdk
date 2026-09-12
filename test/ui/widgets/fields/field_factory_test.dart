@@ -92,7 +92,7 @@ void main() {
     final widget = factory.createField(
       field: fieldOf('Table'),
       getMeta: (_) async => DocTypeMeta(name: 'X', fields: const []),
-      childTableFormBuilder: (meta, initialData, onSaved, {registerSubmit}) =>
+      childTableFormBuilder: (meta, initialData, onSaved, {registerSubmit, bool readOnly = false}) =>
           throw UnimplementedError(),
     );
     expect(widget, isA<Object>());

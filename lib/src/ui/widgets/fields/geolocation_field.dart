@@ -1,6 +1,6 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
+import '../../../utils/geo_json.dart';
 import 'base_field.dart';
 
 /// Frappe Geolocation field — fetches live GPS coordinates and stores them
@@ -69,43 +69,10 @@ class _GeolocationFieldWidgetState extends State<_GeolocationFieldWidget> {
 
   /// Parse existing GeoJSON value to extract coordinates for display.
   void _parseExistingValue() {
-    final val = widget.value;
-    if (val == null || val.toString().trim().isEmpty) return;
-    try {
-      final Map<String, dynamic> geo = val is Map<String, dynamic>
-          ? val
-          : jsonDecode(val.toString());
-      final features = geo['features'] as List?;
-      if (features != null && features.isNotEmpty) {
-        final geometry = features[0]['geometry'] as Map<String, dynamic>?;
-        if (geometry != null && geometry['type'] == 'Point') {
-          final coords = geometry['coordinates'] as List;
-          // GeoJSON is [longitude, latitude]
-          _longitude = (coords[0] as num).toDouble();
-          _latitude = (coords[1] as num).toDouble();
-        }
-      }
-    } catch (e, st) {
-      // Ignore parse errors for existing value, but surface them.
-      debugPrint('GeolocationField._parseExistingValue failed — $e\n$st');
-    }
-  }
-
-  /// Build GeoJSON FeatureCollection string with a single Point feature.
-  String _toGeoJson(double latitude, double longitude) {
-    return jsonEncode({
-      'type': 'FeatureCollection',
-      'features': [
-        {
-          'type': 'Feature',
-          'geometry': {
-            'type': 'Point',
-            'coordinates': [longitude, latitude],
-          },
-          'properties': {},
-        },
-      ],
-    });
+    final point = parseGeoJsonPoint(widget.value);
+    if (point == null) return;
+    _latitude = point.latitude;
+    _longitude = point.longitude;
   }
 
   Future<void> _fetchLocation() async {
@@ -169,7 +136,10 @@ class _GeolocationFieldWidgetState extends State<_GeolocationFieldWidget> {
       }
 
       final pos = position;
-      final geoJson = _toGeoJson(pos.latitude, pos.longitude);
+      final geoJson = geoJsonPoint(
+        latitude: pos.latitude,
+        longitude: pos.longitude,
+      );
 
       setState(() {
         _latitude = pos.latitude;

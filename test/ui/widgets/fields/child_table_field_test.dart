@@ -14,6 +14,7 @@ Future<void> _pump(
   ValueChanged<List<dynamic>>? onChanged,
   bool enabled = true,
   Future<DocTypeMeta> Function(String)? getMeta,
+  ChildTableFormBuilder? formBuilder,
 }) async {
   await tester.pumpWidget(
     MaterialApp(
@@ -25,6 +26,7 @@ Future<void> _pump(
             onChanged: onChanged,
             enabled: enabled,
             getMeta: getMeta,
+            formBuilder: formBuilder,
           ),
         ),
       ),
@@ -167,5 +169,108 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(find.text('Pretty title'), findsOneWidget);
+  });
+
+  testWidgets(
+    'tapping row on readOnly field opens read-only sheet with Close button',
+    (tester) async {
+      final readField = DocField(
+        fieldname: 'items',
+        fieldtype: 'Table',
+        label: 'Items',
+        options: 'Order Item',
+        readOnly: true,
+      );
+      bool formBuilderSawReadOnly = false;
+      await _pump(
+        tester,
+        field: readField,
+        rows: const [
+          {'item_code': 'SKU-1', 'qty': 2},
+        ],
+        enabled: false,
+        getMeta: (_) async => DocTypeMeta(name: 'Order Item', fields: const []),
+        formBuilder:
+            (
+              meta,
+              initialData,
+              onSubmit, {
+              registerSubmit,
+              bool readOnly = false,
+            }) {
+              formBuilderSawReadOnly = readOnly;
+              return const Text('ChildFormContent');
+            },
+      );
+      await tester.pumpAndSettle();
+
+      // Tap the row
+      await tester.tap(find.text('SKU-1'));
+      await tester.pumpAndSettle();
+
+      // Assert read-only bottom sheet opens
+      expect(find.text('View Order Item'), findsOneWidget);
+      expect(find.text('ChildFormContent'), findsOneWidget);
+      expect(find.text('Close'), findsOneWidget);
+      expect(find.text('Save'), findsNothing);
+      expect(find.text('Remove'), findsNothing);
+      expect(formBuilderSawReadOnly, isTrue);
+
+      // Close the sheet
+      await tester.tap(find.text('Close'));
+      await tester.pumpAndSettle();
+      expect(find.text('View Order Item'), findsNothing);
+    },
+  );
+
+  group('heading when the server sends no label', () {
+    // Server metadata routinely omits `label` on child Table fields. The
+    // heading then fell through to the raw fieldname, so an operator opening a
+    // Procurement Hundi Verification saw "assaying_parameters" as a section
+    // heading. `??` cannot catch a label that is present but empty or
+    // zero-width either; DocField.displayLabel handles all three.
+    testWidgets('a null label renders a humanised fieldname', (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: ChildTableField(
+              field: DocField(
+                fieldname: 'assaying_parameters',
+                fieldtype: 'Table',
+                options: 'Assaying Parameters Child',
+              ),
+              value: const [],
+              onChanged: (_) {},
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Assaying Parameters'), findsOneWidget);
+      expect(find.text('assaying_parameters'), findsNothing);
+    });
+
+    testWidgets('a real label is never overridden', (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: ChildTableField(
+              field: DocField(
+                fieldname: 'assaying_parameters',
+                fieldtype: 'Table',
+                label: 'Assaying',
+                options: 'Assaying Parameters Child',
+              ),
+              value: const [],
+              onChanged: (_) {},
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Assaying'), findsOneWidget);
+    });
   });
 }

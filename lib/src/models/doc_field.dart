@@ -36,6 +36,69 @@ class DocField {
   /// build column lists must skip it.
   final bool isVirtual;
 
+  /// The raw docfield payload this instance was parsed from, if any.
+  ///
+  /// Retained so [toJson] can round-trip the Frappe docfield properties this
+  /// class does NOT model (`permlevel`, `collapsible`, `allow_on_submit`,
+  /// `unique`, `no_copy`, `translatable`, …). [DocTypeMeta.toJson] is what
+  /// `MetaService` persists into the local meta cache, so a lossy field
+  /// serialisation would silently drop those properties on the next cold start.
+  ///
+  /// Only UNMODELLED keys are replayed — see [_managedKeys]. The modelled
+  /// properties above are always authoritative, so an edited [DocField]
+  /// serialises with its edit intact.
+  ///
+  /// Holds the same map instance [fromJson] received (which `DocTypeMeta`
+  /// already retains via `metaData`), so this adds no meaningful memory. It is
+  /// never mutated.
+  final Map<String, dynamic>? rawData;
+
+  /// Keys [toJson] always writes itself, including the camelCase aliases
+  /// [fromJson] accepts.
+  ///
+  /// The aliases MUST be dropped from the raw passthrough. `fromJson` resolves
+  /// several properties as `snake_case || camelCase` (e.g. `readOnly` at :90,
+  /// `inListView` at :112), so replaying a stale `readOnly: 1` alongside a
+  /// freshly written `read_only: 0` would resurrect the old value and defeat the
+  /// edit.
+  static const Set<String> _managedKeys = <String>{
+    'fieldname',
+    'fieldtype',
+    'label',
+    'reqd',
+    'read_only', 'readOnly',
+    'hidden',
+    'options',
+    'depends_on', 'dependsOn',
+    'mandatory_depends_on', 'mandatoryDependsOn',
+    'read_only_depends_on', 'readOnlyDependsOn',
+    'link_filters', 'linkFilters',
+    'fetch_from', 'fetchFrom',
+    'section',
+    'default', 'defaultValue',
+    'description',
+    'placeholder',
+    'precision',
+    'length',
+    'idx',
+    'in_list_view', 'inListView',
+    'allow_multiple', 'allowMultiple',
+    'search_index', 'searchIndex',
+    'is_virtual', 'isVirtual',
+
+    // NOT a scalar property: Frappe puts a nested `fields` list on every
+    // docfield (the child doctype's own columns, for a Table field). It is
+    // dropped rather than replayed, because two app code paths branch on its
+    // presence and have been dormant precisely because this serialisation never
+    // emitted it — `ClientScriptHandler.applyLinkFiltersToChildField` and
+    // `readonly_mandatory_fetch_from_prefill._childColumns`. Replaying it would
+    // wake both across every child-table doctype as a side effect of a
+    // serialisation fix, with no test coverage. Verified no other consumer
+    // reads nested child fields, so dropping it preserves today's behaviour
+    // exactly. Waking those paths deserves its own change.
+    'fields',
+  };
+
   DocField({
     this.fieldname,
     required this.fieldtype,
@@ -60,6 +123,7 @@ class DocField {
     this.allowMultiple = false,
     this.searchIndex = false,
     this.isVirtual = false,
+    this.rawData,
   });
 
   factory DocField.fromJson(Map<String, dynamic> json) {
@@ -118,6 +182,7 @@ class DocField {
       searchIndex:
           parseBool(json['search_index']) || parseBool(json['searchIndex']),
       isVirtual: parseBool(json['is_virtual']) || parseBool(json['isVirtual']),
+      rawData: json,
     );
   }
 
@@ -128,7 +193,23 @@ class DocField {
   }
 
   Map<String, dynamic> toJson() {
+    // Unmodelled raw properties first so the modelled ones below always win.
+    // Without this replay the serialisation is lossy, and since
+    // DocTypeMeta.toJson() is what MetaService persists, every property this
+    // class does not model would vanish from the meta cache on the next cold
+    // start. See [rawData] and [_managedKeys].
+    final passthrough = <String, dynamic>{};
+    final raw = rawData;
+    if (raw != null) {
+      for (final entry in raw.entries) {
+        if (!_managedKeys.contains(entry.key)) {
+          passthrough[entry.key] = entry.value;
+        }
+      }
+    }
+
     return {
+      ...passthrough,
       if (fieldname != null) 'fieldname': fieldname,
       'fieldtype': fieldtype,
       if (label != null) 'label': label,
@@ -196,6 +277,17 @@ class DocField {
     if (l != null && l.replaceAll(_zeroWidthPattern, '').trim().isNotEmpty) {
       return l;
     }
+    return humanizeFieldname(fieldname);
+  }
+
+  /// Turns a Frappe fieldname into a human label: `diagnostic_framework` →
+  /// `Diagnostic Framework`.
+  ///
+  /// Exposed because widgets sometimes know only a DEPENDENT field's *name* and
+  /// have no `DocField` to ask for its label — e.g. `LinkField`'s
+  /// `Select <parent> first` hint, which used to print the raw fieldname.
+  /// Returns `''` for a null/empty input.
+  static String humanizeFieldname(String? fieldname) {
     final f = fieldname;
     if (f == null || f.isEmpty) return '';
     return f

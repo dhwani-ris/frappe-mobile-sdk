@@ -16,12 +16,16 @@ import '../services/link_option_service.dart';
 import '../services/meta_service.dart';
 import '../models/image_pick_source.dart';
 import '../services/media_resolver.dart';
+import '../services/location_readiness.dart';
+import '../services/mobile_creation_capture.dart';
 import '../services/offline_repository.dart';
 import '../services/sync_controller.dart';
 import '../services/sync_service.dart';
 import '../services/workflow_service.dart';
+import '../utils/mobile_creation_stamp.dart';
 import '../utils/uuid_pattern.dart';
 import 'widgets/screen_helpers.dart';
+import 'widgets/location_required_barrier.dart';
 import 'widgets/sync_error_banner.dart';
 import 'widgets/form_builder.dart'
     show
@@ -146,6 +150,15 @@ class FormScreen extends StatefulWidget {
   /// Optional pre-filled data for new documents (overrides document?.data when document is null).
   final Map<String, dynamic>? initialData;
 
+  /// Captures `mobile_created_at` / `mobile_latitude_longitude` when a NEW
+  /// record is started — see [MobileCreationCapture]. Defaults to a real
+  /// capture, which reads GPS and so requests location permission the moment a
+  /// new-record form opens. Inject a custom instance to control the clock or
+  /// the location source (tests do), and note that the values are written only
+  /// when the DocType actually declares those fields, so a server without
+  /// `mobile_control` is unaffected either way.
+  final MobileCreationCapture? creationCapture;
+
   /// Optional callback when a Button field is pressed. Override to implement client-script logic
   /// (API calls, dialogs, form updates). When null, default behavior applies: if [field.options]
   /// has a server method path, it is called; otherwise a message is shown.
@@ -241,6 +254,7 @@ class FormScreen extends StatefulWidget {
     this.canDelete,
     this.translate,
     this.initialData,
+    this.creationCapture,
     this.onButtonPressed,
     this.onFieldChange,
     this.validator,
@@ -345,6 +359,29 @@ class _FormScreenState extends State<FormScreen> with WidgetsBindingObserver {
     );
   }
 
+  /// Mobile creation metadata for a brand-new record: the moment the user
+  /// asked for it, plus the in-flight location read started at that moment.
+  ///
+  /// Non-null ONLY for a new record (`widget.document == null` at init). That
+  /// is what makes an edit-save incapable of re-stamping: [_handleSubmit] has
+  /// nothing to write, so whatever the local row already holds survives.
+  PendingCreationMeta? _creationMeta;
+
+  /// The capture used for this form's parent record AND handed to child tables
+  /// so a new child row gets its own stamps. Resolved once so both share one
+  /// instance. Constructing it reads nothing — GPS is touched only by `begin()`,
+  /// and both call sites gate that on the relevant meta declaring the fields.
+  late final MobileCreationCapture _capture =
+      widget.creationCapture ?? MobileCreationCapture();
+
+  /// Non-null while a new record is BLOCKED because the device cannot locate
+  /// it. Drives [LocationRequiredBarrier] over the form body.
+  LocationReadiness? _locationBlock;
+
+  /// True while an OS prompt / settings hop is in flight, so the barrier's
+  /// button cannot be double-fired.
+  bool _locationBusy = false;
+
   /// Baseline form data for dirty check. When current form data differs, show Save.
   Map<String, dynamic>? _baselineFormData;
 
@@ -432,6 +469,9 @@ class _FormScreenState extends State<FormScreen> with WidgetsBindingObserver {
     _loadSyncErrors();
     _loadPendingAttachmentPaths();
     widget.onFormDirtyChanged?.call(false);
+    // Fire-and-forget: readiness is async, and the form must build now. The
+    // barrier appears a frame later if the device cannot locate the record.
+    _evaluateLocationGate();
 
     if (widget.mode == FormBuilderMode.reactive) {
       _formController =
@@ -492,6 +532,9 @@ class _FormScreenState extends State<FormScreen> with WidgetsBindingObserver {
     if (route != null && !route.isCurrent) return;
     _loadSyncErrors();
     _loadPendingAttachmentPaths();
+    // The user may have granted the permission or switched location on while
+    // they were away in Settings; this is the only signal that they are back.
+    _evaluateLocationGate();
   }
 
   @override
@@ -513,6 +556,23 @@ class _FormScreenState extends State<FormScreen> with WidgetsBindingObserver {
       _loadWorkflowTransitions();
       _loadSyncErrors();
       _loadPendingAttachmentPaths();
+      // Keep the creation capture aligned with which record this screen now
+      // shows. A host that reuses one FormScreen element can swap either way,
+      // and both directions are wrong if the capture is left alone:
+      //   doc -> null ("save and add another"): the new record would get no
+      //     stamps at all, because initState already ran for the edit.
+      //   null -> doc (host resolves the document asynchronously): the capture
+      //     from the new-record open would stamp an EXISTING record, filling a
+      //     blank `mobile_created_at` on an old Desk-created row with today's
+      //     date. That writes wrong data, not merely missing data.
+      // `_beginCreationCaptureIfNew` is idempotent, so an unrelated rebuild in
+      // the same new-record session keeps the original start time.
+      if (widget.document != null) {
+        _creationMeta = null;
+        if (_locationBlock != null) _locationBlock = null;
+      } else {
+        _evaluateLocationGate();
+      }
     }
   }
 
@@ -849,6 +909,118 @@ class _FormScreenState extends State<FormScreen> with WidgetsBindingObserver {
     return null;
   }
 
+  /// Starts creation capture for a brand-new record. A no-op for an edit — an
+  /// existing record was already stamped when it was first created.
+  ///
+  /// Runs at form open rather than at save so `mobile_created_at` records when
+  /// the user *started* the record; stamping at save would make it a duplicate
+  /// of Frappe's own `creation`. The location read is not awaited: it needs a
+  /// permission grant and a fix, and the form must be usable immediately.
+  void _beginCreationCaptureIfNew() {
+    if (!_creationCaptureApplies) return;
+    if (_creationMeta != null) return;
+    _creationMeta = _capture.begin();
+  }
+
+  /// True when this screen should capture creation metadata at all: a NEW
+  /// record, on a DocType that declares the fields.
+  ///
+  /// The DocType gate is what keeps every other form untouched. Without it,
+  /// opening ANY new-record form would demand location — and block on it —
+  /// even though the doctype has nowhere to store the result, which is every
+  /// doctype on a server without `mobile_control`.
+  bool get _creationCaptureApplies =>
+      widget.document == null && declaresCreationMeta(widget.meta);
+
+  /// Re-reads device readiness and either clears the block and starts the
+  /// capture, or raises the barrier.
+  ///
+  /// The capture is started only once the device is actually capable of a fix.
+  /// Starting it earlier would burn the read against a denied permission and
+  /// then save an empty location even after the user granted it — which is the
+  /// whole failure this gate exists to prevent.
+  Future<void> _evaluateLocationGate() async {
+    if (!_creationCaptureApplies) return;
+    final readiness = await _capture.readiness();
+    if (!mounted) return;
+    if (isLocationReady(readiness)) {
+      if (_locationBlock != null) setState(() => _locationBlock = null);
+      _beginCreationCaptureIfNew();
+      return;
+    }
+    // A known-blocked permission is sticky until it actually becomes ready.
+    // Same Android 8 quirk as in [_requestLocationPermission]: a plain check
+    // reports `denied` even when the OS has stopped asking, so letting a check
+    // overwrite `permissionBlocked` would demote the barrier back to an
+    // "Allow location" button that cannot work.
+    if (_locationBlock == LocationReadiness.permissionBlocked &&
+        readiness == LocationReadiness.permissionDenied) {
+      return;
+    }
+    setState(() => _locationBlock = readiness);
+  }
+
+  /// Barrier action for an askable denial: show the OS dialog, then apply what
+  /// the REQUEST reported.
+  ///
+  /// The request's own result is used rather than a fresh `checkPermission()`,
+  /// and that is load-bearing rather than a shortcut. Verified on an Android 8
+  /// device: after "Don't ask again" the permission flags are `USER_FIXED` and
+  /// the OS never prompts again, yet `checkPermission()` still answers plain
+  /// `denied` — only the request comes back `deniedForever`. Re-deriving
+  /// readiness from a check therefore lost the one fact worth knowing and left
+  /// the barrier looping on "Allow location", a button the OS had already
+  /// decided to ignore.
+  Future<void> _requestLocationPermission() async {
+    setState(() => _locationBusy = true);
+    LocationReadiness result;
+    try {
+      result = await _capture.requestPermission();
+    } finally {
+      if (mounted) setState(() => _locationBusy = false);
+    }
+    if (!mounted) return;
+    if (isLocationReady(result)) {
+      setState(() => _locationBlock = null);
+      _beginCreationCaptureIfNew();
+      return;
+    }
+    setState(() => _locationBlock = result);
+  }
+
+  /// Barrier action for a blocked permission / disabled service. Nothing is
+  /// awaited beyond the hop itself — the user changes the setting outside the
+  /// app, and `didChangeAppLifecycleState` re-evaluates when they come back.
+  Future<void> _openLocationSettings({required bool appSettings}) async {
+    setState(() => _locationBusy = true);
+    try {
+      if (appSettings) {
+        await openLocationAppSettings();
+      } else {
+        await openDeviceLocationSettings();
+      }
+    } finally {
+      if (mounted) setState(() => _locationBusy = false);
+    }
+  }
+
+  /// Merges the creation stamps into [payload]. Waits briefly for a location
+  /// read that has not landed yet — see [kCreationLocationSaveWait] for why the
+  /// wait is short. No-op when this is an edit, when the doctype does not
+  /// declare the fields, or when the payload already carries values.
+  Future<Map<String, dynamic>> _withCreationMeta(
+    Map<String, dynamic> payload,
+  ) async {
+    final meta = _creationMeta;
+    if (meta == null) return payload;
+    return stampCreationMeta(
+      meta: widget.meta,
+      data: payload,
+      createdAt: formatFrappeDatetime(meta.startedAt),
+      latitudeLongitude: await meta.location(),
+    );
+  }
+
   Future<void> _handleSubmit(Map<String, dynamic> formData) async {
     // Local-first validation: DB-independent rules run on-device so the user
     // sees errors at save-time rather than at sync-time. Returns null on pass;
@@ -876,7 +1048,7 @@ class _FormScreenState extends State<FormScreen> with WidgetsBindingObserver {
     // Normalize multi-select: Frappe expects comma-separated string for plain
     // multi-select fields, but Table / Table MultiSelect fields must remain as
     // List<Map> so Frappe can create child-table rows.
-    final payload = Map<String, dynamic>.from(formData);
+    var payload = Map<String, dynamic>.from(formData);
     for (final f in widget.meta.fields) {
       final name = f.fieldname;
       if (f.allowMultiple && name != null && payload[name] is List) {
@@ -892,6 +1064,19 @@ class _FormScreenState extends State<FormScreen> with WidgetsBindingObserver {
     setState(() {
       _errorMessage = null;
     });
+
+    // Stamp the mobile creation metadata captured when this record was
+    // started. Deliberately AFTER _setSaving(true): this may wait briefly on a
+    // GPS fix, and the user should see the saving indicator while it does.
+    // Deliberately BEFORE the four save branches below (server-first
+    // insert/update, offline insert/update), each of which reads `payload`.
+    // Deliberately AFTER `widget.validator`, so a host validator never has to
+    // know about system metadata it did not put there.
+    payload = await _withCreationMeta(payload);
+    if (!mounted) {
+      _setSaving(false);
+      return;
+    }
 
     // Offline-first contract: every save queues to docs__ + outbox;
     // push is driven by the cloud icon / Sync. Server-first below
@@ -1240,90 +1425,101 @@ class _FormScreenState extends State<FormScreen> with WidgetsBindingObserver {
       ),
       body: Stack(
         children: [
-          Column(
-            children: [
-              if (_syncErrorRows.isNotEmpty)
-                SyncErrorBanner(
-                  rows: _syncErrorRows,
-                  onRetry: widget.syncController == null ? null : _retrySyncRow,
+          // Disabled — not merely covered — while the location gate blocks a
+          // new record, so nothing behind the barrier can be typed into even
+          // if a gesture reached it.
+          AbsorbPointer(
+            key: const Key('form_location_absorber'),
+            absorbing: _locationBlock != null,
+            child: Column(
+              children: [
+                if (_syncErrorRows.isNotEmpty)
+                  SyncErrorBanner(
+                    rows: _syncErrorRows,
+                    onRetry: widget.syncController == null
+                        ? null
+                        : _retrySyncRow,
+                  ),
+                if (_errorMessage != null)
+                  ErrorMessageBanner(message: _errorMessage!),
+                if (widget.meta.hasWorkflow &&
+                    widget.document != null &&
+                    widget.api != null)
+                  _WorkflowHeader(
+                    meta: widget.meta,
+                    documentData: _currentDocData,
+                    loading: _workflowLoading,
+                    translate: widget.translate,
+                    onShowActions: _showWorkflowActionsSheet,
+                    showActions: widget.showWorkflowActions,
+                  ),
+                Expanded(
+                  child: FrappeFormBuilder(
+                    key: widget.document != null
+                        ? ValueKey('form_${widget.document!.localId}')
+                        : const ValueKey('form_new'),
+                    mode: widget.mode,
+                    controller: _formController,
+                    meta: widget.meta,
+                    initialData:
+                        _workflowUpdatedDocData ??
+                        widget.document?.data ??
+                        widget.initialData,
+                    onSubmit: _handleSubmit,
+                    readOnly: effectiveReadOnly,
+                    onFormDataChanged: _onFormDataChanged,
+                    linkOptionService: widget.linkOptionService,
+                    useLinkFieldCoordinator: widget.useLinkFieldCoordinator,
+                    customFieldFactory: widget.customFieldFactory,
+                    uploadFile: widget.api != null
+                        ? (file) async {
+                            final res = await widget.api!.attachment.uploadFile(
+                              file,
+                            );
+                            return res['file_url'] as String? ??
+                                res['file_name'] as String?;
+                          }
+                        : null,
+                    fileUrlBase: widget.api?.baseUrl,
+                    imageHeaders: widget.api?.requestHeaders,
+                    isOnline: widget.isOnline,
+                    pendingAttachmentPaths: _pendingAttachmentPaths,
+                    mediaResolver: _mediaResolver?.resolve,
+                    // Queue-aware: refuses to delete a staged file a
+                    // `pending_attachments` row still owns. See
+                    // `OfflineRepository.reclaimDiscardedAttachment`.
+                    reclaimAttachment:
+                        widget.repository.reclaimDiscardedAttachment,
+                    // Read live through the repository so a mid-session toggle
+                    // flip takes effect on the next pick.
+                    isOfflineMode: () => widget.repository.offlineMode.enabled,
+                    imagePickSource: widget.imagePickSource,
+                    fetchLinkedDocument: _fetchLinkedDocument,
+                    getMeta: widget.metaService != null
+                        ? (doctype) => widget.metaService!.getMeta(doctype)
+                        : null,
+                    creationCapture: _capture,
+                    registerSubmit: (trigger) {
+                      _triggerSubmit = trigger;
+                      widget.registerSubmit?.call(trigger);
+                    },
+                    onButtonPressed: widget.onButtonPressed != null
+                        ? (field, formData) => widget.onButtonPressed!(
+                            field,
+                            formData,
+                            _handleButtonPressed,
+                          )
+                        : _handleButtonPressed,
+                    style: widget.style,
+                    translate: widget.translate,
+                    onFieldChange: widget.onFieldChange,
+                    getLinkFilterBuilder: widget.getLinkFilterBuilder,
+                    cascadeProgrammaticChanges:
+                        widget.cascadeProgrammaticChanges,
+                  ),
                 ),
-              if (_errorMessage != null)
-                ErrorMessageBanner(message: _errorMessage!),
-              if (widget.meta.hasWorkflow &&
-                  widget.document != null &&
-                  widget.api != null)
-                _WorkflowHeader(
-                  meta: widget.meta,
-                  documentData: _currentDocData,
-                  loading: _workflowLoading,
-                  translate: widget.translate,
-                  onShowActions: _showWorkflowActionsSheet,
-                  showActions: widget.showWorkflowActions,
-                ),
-              Expanded(
-                child: FrappeFormBuilder(
-                  key: widget.document != null
-                      ? ValueKey('form_${widget.document!.localId}')
-                      : const ValueKey('form_new'),
-                  mode: widget.mode,
-                  controller: _formController,
-                  meta: widget.meta,
-                  initialData:
-                      _workflowUpdatedDocData ??
-                      widget.document?.data ??
-                      widget.initialData,
-                  onSubmit: _handleSubmit,
-                  readOnly: effectiveReadOnly,
-                  onFormDataChanged: _onFormDataChanged,
-                  linkOptionService: widget.linkOptionService,
-                  useLinkFieldCoordinator: widget.useLinkFieldCoordinator,
-                  customFieldFactory: widget.customFieldFactory,
-                  uploadFile: widget.api != null
-                      ? (file) async {
-                          final res = await widget.api!.attachment.uploadFile(
-                            file,
-                          );
-                          return res['file_url'] as String? ??
-                              res['file_name'] as String?;
-                        }
-                      : null,
-                  fileUrlBase: widget.api?.baseUrl,
-                  imageHeaders: widget.api?.requestHeaders,
-                  isOnline: widget.isOnline,
-                  pendingAttachmentPaths: _pendingAttachmentPaths,
-                  mediaResolver: _mediaResolver?.resolve,
-                  // Queue-aware: refuses to delete a staged file a
-                  // `pending_attachments` row still owns. See
-                  // `OfflineRepository.reclaimDiscardedAttachment`.
-                  reclaimAttachment:
-                      widget.repository.reclaimDiscardedAttachment,
-                  // Read live through the repository so a mid-session toggle
-                  // flip takes effect on the next pick.
-                  isOfflineMode: () => widget.repository.offlineMode.enabled,
-                  imagePickSource: widget.imagePickSource,
-                  fetchLinkedDocument: _fetchLinkedDocument,
-                  getMeta: widget.metaService != null
-                      ? (doctype) => widget.metaService!.getMeta(doctype)
-                      : null,
-                  registerSubmit: (trigger) {
-                    _triggerSubmit = trigger;
-                    widget.registerSubmit?.call(trigger);
-                  },
-                  onButtonPressed: widget.onButtonPressed != null
-                      ? (field, formData) => widget.onButtonPressed!(
-                          field,
-                          formData,
-                          _handleButtonPressed,
-                        )
-                      : _handleButtonPressed,
-                  style: widget.style,
-                  translate: widget.translate,
-                  onFieldChange: widget.onFieldChange,
-                  getLinkFilterBuilder: widget.getLinkFilterBuilder,
-                  cascadeProgrammaticChanges: widget.cascadeProgrammaticChanges,
-                ),
-              ),
-            ],
+              ],
+            ),
           ),
           if (_isSaving)
             Positioned.fill(
@@ -1354,6 +1550,19 @@ class _FormScreenState extends State<FormScreen> with WidgetsBindingObserver {
                   ),
                 ),
               ),
+            ),
+          // Last child so it covers the form, the banners and the saving
+          // overlay alike: while the device cannot locate a new record, none of
+          // it may be interacted with. `Back` still pops the route.
+          if (_locationBlock != null)
+            LocationRequiredBarrier(
+              readiness: _locationBlock!,
+              busy: _locationBusy,
+              onGrant: _requestLocationPermission,
+              onOpenAppSettings: () => _openLocationSettings(appSettings: true),
+              onOpenLocationSettings: () =>
+                  _openLocationSettings(appSettings: false),
+              onRecheck: _evaluateLocationGate,
             ),
         ],
       ),

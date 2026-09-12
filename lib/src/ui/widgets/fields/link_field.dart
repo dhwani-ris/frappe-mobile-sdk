@@ -419,6 +419,9 @@ class _LinkFieldDropdownState extends State<_LinkFieldDropdown> {
       final loadingValue = widget.value?.toString();
       final hasValue = loadingValue != null && loadingValue.isNotEmpty;
       return DropdownButtonFormField<String>(
+        // Same reason as the empty-state dropdown below: the resolved value shown
+        // while loading can be a long docname, which would overflow the row.
+        isExpanded: true,
         key: ValueKey('${widget.field.fieldname}_loading'),
         initialValue: hasValue ? loadingValue : null,
         onChanged: null,
@@ -461,12 +464,19 @@ class _LinkFieldDropdownState extends State<_LinkFieldDropdown> {
 
     if (_options.isEmpty) {
       final isWaiting = _waitingForDependent && _dependentFieldName.isNotEmpty;
+      // Humanized, not the raw fieldname: this hint is user-facing and used to
+      // read "Select diagnostic_framework first".
       final hint = isWaiting
-          ? 'Select $_dependentFieldName first'
+          ? 'Select ${DocField.humanizeFieldname(_dependentFieldName)} first'
           : 'No options available';
       return DropdownButtonFormField<String>(
         key: ValueKey('${widget.field.fieldname}_empty_$isWaiting'),
         initialValue: null,
+        // A DropdownButton sizes itself to its content, so a hint longer than
+        // the field width overflowed the row (visible as a RenderFlex overflow
+        // stripe in debug). `isExpanded` makes the child fill the available
+        // width so the text ellipsizes instead.
+        isExpanded: true,
         onChanged: (!isWaiting && widget.enabled && !widget.field.readOnly)
             ? (v) => widget.onChanged?.call(v)
             : null,

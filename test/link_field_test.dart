@@ -259,8 +259,36 @@ void main() {
       await tester.pump(); // process setState from initState
 
       // Hint text appears in the button AND in the DropdownMenuItem overlay.
-      expect(find.text('Select state first'), findsAtLeastNWidgets(1));
+      expect(find.text('Select State first'), findsAtLeastNWidgets(1));
       expect(find.byIcon(Icons.refresh), findsNothing);
+    });
+
+    testWidgets('humanizes a multi-word dependent fieldname in the hint', (
+      tester,
+    ) async {
+      // Regression: this hint interpolated the RAW fieldname, so a real form
+      // read "Select diagnostic_framework first" — and being that long it also
+      // overflowed the row (the dropdown now sets isExpanded so it ellipsizes).
+      final service = _FakeLinkOptionService();
+      await tester.pumpWidget(
+        _wrap(
+          LinkField(
+            field: _linkField(
+              linkFilters: '[["Task","diagnostic_framework","=",'
+                  '"eval:doc.diagnostic_framework"]]',
+            ),
+            linkOptionService: service,
+            formData: {},
+          ),
+        ),
+      );
+      await tester.pump();
+
+      expect(
+        find.text('Select Diagnostic Framework first'),
+        findsAtLeastNWidgets(1),
+      );
+      expect(find.text('Select diagnostic_framework first'), findsNothing);
     });
 
     testWidgets('form value is null while waiting for dependent field', (
@@ -301,7 +329,7 @@ void main() {
 
       // With the dependent value present the widget immediately starts
       // loading, not waiting.
-      expect(find.text('Select state first'), findsNothing);
+      expect(find.text('Select State first'), findsNothing);
     });
 
     // Regression: some link_filters wrap the dependency in a JS expression
@@ -330,7 +358,7 @@ void main() {
       );
       await tester.pump();
 
-      expect(find.text('Select category first'), findsAtLeastNWidgets(1));
+      expect(find.text('Select Category first'), findsAtLeastNWidgets(1));
       expect(find.text('No options available'), findsNothing);
     });
 
@@ -352,7 +380,7 @@ void main() {
         ),
       );
       await tester.pump();
-      expect(find.text('Select state first'), findsAtLeastNWidgets(1));
+      expect(find.text('Select State first'), findsAtLeastNWidgets(1));
 
       // Rebuild with dependent value → triggers didUpdateWidget → _loadOptions.
       await tester.pumpWidget(
@@ -368,7 +396,7 @@ void main() {
       await tester.pump(); // enter loading state
 
       expect(
-        find.text('Select state first'),
+        find.text('Select State first'),
         findsNothing,
         reason:
             'Once dependent field is filled, widget must exit waiting state',

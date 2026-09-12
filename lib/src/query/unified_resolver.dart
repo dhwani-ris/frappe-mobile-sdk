@@ -7,6 +7,7 @@ import 'package:sqflite/sqflite.dart';
 
 import '../api/client.dart';
 import '../database/daos/doctype_meta_dao.dart';
+import '../database/schema/system_columns.dart';
 import '../database/table_name.dart';
 import '../models/doc_type_meta.dart';
 import '../models/meta_resolver.dart';
@@ -93,10 +94,37 @@ class UnifiedResolver {
     bool includeFailed = false,
   }) async {
     if (!offlineMode.enabled) {
+      // Callers compose filters for LOCAL SQLite, so they may reference
+      // columns that exist only there (`server_name`, `mobile_uuid`,
+      // `sync_status`, …). Forwarding them verbatim is exactly what makes
+      // Frappe answer `DataError - Field not permitted in query: server_name`
+      // with HTTP 417 — once per Link target per form open, via
+      // `LinkOptionService._resolveLinkTitle`.
+      //
+      // [_scheduleBackgroundRefresh] already sanitizes for the same reason,
+      // but it only guards the OFFLINE path. With offline mode disabled every
+      // resolve() returns right here, so this branch is the one most callers
+      // actually take and it was left unguarded — the sanitizer existed but
+      // was unreachable for them.
+      final serverFilters = _toServerFilters(filters);
+      final serverOrFilters = _toServerFilters(orFilters);
+      // Not expressible server-side. Answer empty rather than send a BROADER
+      // query than the caller asked for — the same call the background path
+      // makes when it skips the refresh outright.
+      if (serverFilters == null || serverOrFilters == null) {
+        return _emptyResult;
+      }
+      // An OR list that sanitizes away to nothing constrains nothing, so
+      // sending it would match every row. It only empties when every clause
+      // named `mobile_uuid`, i.e. the caller was looking for a row that has
+      // never been pushed — there is nothing to find server-side.
+      if (orFilters.isNotEmpty && serverOrFilters.isEmpty) {
+        return _emptyResult;
+      }
       return _onlinePassthrough(
         doctype: doctype,
-        filters: filters,
-        orFilters: orFilters,
+        filters: serverFilters,
+        orFilters: serverOrFilters,
         orderBy: orderBy,
         page: page,
         pageSize: pageSize,
@@ -277,9 +305,20 @@ class UnifiedResolver {
       // dedup would silently fail.
       await Future<void>.delayed(Duration.zero);
       try {
+        // The foreground read above ran against LOCAL SQLite, so its filters
+        // may reference columns that exist only there (`server_name`,
+        // `mobile_uuid`, `sync_status`, …). Forwarding those verbatim to
+        // Frappe makes it answer `DataError - Field not permitted in query:
+        // server_name` with HTTP 417, once per Link target per form open.
+        // Sanitize first; if the query cannot be expressed server-side, skip
+        // the refresh rather than send a broader one.
+        final serverFilters = _toServerFilters(filters);
+        final serverOrFilters = _toServerFilters(orFilters);
+        if (serverFilters == null || serverOrFilters == null) return;
+        if (orFilters.isNotEmpty && serverOrFilters.isEmpty) return;
         await backgroundFetch(doctype, {
-          'filters': filters,
-          'or_filters': orFilters,
+          'filters': serverFilters,
+          'or_filters': serverOrFilters,
           'order_by': orderBy,
           'limit_start': page * pageSize,
           'limit_page_length': pageSize,
@@ -296,6 +335,45 @@ class UnifiedResolver {
         _inflightBg.remove(key);
       }
     });
+  }
+
+  /// Empty page, used when a local-only query cannot be expressed server-side.
+  static const QueryResult<Map<String, Object?>> _emptyResult =
+      QueryResult<Map<String, Object?>>(
+        rows: [],
+        hasMore: false,
+        returnedCount: 0,
+        originBreakdown: {},
+      );
+
+  /// Rewrites a local filter list into one Frappe will accept, or returns null
+  /// when it cannot be expressed server-side.
+  ///
+  /// * `server_name` IS the server identity — rewritten to `name`.
+  /// * `mobile_uuid` identifies a row that has not been pushed yet, so it has
+  ///   no server counterpart. The clause is dropped.
+  /// * Any other [systemParentColumnNames] entry is SDK bookkeeping with no
+  ///   server column. Returning null makes the caller skip the refresh, which
+  ///   is deliberate: silently dropping an AND clause would send a BROADER
+  ///   query than the caller asked for. See the note in `system_columns.dart`.
+  ///
+  /// A clause whose column is not local-only passes through untouched.
+  static List<List>? _toServerFilters(List<List> input) {
+    if (input.isEmpty) return const [];
+    final out = <List>[];
+    for (final clause in input) {
+      if (clause.isEmpty) continue;
+      final col = clause.first?.toString();
+      if (col == null) continue;
+      if (col == 'server_name') {
+        out.add(<dynamic>['name', ...clause.skip(1)]);
+        continue;
+      }
+      if (col == 'mobile_uuid') continue;
+      if (systemParentColumnNames.contains(col)) return null;
+      out.add(clause);
+    }
+    return out;
   }
 
   /// Translates Frappe's virtual `parent` column references into

@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 import '../../../models/doc_field.dart';
 import '../../../models/doc_type_meta.dart';
+import '../../../services/mobile_creation_capture.dart';
+import '../../../utils/mobile_creation_stamp.dart';
 import '../screen_helpers.dart';
+import 'child_table_cells.dart';
 
 /// Preserves the identity/system columns a child form does not render (e.g.
 /// `mobile_uuid`, `name`) from the pre-edit [original] row onto the
@@ -30,7 +33,19 @@ typedef ChildTableFormBuilder =
       Map<String, dynamic>? initialData,
       void Function(Map<String, dynamic>) onSubmit, {
       void Function(void Function() submit)? registerSubmit,
+      bool readOnly,
     });
+
+/// Returns optional guidance to show above a child row form, or null for none.
+///
+/// [row] is null for the Add sheet and the existing row map for View/Edit, so a
+/// host can scope guidance to rows that have not reached the server yet.
+typedef ChildRowNoticeBuilder =
+    String? Function(
+      String childDoctype,
+      String parentFieldname,
+      Map<String, dynamic>? row,
+    );
 
 /// Widget for Table (child table) field type.
 /// Shows a list of rows; Add/Edit open a dialog with the form built by [formBuilder].
@@ -43,6 +58,16 @@ class ChildTableField extends StatelessWidget {
   final ChildTableFormBuilder? formBuilder;
   final String? errorText;
 
+  /// Resolves a Link cell to the linked document's title. Null renders raw ids.
+  final LinkTitleResolver? resolveLinkTitle;
+
+  /// Supplies optional guidance rendered above a child row form.
+  final ChildRowNoticeBuilder? rowNoticeBuilder;
+
+  /// Captures a NEW row's `mobile_created_at` / `mobile_latitude_longitude`
+  /// when Add Row is tapped. Null disables row-level capture entirely.
+  final MobileCreationCapture? creationCapture;
+
   const ChildTableField({
     super.key,
     required this.field,
@@ -52,6 +77,9 @@ class ChildTableField extends StatelessWidget {
     this.getMeta,
     this.formBuilder,
     this.errorText,
+    this.resolveLinkTitle,
+    this.rowNoticeBuilder,
+    this.creationCapture,
   });
 
   @override
@@ -66,7 +94,13 @@ class ChildTableField extends StatelessWidget {
           children: [
             Expanded(
               child: Text(
-                field.label ?? field.fieldname ?? 'Table',
+                // `displayLabel`, not `label ?? fieldname`: server metadata
+                // routinely omits a label on child Table fields, and the raw
+                // fieldname then becomes the heading an operator reads —
+                // "assaying_parameters" instead of "Assaying Parameters".
+                // `??` also cannot catch a label that is present but empty or
+                // zero-width, which `displayLabel` handles.
+                field.displayLabel.isEmpty ? 'Table' : field.displayLabel,
                 style: Theme.of(context).textTheme.titleMedium,
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
@@ -108,13 +142,30 @@ class ChildTableField extends StatelessWidget {
               return Card(
                 margin: const EdgeInsets.only(bottom: 8),
                 child: ListTile(
-                  title: FutureBuilder<String>(
-                    future: _rowTitle(row),
-                    builder: (_, snap) => Text(snap.data ?? '…'),
+                  title: FutureBuilder<_RowDisplay>(
+                    future: _rowDisplay(row, index),
+                    builder: (context, snap) {
+                      final d = snap.data;
+                      if (d == null) return const Text('…');
+                      if (d.cells.isNotEmpty) return _cellsColumn(d.cells);
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(d.title),
+                          if (d.subtitle.isNotEmpty)
+                            Text(
+                              d.subtitle,
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
+                        ],
+                      );
+                    },
                   ),
-                  subtitle: _rowSubtitle(row).isNotEmpty
-                      ? Text(_rowSubtitle(row))
-                      : null,
+                  // The declared columns already carry the values a subtitle
+                  // would repeat, so it is folded into the title builder above
+                  // and rendered only when the child declares no columns.
+                  subtitle: null,
                   trailing: enabled && !field.readOnly && onChanged != null
                       ? IconButton(
                           icon: const Icon(Icons.delete, color: Colors.red),
@@ -125,9 +176,17 @@ class ChildTableField extends StatelessWidget {
                           },
                         )
                       : null,
-                  onTap: enabled && !field.readOnly && onChanged != null
-                      ? () => _showEditRowDialog(context, index, listValue, row)
-                      : null,
+                  onTap: () {
+                    final isReadOnly =
+                        !enabled || field.readOnly || onChanged == null;
+                    _showRowDialog(
+                      context,
+                      index,
+                      listValue,
+                      row,
+                      isReadOnly: isReadOnly,
+                    );
+                  },
                 ),
               );
             },
@@ -147,46 +206,95 @@ class ChildTableField extends StatelessWidget {
     );
   }
 
-  Future<String> _rowTitle(Map<String, dynamic> row) async {
-    final meta = await getMeta?.call(field.options!);
-    // Configured title_field first.
-    if (meta != null &&
-        meta.titleField != null &&
-        meta.titleField!.isNotEmpty) {
-      final v = row[meta.titleField!];
-      if (v != null && v.toString().isNotEmpty) return v.toString();
-    }
-    // Common name fields ('name' is a raw server id — deliberately excluded).
-    const prefer = ['item_name', 'item_code', 'bank_name'];
-    for (final k in prefer) {
-      if (row[k] != null && row[k].toString().isNotEmpty) {
-        return row[k].toString();
-      }
-    }
-    // Walk the child doctype's own field order for the first real data field
-    // (web grid parity) so a row never titles from an SDK bookkeeping column
-    // like server_name / mobile_uuid.
-    if (meta != null) {
-      for (final f in meta.fields) {
-        final fn = f.fieldname;
-        if (fn == null || fn.isEmpty) continue;
-        if (!f.isDataField || f.hidden) continue;
-        if (_isSystemKey(fn)) continue;
-        final v = row[fn];
-        if (v != null && v.toString().isNotEmpty) {
-          return '${f.displayLabel}: $v';
-        }
-      }
-    }
-    for (final e in row.entries) {
-      if (!_isSystemKey(e.key) &&
-          e.value != null &&
-          e.value.toString().isNotEmpty) {
-        return '${e.key}: ${e.value}';
-      }
-    }
-    return 'Row ${row.hashCode % 1000}';
+  /// Stamps the child doctype onto an emitted row.
+  ///
+  /// A row leaving the sheet otherwise carries only its rendered docfields, so
+  /// a consumer that needs to know which child doctype it belongs to has to
+  /// infer it from the parent field's options. An explicit value already on the
+  /// row wins and is never overwritten.
+  Map<String, dynamic> _withDoctype(Map<String, dynamic> row) {
+    final doctype = field.options;
+    if (doctype == null || doctype.isEmpty) return row;
+    if ((row['doctype']?.toString() ?? '').isNotEmpty) return row;
+    return {...row, 'doctype': doctype};
   }
+
+  /// Guidance to show above a row form, or null when the host supplies none.
+  String? _noticeFor(Map<String, dynamic>? row) =>
+      rowNoticeBuilder?.call(field.options ?? '', field.fieldname ?? '', row);
+
+  /// Resolves everything one row needs to render in a single metadata read.
+  Future<_RowDisplay> _rowDisplay(Map<String, dynamic> row, int index) async {
+    DocTypeMeta? meta;
+    try {
+      meta = await getMeta?.call(field.options!);
+    } catch (_) {
+      meta = null;
+    }
+    final columns = childListViewFields(meta);
+    if (columns.isNotEmpty) {
+      return _RowDisplay(
+        title: '',
+        subtitle: '',
+        cells: await resolveChildListViewCells(
+          row,
+          meta,
+          columns,
+          resolveLinkTitle,
+        ),
+      );
+    }
+    return _RowDisplay(
+      title: await resolveChildRowTitle(row, meta, index, resolveLinkTitle),
+      subtitle: _rowSubtitle(row),
+      cells: const <MapEntry<String, String>>[],
+    );
+  }
+
+  /// One label/value line per declared column.
+  ///
+  /// Both sides are bounded: a long label would otherwise wrap to three lines,
+  /// and a Small Text value is unbounded — a ten-column child then eats a third
+  /// of the screen per row.
+  Widget _cellsColumn(List<MapEntry<String, String>> cells) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      for (final c in cells)
+        Padding(
+          padding: const EdgeInsets.only(bottom: 2),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                flex: 4,
+                child: Text(
+                  c.key,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: Color(0xFF6B7280),
+                  ),
+                ),
+              ),
+              Expanded(
+                flex: 6,
+                child: Text(
+                  c.value,
+                  maxLines: 3,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+    ],
+  );
 
   String _rowSubtitle(Map<String, dynamic> row) {
     final parts = <String>[];
@@ -196,33 +304,6 @@ class ChildTableField extends StatelessWidget {
     return parts.join(' | ');
   }
 
-  bool _isSystemKey(String key) {
-    const sys = {
-      'name',
-      'server_name',
-      'owner',
-      'creation',
-      'modified',
-      'modified_by',
-      'docstatus',
-      'idx',
-      'doctype',
-      'parent',
-      'parentfield',
-      'parenttype',
-      'parent_doctype',
-      'mobile_uuid',
-      'parent_uuid',
-      'sync_status',
-      'sync_op',
-      'local_modified',
-      'push_base_payload',
-    };
-    return sys.contains(key) ||
-        key.endsWith('__is_local') ||
-        key.endsWith('__norm') ||
-        key.endsWith('__display');
-  }
 
   Future<void> _showAddRowDialog(
     BuildContext context,
@@ -254,19 +335,41 @@ class ChildTableField extends StatelessWidget {
     }
     if (!context.mounted) return;
 
+    // Begin the row's creation capture HERE — the moment Add Row was tapped —
+    // not when the row is submitted. The user then spends a few seconds filling
+    // the row in, which is exactly the window the GPS read needs, so the wait
+    // at submit below is almost always already satisfied.
+    final capture = creationCapture;
+    final pending = (capture != null && declaresCreationMeta(childMeta))
+        ? capture.begin()
+        : null;
+
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
       builder: (ctx) => _ChildTableSheet(
+        notice: _noticeFor(null),
         title: 'Add ${field.options}',
         childMeta: childMeta!,
         initialData: null,
         isEdit: false,
         formBuilder: formBuilder!,
-        onSubmit: (data) {
+        onSubmit: (data) async {
+          final row = pending == null
+              ? data
+              : stampCreationMeta(
+                  meta: childMeta!,
+                  data: data,
+                  createdAt: formatFrappeDatetime(pending.startedAt),
+                  latitudeLongitude: await pending.location(),
+                );
+          // Awaited before the pop so the row is complete when the sheet
+          // closes; a row handed to `onChanged` after the fact could miss a
+          // parent save the user triggers in between.
+          if (!ctx.mounted) return;
           Navigator.pop(ctx);
-          final newList = List<dynamic>.from(listValue)..add(data);
+          final newList = List<dynamic>.from(listValue)..add(_withDoctype(row));
           onChanged!(newList);
         },
         onRemove: null,
@@ -274,15 +377,16 @@ class ChildTableField extends StatelessWidget {
     );
   }
 
-  Future<void> _showEditRowDialog(
+  Future<void> _showRowDialog(
     BuildContext context,
     int index,
     List<dynamic> listValue,
-    Map<String, dynamic> rowData,
-  ) async {
+    Map<String, dynamic> rowData, {
+    bool isReadOnly = false,
+  }) async {
     if (getMeta == null ||
         field.options == null ||
-        onChanged == null ||
+        (onChanged == null && !isReadOnly) ||
         formBuilder == null) {
       return;
     }
@@ -292,7 +396,7 @@ class ChildTableField extends StatelessWidget {
       childMeta = await getMeta!(field.options!);
     } catch (e, st) {
       debugPrint(
-        'ChildTableField._showEditRowDialog: getMeta(${field.options}) failed — $e\n$st',
+        'ChildTableField._showRowDialog: getMeta(${field.options}) failed — $e\n$st',
       );
       if (context.mounted) {
         // Original called the bare `SnackBar(content: Text(...))` with no
@@ -308,26 +412,34 @@ class ChildTableField extends StatelessWidget {
       isScrollControlled: true,
       useSafeArea: true,
       builder: (ctx) => _ChildTableSheet(
-        title: 'Edit ${field.options}',
+        notice: _noticeFor(rowData),
+        title: isReadOnly ? 'View ${field.options}' : 'Edit ${field.options}',
         childMeta: childMeta!,
         initialData: rowData,
-        isEdit: true,
+        isEdit: !isReadOnly,
+        isReadOnly: isReadOnly,
         formBuilder: formBuilder!,
-        onSubmit: (data) {
-          Navigator.pop(ctx);
-          final newList = List<dynamic>.from(listValue);
-          // Carry the row's local identity (mobile_uuid / name) across the
-          // edit — the child form does not render those columns and would
-          // otherwise drop them, orphaning any queued attachment row.
-          newList[index] = preserveChildIdentity(rowData, data);
-          onChanged!(newList);
-        },
-        onRemove: () {
-          Navigator.pop(ctx);
-          final newList = List<dynamic>.from(listValue);
-          newList.removeAt(index);
-          onChanged!(newList);
-        },
+        onSubmit: isReadOnly
+            ? (_) {}
+            : (data) {
+                Navigator.pop(ctx);
+                final newList = List<dynamic>.from(listValue);
+                // Carry the row's local identity (mobile_uuid / name) across the
+                // edit — the child form does not render those columns and would
+                // otherwise drop them, orphaning any queued attachment row.
+                newList[index] = _withDoctype(
+                  preserveChildIdentity(rowData, data),
+                );
+                onChanged?.call(newList);
+              },
+        onRemove: isReadOnly
+            ? null
+            : () {
+                Navigator.pop(ctx);
+                final newList = List<dynamic>.from(listValue);
+                newList.removeAt(index);
+                onChanged?.call(newList);
+              },
       ),
     );
   }
@@ -340,15 +452,19 @@ class _ChildTableSheet extends StatefulWidget {
     required this.childMeta,
     required this.initialData,
     required this.isEdit,
+    this.notice,
+    this.isReadOnly = false,
     required this.formBuilder,
     required this.onSubmit,
     required this.onRemove,
   });
 
   final String title;
+  final String? notice;
   final DocTypeMeta childMeta;
   final Map<String, dynamic>? initialData;
   final bool isEdit;
+  final bool isReadOnly;
   final ChildTableFormBuilder formBuilder;
   final void Function(Map<String, dynamic>) onSubmit;
   final void Function()? onRemove;
@@ -396,17 +512,51 @@ class _ChildTableSheetState extends State<_ChildTableSheet> {
               ),
             ),
             const Divider(height: 1),
+            if ((widget.notice ?? '').trim().isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                child: Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.secondaryContainer,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    widget.notice!,
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.onSecondaryContainer,
+                    ),
+                  ),
+                ),
+              ),
             Expanded(
               child: widget.formBuilder(
                 widget.childMeta,
                 widget.initialData,
                 (data) => widget.onSubmit(data),
-                registerSubmit: (fn) {
-                  _submitFn = fn;
-                  WidgetsBinding.instance.addPostFrameCallback((_) {
-                    if (mounted) setState(() {});
-                  });
-                },
+                registerSubmit: widget.isReadOnly
+                    ? null
+                    : (fn) {
+                        final wasUnregistered = _submitFn == null;
+                        _submitFn = fn;
+                        // Rebuild ONLY on the unregistered -> registered
+                        // transition, which is the single moment the action
+                        // button has to flip from disabled to enabled.
+                        //
+                        // Rebuilding on every registration is an unbounded
+                        // frame loop: the host calls registerSubmit from
+                        // inside its own build, so setState re-enters
+                        // formBuilder, which registers again, which schedules
+                        // another setState. The sheet never settles —
+                        // pumpAndSettle hangs in tests and the render loop
+                        // never idles on device.
+                        if (!wasUnregistered) return;
+                        WidgetsBinding.instance.addPostFrameCallback((_) {
+                          if (mounted) setState(() {});
+                        });
+                      },
+                readOnly: widget.isReadOnly,
               ),
             ),
             const Divider(height: 1),
@@ -415,7 +565,9 @@ class _ChildTableSheetState extends State<_ChildTableSheet> {
                 padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
                 child: Row(
                   children: [
-                    if (widget.isEdit && widget.onRemove != null)
+                    if (widget.isEdit &&
+                        widget.onRemove != null &&
+                        !widget.isReadOnly)
                       TextButton.icon(
                         onPressed: () => widget.onRemove!(),
                         icon: const Icon(Icons.delete_outline, size: 20),
@@ -424,30 +576,41 @@ class _ChildTableSheetState extends State<_ChildTableSheet> {
                           foregroundColor: Colors.red,
                         ),
                       ),
-                    if (widget.isEdit && widget.onRemove != null)
+                    if (widget.isEdit &&
+                        widget.onRemove != null &&
+                        !widget.isReadOnly)
                       const SizedBox(width: 8),
                     const Spacer(),
-                    TextButton(
-                      onPressed: () => Navigator.pop(context),
-                      child: const Text('Cancel'),
-                    ),
-                    const SizedBox(width: 8),
-                    FilledButton.icon(
-                      onPressed: _submitFn != null ? () => _submitFn!() : null,
-                      icon: _submitFn != null
-                          ? const Icon(Icons.check, size: 20)
-                          : const SizedBox(
-                              width: 16,
-                              height: 16,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                valueColor: AlwaysStoppedAnimation<Color>(
-                                  Colors.white,
+                    if (widget.isReadOnly)
+                      TextButton(
+                        onPressed: () => Navigator.pop(context),
+                        child: const Text('Close'),
+                      )
+                    else ...[
+                      TextButton(
+                        onPressed: () => Navigator.pop(context),
+                        child: const Text('Cancel'),
+                      ),
+                      const SizedBox(width: 8),
+                      FilledButton.icon(
+                        onPressed: _submitFn != null
+                            ? () => _submitFn!()
+                            : null,
+                        icon: _submitFn != null
+                            ? const Icon(Icons.check, size: 20)
+                            : const SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  valueColor: AlwaysStoppedAnimation<Color>(
+                                    Colors.white,
+                                  ),
                                 ),
                               ),
-                            ),
-                      label: const Text('Save'),
-                    ),
+                        label: const Text('Save'),
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -457,4 +620,18 @@ class _ChildTableSheetState extends State<_ChildTableSheet> {
       ),
     );
   }
+}
+
+/// What one child row renders: either a set of declared grid cells, or a
+/// title/subtitle pair when the child doctype declares no columns.
+class _RowDisplay {
+  const _RowDisplay({
+    required this.title,
+    required this.subtitle,
+    required this.cells,
+  });
+
+  final String title;
+  final String subtitle;
+  final List<MapEntry<String, String>> cells;
 }

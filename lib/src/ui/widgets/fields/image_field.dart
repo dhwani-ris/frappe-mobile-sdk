@@ -556,113 +556,131 @@ class ImageField extends BaseField {
                   );
                 },
               ),
+            // The two pick buttons are `Flexible`, and their labels ellipsize.
+            // An unconstrained child of a Row is laid out at its FULL intrinsic
+            // width, so on a narrow screen (360dp and below) Gallery + Camera +
+            // the remove button overflowed the row by ~21px, painting the debug
+            // stripes over the field. `Flexible` lets the pair shrink to fit
+            // while keeping their natural width when there is room.
             Row(
               children: [
                 if ((imagePickSource?.call() ?? ImagePickSource.both)
                     .allowsGallery)
-                  OutlinedButton.icon(
-                    onPressed: enabled && !field.readOnly
-                        ? () async {
-                            // pickImage throws on a denied gallery permission —
-                            // a routine case, not an edge one. Unguarded it became
-                            // an unhandled async error from onPressed with nothing
-                            // shown to the user.
-                            final messenger = ScaffoldMessenger.of(context);
-                            try {
-                              final picker = ImagePicker();
-                              final result = await picker.pickImage(
-                                source: ImageSource.gallery,
-                              );
-                              if (result != null) {
-                                await _onImagePicked(
-                                  fieldState,
-                                  File(result.path),
-                                  messenger: messenger,
+                  Flexible(
+                    child: OutlinedButton.icon(
+                      onPressed: enabled && !field.readOnly
+                          ? () async {
+                              // pickImage throws on a denied gallery permission —
+                              // a routine case, not an edge one. Unguarded it became
+                              // an unhandled async error from onPressed with nothing
+                              // shown to the user.
+                              final messenger = ScaffoldMessenger.of(context);
+                              try {
+                                final picker = ImagePicker();
+                                final result = await picker.pickImage(
+                                  source: ImageSource.gallery,
+                                );
+                                if (result != null) {
+                                  await _onImagePicked(
+                                    fieldState,
+                                    File(result.path),
+                                    messenger: messenger,
+                                  );
+                                }
+                              } catch (e, st) {
+                                sdkLog(
+                                  'ImageField: gallery pick failed — $e\n$st',
+                                );
+                                _notify(
+                                  messenger,
+                                  'Could not open the gallery. Check photo '
+                                  'permissions in Settings.',
                                 );
                               }
-                            } catch (e, st) {
-                              sdkLog(
-                                'ImageField: gallery pick failed — $e\n$st',
-                              );
-                              _notify(
-                                messenger,
-                                'Could not open the gallery. Check photo '
-                                'permissions in Settings.',
-                              );
                             }
-                          }
-                        : null,
-                    icon: const Icon(Icons.photo_library),
-                    label: const Text('Gallery'),
+                          : null,
+                      icon: const Icon(Icons.photo_library),
+                      label: const Text(
+                        'Gallery',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
                   ),
                 if ((imagePickSource?.call() ?? ImagePickSource.both) ==
                     ImagePickSource.both)
                   const SizedBox(width: 8),
                 if ((imagePickSource?.call() ?? ImagePickSource.both)
                     .allowsCamera)
-                  OutlinedButton.icon(
-                    onPressed: enabled && !field.readOnly
-                        ? () async {
-                            final messenger = ScaffoldMessenger.of(context);
-                            final picker = ImagePicker();
-                            // Android can kill the host activity mid-capture
-                            // and stash the result; without recovering it the
-                            // FIRST capture is silently dropped and users must
-                            // shoot twice ("camera-twice" bug). The stash is
-                            // app-wide, so only the field named by the marker
-                            // written before that capture may claim it —
-                            // otherwise field B's tap could pick up field A's
-                            // photo.
-                            if (await _restoreInterruptedCapture(
-                              context,
-                              picker,
-                              fieldState,
-                            )) {
-                              return;
-                            }
-                            await _writeCaptureMarker();
-                            try {
-                              final result = await picker.pickImage(
-                                source: ImageSource.camera,
-                              );
-                              if (result != null) {
-                                // A photo came back inside this run, so nothing is
-                                // stashed — the marker has done its job.
+                  Flexible(
+                    child: OutlinedButton.icon(
+                      onPressed: enabled && !field.readOnly
+                          ? () async {
+                              final messenger = ScaffoldMessenger.of(context);
+                              final picker = ImagePicker();
+                              // Android can kill the host activity mid-capture
+                              // and stash the result; without recovering it the
+                              // FIRST capture is silently dropped and users must
+                              // shoot twice ("camera-twice" bug). The stash is
+                              // app-wide, so only the field named by the marker
+                              // written before that capture may claim it —
+                              // otherwise field B's tap could pick up field A's
+                              // photo.
+                              if (await _restoreInterruptedCapture(
+                                context,
+                                picker,
+                                fieldState,
+                              )) {
+                                return;
+                              }
+                              await _writeCaptureMarker();
+                              try {
+                                final result = await picker.pickImage(
+                                  source: ImageSource.camera,
+                                );
+                                if (result != null) {
+                                  // A photo came back inside this run, so nothing is
+                                  // stashed — the marker has done its job.
+                                  await _clearCaptureMarker();
+                                  await _onImagePicked(
+                                    fieldState,
+                                    File(result.path),
+                                    messenger: messenger,
+                                  );
+                                }
+                                // A null result is ambiguous: the user cancelled, OR
+                                // Android recreated the activity and stashed the
+                                // photo (pickImage then completes with null). The
+                                // marker is deliberately LEFT in place — clearing it
+                                // here would make that stashed photo unrecoverable,
+                                // which is the very bug this marker exists to fix.
+                                // A plain cancel costs one empty retrieveLostData()
+                                // on the next tap, and the age bound expires it.
+                              } catch (e, st) {
                                 await _clearCaptureMarker();
-                                await _onImagePicked(
-                                  fieldState,
-                                  File(result.path),
-                                  messenger: messenger,
+                                // Previously rethrown from inside onPressed — an
+                                // unhandled async error with no user-visible
+                                // message. A denied camera permission is the common
+                                // trigger, so report it instead of crashing the
+                                // zone.
+                                sdkLog(
+                                  'ImageField: camera capture failed — $e\n$st',
+                                );
+                                _notify(
+                                  messenger,
+                                  'Could not open the camera. Check camera '
+                                  'permissions in Settings.',
                                 );
                               }
-                              // A null result is ambiguous: the user cancelled, OR
-                              // Android recreated the activity and stashed the
-                              // photo (pickImage then completes with null). The
-                              // marker is deliberately LEFT in place — clearing it
-                              // here would make that stashed photo unrecoverable,
-                              // which is the very bug this marker exists to fix.
-                              // A plain cancel costs one empty retrieveLostData()
-                              // on the next tap, and the age bound expires it.
-                            } catch (e, st) {
-                              await _clearCaptureMarker();
-                              // Previously rethrown from inside onPressed — an
-                              // unhandled async error with no user-visible
-                              // message. A denied camera permission is the common
-                              // trigger, so report it instead of crashing the
-                              // zone.
-                              sdkLog(
-                                'ImageField: camera capture failed — $e\n$st',
-                              );
-                              _notify(
-                                messenger,
-                                'Could not open the camera. Check camera '
-                                'permissions in Settings.',
-                              );
                             }
-                          }
-                        : null,
-                    icon: const Icon(Icons.camera_alt),
-                    label: const Text('Camera'),
+                          : null,
+                      icon: const Icon(Icons.camera_alt),
+                      label: const Text(
+                        'Camera',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
                   ),
                 // Discard. Only when there IS something to remove and the
                 // field is editable. A mandatory field can still be cleared —
