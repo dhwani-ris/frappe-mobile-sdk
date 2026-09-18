@@ -12,6 +12,7 @@ import '../../../services/mobile_creation_capture.dart';
 import 'attach_field.dart';
 import '../../../models/image_pick_source.dart';
 import '../../../services/media_resolver.dart';
+import '../../../utils/frappe_reserved_fields.dart';
 import '../../../utils/media_store.dart';
 import 'base_field.dart';
 import 'button_field.dart';
@@ -68,6 +69,7 @@ import 'time_field.dart';
 /// - [mediaResolver]
 /// - [isOfflineMode]
 /// - [imagePickSource]
+/// - [doctype]
 ///
 /// **Subclassing is the supported pattern; COMPOSITION is not.** A host that
 /// wraps an inner `FieldFactory` and delegates to it must forward every field
@@ -85,6 +87,17 @@ class FieldFactory {
   LinkOptionService? linkOptionService;
   LinkFieldCoordinator? linkFieldCoordinator;
   FieldStyle? defaultStyle;
+
+  /// The DocType whose form this factory is rendering, un-scrubbed (e.g.
+  /// `Item Group`). Assigned by `FrappeFormBuilder` from `meta.name`.
+  ///
+  /// Needed only to recognise the one reserved fieldname that is
+  /// doctype-dependent — `add_nestedset_fields()` names the tree parent Link
+  /// `frappe.scrub(f"Parent {self.name}")`. With it unset the fixed reserved
+  /// names are still caught; only `parent_<scrubbed doctype>` is missed, so a
+  /// host that forgets it degrades rather than breaks. See
+  /// [isFrappeReservedField].
+  String? doctype;
 
   /// When false, drop the length cap on `Data` fields entirely — Frappe stores
   /// **Single** doctypes as `mediumtext` and exempts them from the cap
@@ -281,6 +294,10 @@ class FieldFactory {
           onChanged: onChanged,
           enabled: enabled,
           style: fieldStyle,
+          allowPreselect: !isFrappeReservedField(
+            field.fieldname,
+            doctype: doctype,
+          ),
         );
 
       case 'Table MultiSelect':
@@ -365,6 +382,10 @@ class FieldFactory {
           getLinkFilterBuilder: getLinkFilterBuilder,
           style: fieldStyle,
           onIsLocalChanged: onIsLocalChanged,
+          allowPreselect: !isFrappeReservedField(
+            field.fieldname,
+            doctype: doctype,
+          ),
         );
 
       case 'Table':

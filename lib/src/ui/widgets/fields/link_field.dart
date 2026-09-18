@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_form_builder/flutter_form_builder.dart';
@@ -8,6 +9,7 @@ import '../../../models/link_filter_result.dart';
 import '../../../services/link_option_service.dart';
 import '../../../services/link_field_coordinator.dart';
 import '../../../database/entities/link_option_entity.dart';
+import '../../../utils/frappe_reserved_fields.dart';
 import '../../../utils/uuid_pattern.dart';
 import 'field_helpers.dart';
 import 'searchable_select.dart';
@@ -27,6 +29,16 @@ class LinkField extends BaseField {
   /// form data so [UuidRewriter] can rewrite the value at push time.
   final ValueChanged<bool>? onIsLocalChanged;
 
+  /// When false, the single-option preselect never fires for this field.
+  /// `FieldFactory` sets it from [isFrappeReservedField]. The Link fields
+  /// this actually protects are the framework-owned ones — `amended_from`
+  /// (`options: self`, `read_only`), `auto_repeat` (`options: Auto Repeat`,
+  /// `read_only`) and the `is_tree` `parent_<scrubbed doctype>` Link, which
+  /// is neither hidden nor read-only and so is the one that would otherwise
+  /// silently acquire a parent the user never picked. Defaults to true so a
+  /// host constructing this widget directly keeps the previous behaviour.
+  final bool allowPreselect;
+
   const LinkField({
     super.key,
     required super.field,
@@ -41,17 +53,26 @@ class LinkField extends BaseField {
     this.parentFormData = const {},
     this.getLinkFilterBuilder,
     this.onIsLocalChanged,
+    this.allowPreselect = true,
   });
 
   @override
   Widget buildField(BuildContext context) {
     // If options are provided directly, use them
     if (options != null && options!.isNotEmpty) {
+      // Deduplicated, order-preserving. [options] is a `createField` parameter
+      // the SDK never populates itself, so the list is whatever the host
+      // passed — and `DropdownButton` asserts when two `DropdownMenuItem`s
+      // share the value it is showing ("There should be exactly one item with
+      // [DropdownButton]'s value"). Deduping also restores the preselect for a
+      // sole option written twice: the count is 1 again, not 2. Mirrors
+      // `SelectField._getRawOptions`.
+      final staticOptions = LinkedHashSet<String>.of(options!).toList();
       // Validate initialValue is in options list
       final initialValueStr = value?.toString();
       String? validInitialValue;
       if (initialValueStr != null && initialValueStr.isNotEmpty) {
-        if (options!.contains(initialValueStr)) {
+        if (staticOptions.contains(initialValueStr)) {
           validInitialValue = initialValueStr;
         } else {
           // Value not in options - use null
@@ -63,12 +84,15 @@ class LinkField extends BaseField {
       // Propagate `onIsLocalChanged` so an auto-picked UUID-shaped
       // option (offline mobile_uuid) flips `<field>__is_local` for
       // UuidRewriter at push time — matches `_applyOptionsAndAutoSelect`.
-      if (options!.length == 1 &&
-          (validInitialValue == null || validInitialValue.isEmpty)) {
-        validInitialValue = options!.first;
+      if (staticOptions.length == 1 &&
+          (validInitialValue == null || validInitialValue.isEmpty) &&
+          allowPreselect &&
+          enabled &&
+          !field.readOnly) {
+        validInitialValue = staticOptions.first;
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          onChanged?.call(options!.first);
-          onIsLocalChanged?.call(looksLikeMobileUuid(options!.first));
+          onChanged?.call(staticOptions.first);
+          onIsLocalChanged?.call(looksLikeMobileUuid(staticOptions.first));
         });
       }
 
@@ -85,14 +109,14 @@ class LinkField extends BaseField {
       );
       return FormBuilderDropdown<String>(
         autovalidateMode: AutovalidateMode.onUserInteraction,
-        key: ValueKey('link_${field.fieldname}_${options!.length}'),
+        key: ValueKey('link_${field.fieldname}_${staticOptions.length}'),
         name: field.fieldname ?? '',
         initialValue: validInitialValue,
         enabled: enabled && !field.readOnly,
         isExpanded: true,
         decoration: tap.decoration,
         padding: tap.padding,
-        items: options!
+        items: staticOptions
             .map(
               (option) => DropdownMenuItem(value: option, child: Text(option)),
             )
@@ -138,6 +162,7 @@ class LinkField extends BaseField {
             style: style,
             onIsLocalChanged: onIsLocalChanged,
             errorText: state.errorText,
+            allowPreselect: allowPreselect,
           );
         },
       );
@@ -182,6 +207,7 @@ class _LinkFieldDropdown extends StatefulWidget {
   final FieldStyle? style;
   final ValueChanged<bool>? onIsLocalChanged;
   final String? errorText;
+  final bool allowPreselect;
 
   const _LinkFieldDropdown({
     required this.field,
@@ -198,6 +224,7 @@ class _LinkFieldDropdown extends StatefulWidget {
     this.style,
     this.onIsLocalChanged,
     this.errorText,
+    this.allowPreselect = true,
   });
 
   @override
@@ -256,7 +283,9 @@ class _LinkFieldDropdownState extends State<_LinkFieldDropdown> {
       _isLoading = false;
       _waitingForDependent = false;
     });
-    if (options.length == 1) {
+    // `widget.enabled` already folds in `field.readOnly` (see the call site in
+    // [LinkField.buildField]), so this one clause covers both.
+    if (options.length == 1 && widget.allowPreselect && widget.enabled) {
       final currentVal = widget.value?.toString();
       final hasValidSelection =
           currentVal != null &&

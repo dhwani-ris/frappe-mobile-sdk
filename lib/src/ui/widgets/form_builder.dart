@@ -494,6 +494,11 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
     // Frappe stores Single doctypes as mediumtext and exempts them from the
     // implicit Data varchar(140) cap.
     _fieldFactory.capDataLength = !widget.meta.isSingle;
+    // Un-scrubbed DocType name. Lets the factory recognise the `is_tree`
+    // `parent_<scrubbed doctype>` Link — the only reserved fieldname that is
+    // not the same on every DocType — and keep the single-option preselect off
+    // it. See [FieldFactory.doctype].
+    _fieldFactory.doctype = widget.meta.name;
     _fieldFactory.errorTextResolver = _inlineTableErrorFor;
     _fieldFactory.creationCapture = widget.creationCapture;
     // The six attachment capabilities below are assigned ONLY when this widget
