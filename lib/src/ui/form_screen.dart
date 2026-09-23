@@ -319,6 +319,33 @@ class _FormScreenState extends State<FormScreen> with WidgetsBindingObserver {
   /// identity answers "which document".
   String _newDocumentMobileUuid = const Uuid().v4();
 
+  /// Completes once the host-supplied [FormScreen.getMobileUuid] has been
+  /// consulted for the FIRST identity this screen issues. `null` when there is
+  /// nothing to wait for (an edit, or a host that supplies no id).
+  ///
+  /// Awaited by the save path so a fast save cannot race the lookup and ship
+  /// the locally-minted fallback after the host has already published its id.
+  Future<void>? _hostMobileUuidResolution;
+
+  /// Adopts the host's pre-generated document id for the initial identity.
+  ///
+  /// A host that pre-generates the id needs the SAME value this screen puts in
+  /// `mobile_uuid`: it keys the host's own checkpoint/outbox bookkeeping and,
+  /// after the create returns, the record it re-opens. Two independently minted
+  /// v4 uuids for one document make that lookup miss — the document saves, then
+  /// cannot be found by the id the host is holding.
+  ///
+  /// Only the FIRST identity is adopted. [_startNewDocumentIdentity] begins a
+  /// *different* document, and the host's id belongs to the one just finished;
+  /// reusing it there would make the next create resolve to the previous
+  /// record. Those identities stay locally minted.
+  Future<void> _adoptHostMobileUuid() async {
+    final supplied = await widget.getMobileUuid?.call();
+    if (!mounted) return;
+    if (supplied == null || supplied.isEmpty) return;
+    _newDocumentMobileUuid = supplied;
+  }
+
   /// Ends the current new-document identity and starts a fresh one.
   ///
   /// A SUCCESSFUL create ends the document; this screen does not end with it.
@@ -544,6 +571,12 @@ class _FormScreenState extends State<FormScreen> with WidgetsBindingObserver {
     // Fire-and-forget: readiness is async, and the form must build now. The
     // barrier appears a frame later if the device cannot locate the record.
     _evaluateLocationGate();
+
+    // An existing record is locked to its `localId`, so there is nothing to
+    // adopt; only a brand-new document can take the host's pre-generated id.
+    if (widget.document == null && widget.getMobileUuid != null) {
+      _hostMobileUuidResolution = _adoptHostMobileUuid();
+    }
 
     if (widget.mode == FormBuilderMode.reactive) {
       _formController =
@@ -1182,12 +1215,6 @@ class _FormScreenState extends State<FormScreen> with WidgetsBindingObserver {
         // L2 idempotency match the row when push-back lands.
         final isInsert =
             widget.document == null || widget.document!.serverId == null;
-        // True when this save edits a previously-saved offline record
-        // (lineage already exists locally with mobile_uuid = localId).
-        // Drives both the identity-locking below and the post-save
-        // reconcileServerSave path that collapses any failed outbox
-        // rows for this same lineage.
-        final isEditingExistingDoc = widget.document != null;
         // Hoisted so the post-save block below can tell a create that returned
         // a usable name from one that did not. See the re-mint guard there.
         String? createdServerName;
@@ -1212,6 +1239,10 @@ class _FormScreenState extends State<FormScreen> with WidgetsBindingObserver {
           // payload cannot survive: `mobile_uuid = ''` is worse than absent,
           // because MariaDB permits many NULLs in a unique index but only one
           // empty string.
+          // The host may still be publishing the id it pre-generated for this
+          // document; shipping the locally-minted fallback ahead of it is the
+          // split identity this await exists to prevent.
+          await _hostMobileUuidResolution;
           payload['mobile_uuid'] = _documentMobileUuid;
           final result = await widget.api!.document.createDocument(
             widget.meta.name,
@@ -1231,25 +1262,29 @@ class _FormScreenState extends State<FormScreen> with WidgetsBindingObserver {
               );
               merged['docstatus'] = 1;
             }
-            if (isEditingExistingDoc) {
-              // Collapses lineage: attach server_name to the existing
-              // docs__ row, drop the failed outbox row, then apply
-              // the server snapshot. Without this, the failed outbox
-              // row + dirty docs__ row from the prior failed attempt
-              // would stay behind alongside the freshly-synced row.
-              await widget.repository.reconcileServerSave(
-                doctype: widget.meta.name,
-                mobileUuid: widget.document!.localId,
-                serverName: serverName,
-                serverData: merged,
-              );
-            } else {
-              await widget.repository.applyServerDocument(
-                doctype: widget.meta.name,
-                serverName: serverName,
-                data: merged,
-              );
-            }
+            // Collapses lineage: attach server_name to the docs__ row this
+            // document already owns, cancel any outbox row still owed for it,
+            // then apply the server snapshot.
+            //
+            // Runs for a FIRST create too, not just an edit-save. A new
+            // document can already own a local row — a checkpoint/draft, or a
+            // save that failed and left the row dirty — and `applyServerDocument`
+            // alone cannot bind it: PullApply looks the row up by `server_name`,
+            // which a never-synced row does not have yet, and skips rows whose
+            // `sync_status` is dirty/failed/blocked/conflict. The row then keeps
+            // its `mobile_uuid` with no `server_name`, so it stays unsynced and
+            // is pushed a second time. `markSynced` is a plain UPDATE, so when
+            // there is no local row yet (a purely online create) it matches
+            // nothing and this degrades to the old apply-only behaviour.
+            //
+            // `_documentMobileUuid` is the right key on both paths: it already
+            // resolves to `widget.document!.localId` whenever one exists.
+            await widget.repository.reconcileServerSave(
+              doctype: widget.meta.name,
+              mobileUuid: _documentMobileUuid,
+              serverName: serverName,
+              serverData: merged,
+            );
             savedData = merged;
           } else {
             savedData = Map<String, dynamic>.from(payload);
@@ -1316,6 +1351,7 @@ class _FormScreenState extends State<FormScreen> with WidgetsBindingObserver {
         // it is here so a record that starts offline and a record that starts
         // online are identified the same way, and so a retry after a failed
         // offline save reuses the identity rather than forking a second row.
+        await _hostMobileUuidResolution;
         payload['mobile_uuid'] = _documentMobileUuid;
         await widget.repository.saveDocument(
           doctype: widget.meta.name,
