@@ -57,6 +57,7 @@ void main() {
   Future<void> pumpWith(
     WidgetTester tester,
     Document? document, {
+    Future<String?> Function()? getDocumentMobileUuid,
     Future<String?> Function()? getMobileUuid,
   }) async {
     await tester.pumpWidget(
@@ -66,6 +67,8 @@ void main() {
             meta: _meta(),
             repository: repo,
             document: document,
+            getDocumentMobileUuid: getDocumentMobileUuid,
+            // ignore: deprecated_member_use_from_same_package
             getMobileUuid: getMobileUuid,
           ),
         ),
@@ -80,8 +83,20 @@ void main() {
   testWidgets('a new document adopts the host-supplied mobile_uuid', (
     tester,
   ) async {
-    await pumpWith(tester, null, getMobileUuid: () async => hostUuid);
+    await pumpWith(tester, null, getDocumentMobileUuid: () async => hostUuid);
     expect(uuidOf(tester), hostUuid);
+  });
+
+  testWidgets('the DEVICE id from getMobileUuid is never adopted', (
+    tester,
+  ) async {
+    // Hosts pass the per-install id here (README, example app). Adopting it
+    // gives every first document on the device one `mobile_uuid`, and the
+    // server's unique index rejects the second create.
+    await pumpWith(tester, null, getMobileUuid: () async => hostUuid);
+    final minted = uuidOf(tester);
+    expect(minted, isNot(hostUuid));
+    expect(looksLikeMobileUuid(minted), isTrue);
   });
 
   testWidgets('with no host id the screen still mints a usable uuid', (
@@ -96,17 +111,21 @@ void main() {
   testWidgets('an empty or null host id falls back to a minted uuid', (
     tester,
   ) async {
-    await pumpWith(tester, null, getMobileUuid: () async => '');
+    await pumpWith(tester, null, getDocumentMobileUuid: () async => '');
     expect(looksLikeMobileUuid(uuidOf(tester)), isTrue);
 
-    await pumpWith(tester, null, getMobileUuid: () async => null);
+    await pumpWith(tester, null, getDocumentMobileUuid: () async => null);
     expect(looksLikeMobileUuid(uuidOf(tester)), isTrue);
   });
 
   testWidgets('an existing record stays locked to its localId', (tester) async {
     // System-owned metadata: a host id must never override an existing
     // lineage, or the edit forks a second docs__ row.
-    await pumpWith(tester, _existing(), getMobileUuid: () async => hostUuid);
+    await pumpWith(
+      tester,
+      _existing(),
+      getDocumentMobileUuid: () async => hostUuid,
+    );
     expect(uuidOf(tester), 'local-visit-1');
   });
 
@@ -115,10 +134,14 @@ void main() {
     (tester) async {
       // The host id belongs to the document just finished. Reusing it would
       // make the next create resolve to the previous record.
-      await pumpWith(tester, _existing(), getMobileUuid: () async => hostUuid);
+      await pumpWith(
+        tester,
+        _existing(),
+        getDocumentMobileUuid: () async => hostUuid,
+      );
       expect(uuidOf(tester), 'local-visit-1');
 
-      await pumpWith(tester, null, getMobileUuid: () async => hostUuid);
+      await pumpWith(tester, null, getDocumentMobileUuid: () async => hostUuid);
       final next = uuidOf(tester);
       expect(next, isNot('local-visit-1'));
       expect(next, isNot(hostUuid));

@@ -205,6 +205,18 @@ class AttachmentPipeline {
             await dao.markRejected(p.id, errorMessage: '$e');
             throw _blocked(p, '$e');
           }
+          // The staged bytes are gone and no url was ever recorded, so no retry
+          // can succeed. Left `failed`, every manual retry loops on the same
+          // PathNotFoundException; `rejected` tells the user what to do, and a
+          // re-pick replaces the row. Checked against the REAL file so a test
+          // double from [fileFromPath] never trips it.
+          if (e is FileSystemException && !await File(p.localPath).exists()) {
+            final reason =
+                '${p.fileName ?? 'The attachment'} is no longer on this '
+                'device. Remove it and attach it again.';
+            await dao.markRejected(p.id, errorMessage: reason);
+            throw _blocked(p, reason);
+          }
           // Delay BEFORE the next attempt; the last attempt has no "next".
           if (attempt < backoff.length - 1) {
             await Future<void>.delayed(backoff[attempt]);

@@ -12,6 +12,7 @@ import '../../../sync/attachment_error_classifier.dart';
 import '../../../utils/attachment_paths.dart';
 import '../../../utils/media_store.dart';
 import '../../../utils/attachment_pick.dart';
+import '../../../utils/picked_image_normalizer.dart';
 import '../../../utils/sdk_log.dart';
 import 'base_field.dart';
 import 'field_helpers.dart';
@@ -239,6 +240,23 @@ class ImageField extends BaseField {
     File file, {
     ScaffoldMessengerState? messenger,
   }) async {
+    // JPEG bytes under a `.jpg` name with metadata stripped; HEIC the picker
+    // could not convert is refused here, while the user can still pick
+    // another photo, instead of blocking the document at sync time.
+    final File upload;
+    try {
+      upload = await normalizePickedImage(file);
+    } on UnsupportedImageFormatException catch (e) {
+      sdkLog('ImageField: $e');
+      if (messenger != null) {
+        _notify(
+          messenger,
+          'This photo is in HEIC format, which is not supported. Set the '
+          'camera to save JPEG photos, or pick a different photo.',
+        );
+      }
+      return false;
+    }
     // Durable-copy-first (survives camera-process kill / cache reclaim); upload
     // inline when online, else keep the local path for save-time queueing.
     //
@@ -253,11 +271,11 @@ class ImageField extends BaseField {
     final String? stored;
     try {
       stored = await resolvePickedAttachment(
-        picked: file,
+        picked: upload,
         online: isOnline?.call() ?? true,
         offlineModeEnabled: isOfflineMode?.call() ?? false,
         uploadFile: uploadFile,
-      );
+      ).whenComplete(() => discardNormalizedImage(file, upload));
     } on AttachmentTooLargeException catch (e) {
       // Surfaced at pick time so the user can retake at a lower resolution,
       // rather than discovering it as a blocked document after sync.
@@ -577,8 +595,15 @@ class ImageField extends BaseField {
                               final messenger = ScaffoldMessenger.of(context);
                               try {
                                 final picker = ImagePicker();
+                                // The quality/size options are what make the
+                                // picker re-encode to JPEG: without them a
+                                // gallery pick is the original, often HEIC,
+                                // which the server rejects.
                                 final result = await picker.pickImage(
                                   source: ImageSource.gallery,
+                                  imageQuality: kPickedImageQuality,
+                                  maxWidth: kPickedImageMaxDimension,
+                                  maxHeight: kPickedImageMaxDimension,
                                 );
                                 if (result != null) {
                                   await _onImagePicked(
@@ -637,6 +662,9 @@ class ImageField extends BaseField {
                               try {
                                 final result = await picker.pickImage(
                                   source: ImageSource.camera,
+                                  imageQuality: kPickedImageQuality,
+                                  maxWidth: kPickedImageMaxDimension,
+                                  maxHeight: kPickedImageMaxDimension,
                                 );
                                 if (result != null) {
                                   // A photo came back inside this run, so nothing is

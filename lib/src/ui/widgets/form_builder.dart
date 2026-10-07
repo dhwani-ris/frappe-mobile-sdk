@@ -75,6 +75,58 @@ enum FormTabHeaderLayout { tabBar, stepper }
 /// The legacy path is retained intact as the rollout safety valve.
 enum FormBuilderMode { legacy, reactive }
 
+/// Field types rendered by `FormBuilderDateTimePicker`, a
+/// `FormBuilderField<DateTime>`.
+const Set<String> _kDateTimePickerFieldTypes = {'Date', 'Datetime', 'Time'};
+
+/// [values] with every Date/Datetime/Time entry that is not a [DateTime] set to
+/// `null`, for use as a `FormBuilder.initialValue`.
+///
+/// Each picker parses its own value into its widget `initialValue`. When that
+/// parse yields null (an empty or malformed stored string), flutter_form_builder
+/// falls back to `FormBuilder.initialValue[name] as DateTime?`, and a String
+/// there throws "type 'String' is not a subtype of type 'DateTime?'" — a whole
+/// form render error on a saved record whose optional date is ''. Valid values
+/// are unaffected: the picker's own parsed value always takes precedence.
+Map<String, dynamic> _pickerSafeInitialValues(
+  Map<String, dynamic> values,
+  List<DocField> fields,
+) {
+  Map<String, dynamic>? out;
+  for (final f in fields) {
+    final name = f.fieldname;
+    if (name == null || !_kDateTimePickerFieldTypes.contains(f.fieldtype)) {
+      continue;
+    }
+    final v = values[name];
+    if (v == null || v is DateTime) continue;
+    (out ??= Map<String, dynamic>.from(values))[name] = null;
+  }
+  return out ?? values;
+}
+
+/// [data] with blank Date/Datetime/Time values (`''` or whitespace) set to
+/// `null`.
+///
+/// The payload fills every untouched field with an empty value, and `''` is
+/// not a date: stored locally it came back on the next open and broke the
+/// picker (see [_pickerSafeInitialValues]). `null` is what Frappe stores for an
+/// empty date anyway.
+Map<String, dynamic> _withNullEmptyDates(
+  Map<String, dynamic> data,
+  List<DocField> fields,
+) {
+  for (final f in fields) {
+    final name = f.fieldname;
+    if (name == null || !_kDateTimePickerFieldTypes.contains(f.fieldtype)) {
+      continue;
+    }
+    final v = data[name];
+    if (v is String && v.trim().isEmpty) data[name] = null;
+  }
+  return data;
+}
+
 /// Visual style for stepper tab header mode.
 class FormStepHeaderStyle {
   final Color activeColor;
@@ -712,7 +764,9 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
     if (c == null) return;
     // Await async/server/duplicate validators before committing the submit.
     if (await c.validateAsync()) {
-      widget.onSubmit?.call(c.buildSubmitData());
+      widget.onSubmit?.call(
+        _withNullEmptyDates(c.buildSubmitData(), widget.meta.fields),
+      );
     } else {
       final invalid = c.firstInvalidField;
       if (invalid != null) {
@@ -2365,7 +2419,9 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
       return;
     }
 
-    widget.onSubmit?.call(completeFormData);
+    widget.onSubmit?.call(
+      _withNullEmptyDates(completeFormData, widget.meta.fields),
+    );
   }
 
   /// Warms [_childRowMeta] for every `Table` field so the submit-time row
@@ -2518,7 +2574,10 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
     widget.registerSubmit?.call(_handleReactiveSubmit);
     return FormBuilder(
       key: _formKey,
-      initialValue: _controller!.values,
+      initialValue: _pickerSafeInitialValues(
+        _controller!.values,
+        widget.meta.fields,
+      ),
       child: Column(
         children: [
           _buildTabHeader(formStyle),
@@ -2762,7 +2821,10 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
 
     return FormBuilder(
       key: _formKey,
-      initialValue: Map<String, dynamic>.from(_formData),
+      initialValue: _pickerSafeInitialValues(
+        Map<String, dynamic>.from(_formData),
+        widget.meta.fields,
+      ),
       child: Column(
         children: [
           if (_linkOptionsLoading)

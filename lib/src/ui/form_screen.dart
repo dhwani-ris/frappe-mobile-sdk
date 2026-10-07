@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:uuid/uuid.dart';
@@ -23,7 +25,9 @@ import '../services/offline_repository.dart';
 import '../services/sync_controller.dart';
 import '../services/sync_service.dart';
 import '../services/workflow_service.dart';
+import '../utils/media_store.dart';
 import '../utils/mobile_creation_stamp.dart';
+import '../utils/staged_attachments.dart';
 import '../utils/uuid_pattern.dart';
 import 'widgets/screen_helpers.dart';
 import 'widgets/location_required_barrier.dart';
@@ -145,6 +149,19 @@ class FormScreen extends StatefulWidget {
   )
   final Future<String?> Function()? getMobileUuid;
 
+  /// Pre-generated `mobile_uuid` for the NEW document this screen opens on.
+  ///
+  /// For a host that mints the document id up front and keys its own
+  /// checkpoint/outbox bookkeeping by it: the screen saves under the SAME
+  /// value instead of minting a second one. It must return a fresh id per
+  /// document. A per-install value (such as `FrappeSDK.getMobileUuid()`)
+  /// stamps every document from the device with one `mobile_uuid`, which the
+  /// server's unique index rejects on the second create.
+  ///
+  /// Consulted once, for the first new document only; ignored when editing an
+  /// existing [document]. A `null` or empty result falls back to a minted uuid.
+  final Future<String?> Function()? getDocumentMobileUuid;
+
   /// Optional form style (overrides the default style used by FrappeFormBuilder).
   final FrappeFormStyle? style;
 
@@ -259,6 +276,7 @@ class FormScreen extends StatefulWidget {
     this.api,
     this.onSaveSuccess,
     this.getMobileUuid,
+    this.getDocumentMobileUuid,
     this.style,
     this.readOnly = false,
     this.canSave,
@@ -319,9 +337,9 @@ class _FormScreenState extends State<FormScreen> with WidgetsBindingObserver {
   /// identity answers "which document".
   String _newDocumentMobileUuid = const Uuid().v4();
 
-  /// Completes once the host-supplied [FormScreen.getMobileUuid] has been
-  /// consulted for the FIRST identity this screen issues. `null` when there is
-  /// nothing to wait for (an edit, or a host that supplies no id).
+  /// Completes once the host-supplied [FormScreen.getDocumentMobileUuid] has
+  /// been consulted for the FIRST identity this screen issues. `null` when
+  /// there is nothing to wait for (an edit, or a host that supplies no id).
   ///
   /// Awaited by the save path so a fast save cannot race the lookup and ship
   /// the locally-minted fallback after the host has already published its id.
@@ -340,7 +358,7 @@ class _FormScreenState extends State<FormScreen> with WidgetsBindingObserver {
   /// reusing it there would make the next create resolve to the previous
   /// record. Those identities stay locally minted.
   Future<void> _adoptHostMobileUuid() async {
-    final supplied = await widget.getMobileUuid?.call();
+    final supplied = await widget.getDocumentMobileUuid?.call();
     if (!mounted) return;
     if (supplied == null || supplied.isEmpty) return;
     _newDocumentMobileUuid = supplied;
@@ -455,8 +473,16 @@ class _FormScreenState extends State<FormScreen> with WidgetsBindingObserver {
     _mediaResolver = widget.repository.mediaResolver(
       fetch: _fetchMediaBytes,
       isOnline: () => widget.isOnline?.call() ?? true,
+      uploadedUrlForStagedPath: (path) async =>
+          _uploadedStagedUrls[path] ??
+          (await widget.repository.uploadedUrlsForStagedPaths([path]))[path],
     );
   }
+
+  /// Staged path → server url for attachments this screen uploaded itself on
+  /// an online save. The fields keep the staged path they were picked with,
+  /// so a later save from this screen must not upload (or send) it again.
+  final Map<String, String> _uploadedStagedUrls = {};
 
   /// Mobile creation metadata for a brand-new record: the moment the user
   /// asked for it, plus the in-flight location read started at that moment.
@@ -574,7 +600,7 @@ class _FormScreenState extends State<FormScreen> with WidgetsBindingObserver {
 
     // An existing record is locked to its `localId`, so there is nothing to
     // adopt; only a brand-new document can take the host's pre-generated id.
-    if (widget.document == null && widget.getMobileUuid != null) {
+    if (widget.document == null && widget.getDocumentMobileUuid != null) {
       _hostMobileUuidResolution = _adoptHostMobileUuid();
     }
 
@@ -1191,6 +1217,15 @@ class _FormScreenState extends State<FormScreen> with WidgetsBindingObserver {
       return;
     }
 
+    // The fields still hold the staged paths they were picked with, even after
+    // a push uploaded those files and moved the bytes to cache/. Saving such a
+    // path again queues — or, online, sends — a file that is not there any
+    // more, so every one that has already uploaded goes out as its url.
+    payload = await widget.repository.withUploadedAttachmentUrls(
+      payload,
+      known: _uploadedStagedUrls,
+    );
+
     // Offline-first contract: every save queues to docs__ + outbox;
     // push is driven by the cloud icon / Sync. Server-first below
     // runs only in legacy online-only mode where there is no outbox.
@@ -1207,6 +1242,23 @@ class _FormScreenState extends State<FormScreen> with WidgetsBindingObserver {
 
     try {
       if (widget.api != null && serverReachable) {
+        // Server-first never reaches the save-time queue, so a pick whose
+        // inline upload failed would otherwise POST its device path as the
+        // field value. Upload what is left first, or fail the save.
+        final api = widget.api!;
+        final uploadedNow = await uploadStagedAttachments(
+          await stagedAttachmentPathsIn(payload),
+          (path) async {
+            final res = await api.attachment.uploadFile(File(path));
+            final url = res['file_url'] as String?;
+            if (url == null || url.isEmpty) {
+              throw StateError('upload_file returned no file_url for $path');
+            }
+            return url;
+          },
+        );
+        _uploadedStagedUrls.addAll(uploadedNow);
+        payload = replaceAttachmentValues(payload, uploadedNow);
         Map<String, dynamic>? savedData;
         // Server-first: create/update on server, then update local.
         // Treat an offline-only document (document!=null but serverId==null)
@@ -1315,6 +1367,11 @@ class _FormScreenState extends State<FormScreen> with WidgetsBindingObserver {
             data: existingData,
           );
           savedData = existingData;
+        }
+        // The document landed, so the staged copies are redundant. Not before:
+        // a failed save keeps them for the retry.
+        for (final path in uploadedNow.keys) {
+          await MediaStore.deleteOutboxCopy(path);
         }
         if (mounted) {
           setState(() {

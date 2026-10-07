@@ -184,6 +184,7 @@ export 'src/utils/depends_on_evaluator.dart' show DependsOnEvaluator;
 export 'src/ui/widgets/location_required_barrier.dart'
     show LocationRequiredBarrier;
 export 'src/utils/geo_json.dart' show GeoPoint, geoJsonPoint, parseGeoJsonPoint;
+export 'src/utils/staged_attachments.dart' show StagedAttachmentUploadException;
 export 'src/utils/mobile_creation_stamp.dart'
     show
         declaresCreationMeta,

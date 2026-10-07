@@ -269,7 +269,49 @@ class LocalWriter {
       }
 
       if (!isLocalAttachmentPath(value)) return value;
-      final path = (value as String).trim();
+      var path = (value as String).trim();
+      // A re-save of the SAME pick from a form left open after an earlier save.
+      // The form keeps the raw staged path while the queue moves on: a push may
+      // already have uploaded the bytes and moved them to cache/ (or be doing
+      // so right now). Dropping the owning row and enqueueing a fresh one would
+      // point the new row at a file that is gone — every upload attempt then
+      // fails with PathNotFoundException and blocks the document for good.
+      // Keep the owning row instead; only a re-pick (a new staged path)
+      // replaces it.
+      final owner = await _queuedRowOwningPath(txn, mobileUuid, path);
+      if (owner != null) {
+        await _adoptQueuedAttachment(
+          txn,
+          owner,
+          rowUuid,
+          rowDoctype,
+          fieldname,
+        );
+        final url = owner['server_file_url'] as String?;
+        if (url != null && url.isNotEmpty) return url;
+        return '$kPendingMarkerPrefix${owner['id']}';
+      }
+      // The same pick, owned by ANOTHER document. A new record's identity rolls
+      // over after its first local save, so a re-submit from the open form
+      // lands under a fresh uuid still carrying the first record's path. Once
+      // that upload is done its url is the value; before it, this document
+      // needs its own copy — two rows sharing one file strand whichever pushes
+      // second, because the first upload moves the bytes.
+      final foreign = await _queuedRowOwningPathElsewhere(
+        txn,
+        mobileUuid,
+        path,
+      );
+      if (foreign != null) {
+        final url = foreign['server_file_url'] as String?;
+        if (url != null && url.isNotEmpty) {
+          await _dropQueuedAttachment(txn, rowUuid, fieldname);
+          return url;
+        }
+        if (await File(path).exists()) {
+          path = await MediaStore.stageToOutbox(File(path));
+        }
+      }
       // Idempotency: the (parent_uuid, parent_fieldname) index is not UNIQUE,
       // so a re-pick/re-save would otherwise stack duplicate rows. Drop any
       // prior queue row for this exact field — AND its staged file, or the
@@ -629,6 +671,92 @@ class LocalWriter {
     final s = v.toString().trim();
     if (s.isEmpty) return null;
     return int.tryParse(s);
+  }
+}
+
+/// The queued attachment row for [topParentUuid] whose `local_path` is
+/// [path], or null.
+///
+/// Matched on the path, not on `(parent_uuid, parent_fieldname)`: every pick is
+/// staged under its own uuid directory, so the path alone identifies the pick
+/// even if a child row's coordinates changed between saves.
+Future<Map<String, Object?>?> _queuedRowOwningPath(
+  Transaction txn,
+  String topParentUuid,
+  String path,
+) async {
+  final rows = await txn.query(
+    'pending_attachments',
+    columns: ['id', 'parent_uuid', 'parent_fieldname', 'server_file_url'],
+    where: 'top_parent_uuid = ? AND local_path = ?',
+    whereArgs: [topParentUuid, path],
+    orderBy: 'id DESC',
+    limit: 1,
+  );
+  return rows.isEmpty ? null : rows.first;
+}
+
+/// The most useful queued row of a document OTHER than [topParentUuid] whose
+/// `local_path` is [path] — one that already uploaded first — or null.
+Future<Map<String, Object?>?> _queuedRowOwningPathElsewhere(
+  Transaction txn,
+  String topParentUuid,
+  String path,
+) async {
+  final rows = await txn.query(
+    'pending_attachments',
+    columns: ['id', 'server_file_url'],
+    where: 'top_parent_uuid != ? AND local_path = ?',
+    whereArgs: [topParentUuid, path],
+    orderBy: 'server_file_url IS NULL, id DESC',
+    limit: 1,
+  );
+  return rows.isEmpty ? null : rows.first;
+}
+
+/// Makes [owner] the only queued row for `(rowUuid, fieldname)`.
+///
+/// Any OTHER row for that field (an earlier pick this one replaced) is dropped
+/// with its staged file, exactly as a normal re-pick would. The owner's
+/// coordinates are refreshed so the pipeline's writeback lands on the row the
+/// form just saved.
+Future<void> _adoptQueuedAttachment(
+  Transaction txn,
+  Map<String, Object?> owner,
+  String rowUuid,
+  String rowDoctype,
+  String fieldname,
+) async {
+  final ownerId = owner['id'] as int;
+  final others = await txn.query(
+    'pending_attachments',
+    columns: ['id', 'local_path'],
+    where: 'parent_uuid = ? AND parent_fieldname = ? AND id != ?',
+    whereArgs: [rowUuid, fieldname, ownerId],
+  );
+  for (final r in others) {
+    await txn.delete(
+      'pending_attachments',
+      where: 'id = ?',
+      whereArgs: [r['id']],
+    );
+    final prior = r['local_path'] as String?;
+    if (prior != null && prior.isNotEmpty) {
+      await MediaStore.deleteOutboxCopy(prior);
+    }
+  }
+  if (owner['parent_uuid'] != rowUuid ||
+      owner['parent_fieldname'] != fieldname) {
+    await txn.update(
+      'pending_attachments',
+      <String, Object?>{
+        'parent_uuid': rowUuid,
+        'parent_doctype': rowDoctype,
+        'parent_fieldname': fieldname,
+      },
+      where: 'id = ?',
+      whereArgs: [ownerId],
+    );
   }
 }
 

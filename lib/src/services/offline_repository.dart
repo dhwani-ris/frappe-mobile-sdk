@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 import 'dart:developer' as developer;
 import 'package:path/path.dart' as p;
 import 'package:sqflite/sqflite.dart';
@@ -26,6 +27,7 @@ import 'local_writer.dart';
 import 'media_resolver.dart';
 import 'meta_migration.dart';
 import '../utils/media_store.dart';
+import '../utils/staged_attachments.dart';
 import '../utils/sdk_log.dart';
 
 /// Repository for offline document operations
@@ -462,6 +464,55 @@ class OfflineRepository {
 
   // ===== Phase 4: Offline-first save surface =====
 
+  /// The HTTP-only save behind [saveDocument] in online mode.
+  Future<String> _saveOnline(String doctype, Map<String, dynamic> data) async {
+    final hasServerName =
+        data['name'] is String && (data['name'] as String).isNotEmpty;
+    if (hasServerName) {
+      final response = await client!.document.updateDocument(
+        doctype,
+        data['name'] as String,
+        data,
+      );
+      return (response['name'] as String?) ?? data['name'] as String;
+    }
+    // Carry a document identity online too, exactly as the offline branch
+    // below does — same policy, same precedence: honour a caller-supplied
+    // uuid, mint only when there is none.
+    //
+    // This branch used to send `data` untouched, which is the whole reason
+    // online creates duplicated while offline ones never did. It was never
+    // that the offline path is more careful: there the uuid is minted into
+    // the local row and IS its primary key, so every push retry sends the
+    // same value and the server's unique index rejects the twin. Online sent
+    // nothing, the column was NULL, and MariaDB permits unlimited NULLs in a
+    // unique index — so no two rows ever collided.
+    //
+    // Minting HERE only helps a caller that does not retry through a longer-
+    // lived owner: a uuid minted per ATTEMPT is a new identity each time and
+    // duplicates exactly as before. The stable value must come from whatever
+    // owns the document's lifetime — `FormScreen` holds one per screen. This
+    // is the floor, not the mechanism.
+    final onlineUuid = (data['mobile_uuid'] as String?)?.trim();
+    final onlineData = (onlineUuid != null && onlineUuid.isNotEmpty)
+        ? data
+        : <String, dynamic>{...data, 'mobile_uuid': _uuid.v4()};
+    final response = await client!.document.createDocument(doctype, onlineData);
+    return (response['name'] as String?) ?? '';
+  }
+
+  Future<String> _uploadStagedFile(String path) async {
+    final res = await client!.attachment.uploadFile(
+      File(path),
+      fileName: p.basename(path),
+    );
+    final url = res['file_url'] as String?;
+    if (url == null || url.isEmpty) {
+      throw StateError('upload_file returned no file_url for $path');
+    }
+    return url;
+  }
+
   /// Single offline-or-online save entry point. Returns `mobile_uuid`
   /// (offline) or the server name (online). Routes through
   /// [LocalWriter.writeParentInTxn] + [OutboxDao.recordSave] in one
@@ -473,43 +524,24 @@ class OfflineRepository {
     if (!offlineMode.enabled) {
       _requireOnlineClient('saveDocument');
       // Online: HTTP only — no docs__ or outbox writes (Section 5,
-      // "Online vs offline mode invariant").
-      final hasServerName =
-          data['name'] is String && (data['name'] as String).isNotEmpty;
-      if (hasServerName) {
-        final response = await client!.document.updateDocument(
-          doctype,
-          data['name'] as String,
-          data,
-        );
-        return (response['name'] as String?) ?? data['name'] as String;
-      }
-      // Carry a document identity online too, exactly as the offline branch
-      // below does — same policy, same precedence: honour a caller-supplied
-      // uuid, mint only when there is none.
-      //
-      // This branch used to send `data` untouched, which is the whole reason
-      // online creates duplicated while offline ones never did. It was never
-      // that the offline path is more careful: there the uuid is minted into
-      // the local row and IS its primary key, so every push retry sends the
-      // same value and the server's unique index rejects the twin. Online sent
-      // nothing, the column was NULL, and MariaDB permits unlimited NULLs in a
-      // unique index — so no two rows ever collided.
-      //
-      // Minting HERE only helps a caller that does not retry through a longer-
-      // lived owner: a uuid minted per ATTEMPT is a new identity each time and
-      // duplicates exactly as before. The stable value must come from whatever
-      // owns the document's lifetime — `FormScreen` holds one per screen. This
-      // is the floor, not the mechanism.
-      final onlineUuid = (data['mobile_uuid'] as String?)?.trim();
-      final onlineData = (onlineUuid != null && onlineUuid.isNotEmpty)
-          ? data
-          : <String, dynamic>{...data, 'mobile_uuid': _uuid.v4()};
-      final response = await client!.document.createDocument(
-        doctype,
-        onlineData,
+      // "Online vs offline mode invariant"). That also means nothing at save
+      // time ever queued a staged attachment here: a pick whose inline upload
+      // failed left its device path in the field, and that path went to the
+      // server verbatim as the field's value. Upload first, or fail the save.
+      final urls = await uploadStagedAttachments(
+        await stagedAttachmentPathsIn(data),
+        _uploadStagedFile,
       );
-      return (response['name'] as String?) ?? '';
+      final name = await _saveOnline(
+        doctype,
+        replaceAttachmentValues(data, urls),
+      );
+      // Only after the document landed: a failed save keeps the copies, so the
+      // retry still has the bytes to upload.
+      for (final path in urls.keys) {
+        await MediaStore.deleteOutboxCopy(path);
+      }
+      return name;
     }
 
     if (_localWriter == null) {
@@ -1216,10 +1248,14 @@ class OfflineRepository {
   MediaResolver mediaResolver({
     required MediaFetchFn fetch,
     required bool Function() isOnline,
+    Future<String?> Function(String stagedPath)? uploadedUrlForStagedPath,
   }) => MediaResolver(
     cache: MediaCacheDao(_database.rawDatabase),
     fetch: fetch,
     isOnline: isOnline,
+    uploadedUrlForStagedPath:
+        uploadedUrlForStagedPath ??
+        (path) async => (await uploadedUrlsForStagedPaths([path]))[path],
   );
 
   /// Reclaims the staged bytes behind an attach value the user discarded or
@@ -1271,6 +1307,54 @@ class OfflineRepository {
       return;
     }
     await MediaStore.discardValue(v);
+  }
+
+  /// Staged path → server `file_url` for each of [paths] a queued attachment
+  /// has already uploaded. Any document's row counts: after a new record's
+  /// identity rolls over, the open form re-saves under a fresh uuid while the
+  /// bytes were uploaded, and moved to cache/, under the previous one.
+  Future<Map<String, String>> uploadedUrlsForStagedPaths(
+    Iterable<String> paths,
+  ) async {
+    final wanted = paths.toSet();
+    if (wanted.isEmpty) return const {};
+    final db = _database.rawDatabase;
+    if (!await sqliteTableExists(db, 'pending_attachments')) return const {};
+    final rows = await db.query(
+      'pending_attachments',
+      columns: ['local_path', 'server_file_url'],
+      where:
+          'server_file_url IS NOT NULL AND local_path IN '
+          '(${List.filled(wanted.length, '?').join(',')})',
+      whereArgs: wanted.toList(),
+      orderBy: 'id ASC', // the newest upload wins
+    );
+    return {
+      for (final r in rows)
+        if ((r['server_file_url'] as String).isNotEmpty)
+          r['local_path'] as String: r['server_file_url'] as String,
+    };
+  }
+
+  /// [data] with every staged attachment path that has already uploaded
+  /// replaced by its server url (parent and child rows).
+  ///
+  /// An open form keeps the raw staged path after a save; once a push uploads
+  /// the file and moves the bytes to cache/, saving that path again queues an
+  /// upload of a file that no longer exists. Call this on a form's payload
+  /// before saving it. [known] supplies urls the caller learned itself, such as
+  /// an online save's own uploads.
+  Future<Map<String, dynamic>> withUploadedAttachmentUrls(
+    Map<String, dynamic> data, {
+    Map<String, String> known = const {},
+  }) async {
+    final staged = await stagedAttachmentPathsIn(data);
+    if (staged.isEmpty) return data;
+    final urls = <String, String>{
+      ...await uploadedUrlsForStagedPaths(staged),
+      ...known,
+    }..removeWhere((path, _) => !staged.contains(path));
+    return replaceAttachmentValues(data, urls);
   }
 
   Future<Map<int, String>> pendingAttachmentLocalPaths(

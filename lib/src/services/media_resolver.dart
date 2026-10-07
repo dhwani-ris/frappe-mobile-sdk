@@ -54,11 +54,17 @@ class MediaResolver {
   /// which is the only place that sees the response before it is buffered.
   final int maxFetchBytes;
 
+  /// Server url a staged path was uploaded as, or null. Lets a form that still
+  /// holds a staged path after a push — the push moved the bytes to cache/
+  /// under the url — keep showing the photo instead of a broken image.
+  final Future<String?> Function(String stagedPath)? uploadedUrlForStagedPath;
+
   MediaResolver({
     required this.cache,
     required this.fetch,
     required this.isOnline,
     this.maxFetchBytes = kDefaultMaxMediaFetchBytes,
+    this.uploadedUrlForStagedPath,
   });
 
   /// Resolution order:
@@ -93,7 +99,10 @@ class MediaResolver {
     // mode exists to avoid.
     if (isLocalAttachmentPath(v)) {
       try {
-        return await File(v).exists() ? v : null;
+        if (await File(v).exists()) return v;
+        final url = await uploadedUrlForStagedPath?.call(v);
+        if (url == null || isLocalAttachmentPath(url)) return null;
+        return resolve(url);
       } catch (e, st) {
         sdkLog('MediaResolver.resolve: stat($v) failed — $e\n$st');
         return null;

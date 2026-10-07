@@ -209,4 +209,35 @@ void main() {
       expect(File(path!).existsSync(), isTrue);
     });
   });
+
+  group('a staged path whose bytes have moved', () {
+    test('resolves through its uploaded url to the cached copy', () async {
+      // After a push, the open form still holds the staged path, but the bytes
+      // now live in cache/ under the url. Without this the preview went blank.
+      final cached = File('${root.path}/cached.jpg')..writeAsStringSync('X');
+      await cache.upsert(
+        fileUrl: '/private/files/a.jpg',
+        localPath: cached.path,
+        source: MediaSource.uploaded,
+      );
+      final r = MediaResolver(
+        cache: cache,
+        isOnline: () => false,
+        fetch: (_) async => null,
+        uploadedUrlForStagedPath: (path) async =>
+            path == '/gone/outbox/u/a.jpg' ? '/private/files/a.jpg' : null,
+      );
+      expect(await r.resolve('/gone/outbox/u/a.jpg'), cached.path);
+    });
+
+    test('stays null when nothing uploaded it', () async {
+      final r = MediaResolver(
+        cache: cache,
+        isOnline: () => true,
+        fetch: (_) async => [1],
+        uploadedUrlForStagedPath: (_) async => null,
+      );
+      expect(await r.resolve('/gone/outbox/u/b.jpg'), isNull);
+    });
+  });
 }
