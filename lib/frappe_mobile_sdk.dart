@@ -141,7 +141,8 @@ export 'src/ui/app_guard.dart';
 export 'src/ui/login_screen.dart';
 export 'src/ui/login_screen_style.dart';
 export 'src/ui/doctype_list_screen.dart';
-export 'src/ui/form_screen.dart';
+// Test seams for FormScreen's media fetcher.
+export 'src/ui/form_screen.dart' hide fetchMediaBytes, mediaFetchRequest;
 export 'src/ui/document_list_screen.dart';
 export 'src/ui/sync_status_screen.dart';
 export 'src/ui/form_renderer_helper.dart';

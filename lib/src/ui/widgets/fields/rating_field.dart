@@ -85,7 +85,8 @@ class RatingField extends BaseField {
                   onTap: enabled && !field.readOnly
                       ? () {
                           // Re-tapping the currently-last filled star clears the
-                          // rating, matching the web SPA (FieldInput.vue:379).
+                          // rating, as Frappe Desk's Rating control does
+                          // (frappe/public/js/frappe/form/controls/rating.js).
                           final stars = filled == rating ? 0 : rating;
                           final next = storedFromStars(stars, maxRating);
                           fieldState.didChange(next);

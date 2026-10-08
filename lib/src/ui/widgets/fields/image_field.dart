@@ -481,7 +481,11 @@ class ImageField extends BaseField {
                           showFullScreenImage(
                             context,
                             displayUrl!,
-                            imageHeaders,
+                            authHeadersForUrl(
+                              displayUrl,
+                              imageHeaders,
+                              fileUrlBase,
+                            ),
                           );
                         } else if (isLocalFile) {
                           showFullScreenImageProvider(
@@ -500,7 +504,11 @@ class ImageField extends BaseField {
                                     height: 150,
                                     width: double.infinity,
                                     fit: BoxFit.cover,
-                                    headers: imageHeaders,
+                                    headers: authHeadersForUrl(
+                                      displayUrl,
+                                      imageHeaders,
+                                      fileUrlBase,
+                                    ),
                                     errorBuilder: (context, error, stackTrace) {
                                       return Container(
                                         height: 150,

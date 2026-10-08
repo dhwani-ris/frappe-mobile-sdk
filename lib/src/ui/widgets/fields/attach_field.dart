@@ -512,7 +512,13 @@ class AttachField extends BaseField {
                         : displaySource,
                     isLocal: isLocalFile,
                     isImage: isImage,
-                    headers: imageHeaders,
+                    headers: isServer
+                        ? authHeadersForUrl(
+                            _fullFileUrl(displaySource) ?? displaySource,
+                            imageHeaders,
+                            fileUrlBase,
+                          )
+                        : imageHeaders,
                     // `displaySource`, not `current`: a `pending:<id>` marker
                     // resolves to its durable local file, so the label shows
                     // the real filename not the marker text.

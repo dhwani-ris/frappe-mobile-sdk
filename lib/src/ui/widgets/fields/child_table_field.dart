@@ -108,7 +108,10 @@ class ChildTableField extends StatelessWidget {
                 softWrap: true,
               ),
             ),
-            if (enabled && !field.readOnly && onChanged != null)
+            if (enabled &&
+                !field.readOnly &&
+                !field.cannotAddRows &&
+                onChanged != null)
               TextButton.icon(
                 onPressed: () => _showAddRowDialog(context, listValue),
                 icon: const Icon(Icons.add, size: 20),
@@ -153,7 +156,11 @@ class ChildTableField extends StatelessWidget {
                   // would repeat, so it is folded into the title builder above
                   // and rendered only when the child declares no columns.
                   subtitle: null,
-                  trailing: enabled && !field.readOnly && onChanged != null
+                  trailing:
+                      enabled &&
+                          !field.readOnly &&
+                          !field.cannotDeleteRows &&
+                          onChanged != null
                       ? IconButton(
                           icon: const Icon(Icons.delete, color: Colors.red),
                           onPressed: () {
@@ -449,7 +456,7 @@ class ChildTableField extends StatelessWidget {
                 );
                 onChanged?.call(newList);
               },
-        onRemove: isReadOnly
+        onRemove: isReadOnly || field.cannotDeleteRows
             ? null
             : () {
                 Navigator.pop(ctx);

@@ -51,9 +51,12 @@ class FieldNormalizer {
         return false;
 
       case FieldTypes.rating:
+        // A Rating is a 0..1 fraction (see RatingField), so it must stay a
+        // double: parsing it as an int turned every stored fraction (0.6) into
+        // null, and the form's post-frame patch then cleared the stars.
         if (value == null || value == '') return null;
-        if (value is int) return value;
-        return int.tryParse(value.toString());
+        if (value is num) return value.toDouble();
+        return double.tryParse(value.toString());
 
       case FieldTypes.select:
         if (field.options == null || field.options!.trim().isEmpty) {

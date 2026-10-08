@@ -150,4 +150,20 @@ void main() {
     final headers = (img.image as NetworkImage).headers;
     expect(headers, {'Authorization': 'Bearer tok'});
   });
+
+  testWidgets('imageHeaders are NOT sent to a file on another host', (
+    tester,
+  ) async {
+    // A value stored as an absolute object-storage URL must load without the
+    // Frappe session token: the token belongs to the Frappe host only.
+    await _pump(
+      tester,
+      field: field,
+      value: 'https://bucket.s3.example.net/files/x.png',
+      fileUrlBase: 'http://example.com',
+      imageHeaders: {'Authorization': 'Bearer tok'},
+    );
+    final img = tester.widget<Image>(find.byType(Image));
+    expect((img.image as NetworkImage).headers, isNull);
+  });
 }

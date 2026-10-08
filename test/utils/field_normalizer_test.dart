@@ -79,6 +79,24 @@ void main() {
       expect(FieldNormalizer.normalize(_f(FieldTypes.rating), 4), 4);
       expect(FieldNormalizer.normalize(_f(FieldTypes.rating), '3'), 3);
     });
+    test('a stored 0..1 fraction is kept, not dropped', () {
+      expect(FieldNormalizer.normalize(_f(FieldTypes.rating), 0.6), 0.6);
+      expect(FieldNormalizer.normalize(_f(FieldTypes.rating), 1.0), 1.0);
+      expect(FieldNormalizer.normalize(_f(FieldTypes.rating), '0.6'), 0.6);
+    });
+    test('always yields a double, the type RatingField holds', () {
+      expect(
+        FieldNormalizer.normalize(_f(FieldTypes.rating), 4),
+        isA<double>(),
+      );
+      expect(
+        FieldNormalizer.normalize(_f(FieldTypes.rating), 0.6),
+        isA<double>(),
+      );
+    });
+    test('a non-numeric value becomes null', () {
+      expect(FieldNormalizer.normalize(_f(FieldTypes.rating), 'abc'), isNull);
+    });
   });
 
   group('normalize — select', () {

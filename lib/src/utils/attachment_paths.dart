@@ -152,6 +152,41 @@ String? frappeFileFetchUrl(String? path, String? baseUrl) {
   return '$baseNoSlash$p';
 }
 
+/// The auth [headers] to send with a request for [url], or null.
+///
+/// Auth headers (a Frappe session token) belong to the Frappe host only. A file
+/// value can be an absolute URL on another host — object storage or a CDN — and
+/// sending the token there leaks it to a third party. Object stores also reject
+/// a foreign `Authorization` header outright, so the file fails to load.
+///
+/// Returns [headers] when [url] is relative or has the same scheme, host and
+/// port as [baseUrl]; null for any other origin. A protocol-relative URL
+/// (`//host/x`) is compared using the base's scheme. Without a [baseUrl] the origin
+/// cannot be checked, so [headers] pass through unchanged.
+Map<String, String>? authHeadersForUrl(
+  String? url,
+  Map<String, String>? headers,
+  String? baseUrl,
+) {
+  if (headers == null) return null;
+  final base = baseUrl?.trim() ?? '';
+  if (base.isEmpty) return headers;
+  var target = Uri.tryParse(url?.trim() ?? '');
+  if (target == null) return null;
+  // A relative path resolves against the base, so it is same-origin.
+  if (!target.hasScheme && target.host.isEmpty) return headers;
+  final origin = Uri.tryParse(base);
+  if (origin == null || !origin.hasScheme) return headers;
+  // A protocol-relative URL (`//cdn.example.com/x.jpg`) names a host: give it
+  // the site's scheme and compare it like any absolute URL.
+  if (!target.hasScheme) target = origin.resolveUri(target);
+  final sameOrigin =
+      target.scheme.toLowerCase() == origin.scheme.toLowerCase() &&
+      target.host.toLowerCase() == origin.host.toLowerCase() &&
+      target.port == origin.port;
+  return sameOrigin ? headers : null;
+}
+
 /// Extension → MIME type for the attachment kinds a Frappe mobile form
 /// realistically carries.
 ///

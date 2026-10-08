@@ -134,4 +134,78 @@ void main() {
       );
     });
   });
+
+  group('authHeadersForUrl', () {
+    const base = 'https://site.example.com';
+    const auth = {'Authorization': 'Bearer tok'};
+
+    test('same origin as the Frappe base keeps the headers', () {
+      expect(authHeadersForUrl('$base/files/a.png', auth, base), auth);
+      expect(
+        authHeadersForUrl(
+          '$base/api/method/frappe.handler.download_file?file_url=x',
+          auth,
+          '$base/',
+        ),
+        auth,
+      );
+    });
+
+    test('a relative url is served by the Frappe host', () {
+      expect(authHeadersForUrl('/private/files/a.png', auth, base), auth);
+    });
+
+    test('another host gets no headers', () {
+      expect(
+        authHeadersForUrl('https://bucket.s3.amazonaws.com/a.pdf', auth, base),
+        isNull,
+      );
+      expect(
+        authHeadersForUrl('https://site.example.com.evil.net/a', auth, base),
+        isNull,
+      );
+    });
+
+    test('a different scheme or port is a different origin', () {
+      expect(
+        authHeadersForUrl('http://site.example.com/a', auth, base),
+        isNull,
+      );
+      expect(
+        authHeadersForUrl('https://site.example.com:8443/a', auth, base),
+        isNull,
+      );
+    });
+
+    test('host comparison ignores case', () {
+      expect(authHeadersForUrl('https://SITE.example.com/a', auth, base), auth);
+    });
+
+    test(
+      'without a base the origin cannot be checked: headers pass through',
+      () {
+        expect(authHeadersForUrl('https://h/a', auth, null), auth);
+        expect(authHeadersForUrl('https://h/a', auth, '  '), auth);
+      },
+    );
+
+    test('null headers stay null', () {
+      expect(authHeadersForUrl('$base/a', null, base), isNull);
+    });
+
+    test('a protocol-relative URL names another host: no headers', () {
+      expect(authHeadersForUrl('//cdn.example.com/x.jpg', auth, base), isNull);
+      expect(
+        authHeadersForUrl('//bucket.s3.amazonaws.com/a.pdf', auth, base),
+        isNull,
+      );
+    });
+
+    test('a protocol-relative URL to the Frappe host itself keeps them', () {
+      expect(
+        authHeadersForUrl('//site.example.com/files/a.png', auth, base),
+        auth,
+      );
+    });
+  });
 }

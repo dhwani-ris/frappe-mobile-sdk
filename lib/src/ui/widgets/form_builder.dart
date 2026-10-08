@@ -1278,6 +1278,8 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
       inListView: field.inListView,
       allowMultiple: field.allowMultiple,
       searchIndex: field.searchIndex,
+      cannotAddRows: field.cannotAddRows,
+      cannotDeleteRows: field.cannotDeleteRows,
     );
   }
 

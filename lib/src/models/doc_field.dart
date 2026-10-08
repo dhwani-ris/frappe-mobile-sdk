@@ -36,6 +36,14 @@ class DocField {
   /// build column lists must skip it.
   final bool isVirtual;
 
+  /// Frappe `cannot_add_rows=1` on a Table field: the user may edit existing
+  /// rows but not add new ones (Desk hides the grid's "Add Row").
+  final bool cannotAddRows;
+
+  /// Frappe `cannot_delete_rows=1` on a Table field: the user may edit
+  /// existing rows but not remove them (Desk hides the grid's delete).
+  final bool cannotDeleteRows;
+
   /// The raw docfield payload this instance was parsed from, if any.
   ///
   /// Retained so [toJson] can round-trip the Frappe docfield properties this
@@ -85,6 +93,8 @@ class DocField {
     'allow_multiple', 'allowMultiple',
     'search_index', 'searchIndex',
     'is_virtual', 'isVirtual',
+    'cannot_add_rows', 'cannotAddRows',
+    'cannot_delete_rows', 'cannotDeleteRows',
 
     // NOT a scalar property: Frappe puts a nested `fields` list on every
     // docfield (the child doctype's own columns, for a Table field). It is
@@ -123,6 +133,8 @@ class DocField {
     this.allowMultiple = false,
     this.searchIndex = false,
     this.isVirtual = false,
+    this.cannotAddRows = false,
+    this.cannotDeleteRows = false,
     this.rawData,
   });
 
@@ -182,6 +194,12 @@ class DocField {
       searchIndex:
           parseBool(json['search_index']) || parseBool(json['searchIndex']),
       isVirtual: parseBool(json['is_virtual']) || parseBool(json['isVirtual']),
+      cannotAddRows:
+          parseBool(json['cannot_add_rows']) ||
+          parseBool(json['cannotAddRows']),
+      cannotDeleteRows:
+          parseBool(json['cannot_delete_rows']) ||
+          parseBool(json['cannotDeleteRows']),
       rawData: json,
     );
   }
@@ -238,6 +256,8 @@ class DocField {
       // would silently drop the flag on the next cold start and re-emit the
       // virtual column in a ['*'] expansion.
       'is_virtual': isVirtual ? 1 : 0,
+      'cannot_add_rows': cannotAddRows ? 1 : 0,
+      'cannot_delete_rows': cannotDeleteRows ? 1 : 0,
     };
   }
 

@@ -289,5 +289,142 @@ void main() {
         await appDb.close();
       },
     );
+
+    test(
+      'two fields sharing one child doctype each get only their own rows',
+      () async {
+        // Both Table fields store their rows in the same docs__order_item
+        // table; only `parentfield` says which field a row belongs to.
+        final splitMeta = DocTypeMeta(
+          name: 'Order',
+          isTable: false,
+          fields: [
+            DocField(fieldname: 'title', fieldtype: 'Data'),
+            DocField(
+              fieldname: 'items',
+              fieldtype: 'Table',
+              options: 'Order Item',
+            ),
+            DocField(
+              fieldname: 'returned_items',
+              fieldtype: 'Table',
+              options: 'Order Item',
+            ),
+          ],
+        );
+        final appDb = await AppDatabase.inMemoryDatabase();
+        final repo = _newRepo(
+          appDb,
+          metas: {'Order': splitMeta, 'Order Item': _orderItemMeta()},
+        );
+        await repo.ensureSchemaForClosure(
+          metas: {'Order': splitMeta, 'Order Item': _orderItemMeta()},
+          childDoctypes: const {'Order Item'},
+        );
+        final orderUuid = await repo.saveDocument(
+          doctype: 'Order',
+          data: {'title': 'O-1'},
+        );
+        final childTable = normalizeDoctypeTableName('Order Item');
+        Future<void> row(String id, String field, int idx, int qty) =>
+            appDb.rawDatabase.insert(childTable, {
+              'mobile_uuid': id,
+              'parent_uuid': orderUuid,
+              'parentfield': field,
+              'parent_doctype': 'Order',
+              'idx': idx,
+              'qty': qty,
+            });
+        await row('a', 'items', 1, 2);
+        await row('b', 'items', 2, 5);
+        await row('c', 'returned_items', 1, 7);
+
+        final hydrated = await repo.attachChildRows(
+          'Order',
+          Document(
+            localId: orderUuid,
+            doctype: 'Order',
+            data: const {'title': 'O-1'},
+            modified: 0,
+          ),
+          splitMeta,
+        );
+        List<dynamic> qtys(String f) =>
+            (hydrated.data[f] as List).map((c) => (c as Map)['qty']).toList();
+        expect(qtys('items'), [2, 5]);
+        expect(qtys('returned_items'), [7]);
+
+        await appDb.close();
+      },
+    );
+
+    test(
+      'two Table MultiSelect fields sharing one child doctype keep their own selections',
+      () async {
+        // A Table MultiSelect stores its selections as child rows too, so
+        // without `parentfield` one field shows the other's picks after a
+        // save and reload.
+        final splitMeta = DocTypeMeta(
+          name: 'Order',
+          isTable: false,
+          fields: [
+            DocField(fieldname: 'title', fieldtype: 'Data'),
+            DocField(
+              fieldname: 'items',
+              fieldtype: 'Table MultiSelect',
+              options: 'Order Item',
+            ),
+            DocField(
+              fieldname: 'returned_items',
+              fieldtype: 'Table MultiSelect',
+              options: 'Order Item',
+            ),
+          ],
+        );
+        final appDb = await AppDatabase.inMemoryDatabase();
+        final repo = _newRepo(
+          appDb,
+          metas: {'Order': splitMeta, 'Order Item': _orderItemMeta()},
+        );
+        await repo.ensureSchemaForClosure(
+          metas: {'Order': splitMeta, 'Order Item': _orderItemMeta()},
+          childDoctypes: const {'Order Item'},
+        );
+        final orderUuid = await repo.saveDocument(
+          doctype: 'Order',
+          data: {'title': 'O-1'},
+        );
+        final childTable = normalizeDoctypeTableName('Order Item');
+        Future<void> row(String id, String field, int idx, int qty) =>
+            appDb.rawDatabase.insert(childTable, {
+              'mobile_uuid': id,
+              'parent_uuid': orderUuid,
+              'parentfield': field,
+              'parent_doctype': 'Order',
+              'idx': idx,
+              'qty': qty,
+            });
+        await row('a', 'items', 1, 2);
+        await row('b', 'items', 2, 5);
+        await row('c', 'returned_items', 1, 7);
+
+        final hydrated = await repo.attachChildRows(
+          'Order',
+          Document(
+            localId: orderUuid,
+            doctype: 'Order',
+            data: const {'title': 'O-1'},
+            modified: 0,
+          ),
+          splitMeta,
+        );
+        List<dynamic> qtys(String f) =>
+            (hydrated.data[f] as List).map((c) => (c as Map)['qty']).toList();
+        expect(qtys('items'), [2, 5]);
+        expect(qtys('returned_items'), [7]);
+
+        await appDb.close();
+      },
+    );
   });
 }

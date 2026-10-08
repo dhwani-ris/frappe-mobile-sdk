@@ -1309,10 +1309,13 @@ class OfflineRepository {
       if (childDoctype == null || childDoctype.isEmpty) continue;
       final childTable = normalizeDoctypeTableName(childDoctype);
       if (!await sqliteTableExists(db, childTable)) continue;
+      // Filter by parentfield too: two fields that share a child doctype
+      // store their rows in the same table, so parent_uuid alone would hand
+      // every such field the rows of all of them.
       final rows = await db.query(
         childTable,
-        where: 'parent_uuid = ?',
-        whereArgs: [doc.localId],
+        where: 'parent_uuid = ? AND parentfield = ?',
+        whereArgs: [doc.localId, fname],
         orderBy: 'idx ASC',
       );
       childRowsByField[fname] = rows

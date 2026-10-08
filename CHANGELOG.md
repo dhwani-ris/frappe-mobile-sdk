@@ -5,6 +5,35 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`cannot_add_rows` and `cannot_delete_rows` on Table fields, as Frappe Desk honours them.**
+  - `DocField` now models both flags (`cannotAddRows`, `cannotDeleteRows`). They are parsed, serialised and carried through the form's effective-props copy.
+  - `ChildTableField` hides **Add Row** for the first, and the row delete icon and the edit sheet's **Remove** for the second. Rows stay editable.
+  - Until now Add Row, delete and edit shared one `enabled && !readOnly` gate, so "fixed rows, editable values", which Desk expresses with these two flags (`frappe/public/js/frappe/form/grid.js`), meant replacing the widget.
+  - Sites usually set them with a Property Setter, which reaches the meta the SDK reads. A Desk-only `frm.set_df_property` does not.
+
+### Fixed
+
+- **A saved Rating showed no stars, and a tap on a star was undone.**
+  - Frappe stores a Rating as the fraction `stars ÷ max`: 3 of 5 is `0.6` (`controls/rating.js`). `RatingField` already reads and writes that fraction, but `FieldNormalizer` parsed a Rating as an `int`, and `int.tryParse('0.6')` is `null`. So every stored fraction normalized to `null` and the form's post-frame patch cleared the stars.
+  - In reactive mode, a saved rating opened with no stars. In both modes, a tap was undone by the next patch.
+  - A Rating now normalizes to a `double`: ints and numeric strings still resolve, and empty or non-numeric input is still `null`.
+- **Two Table fields pointing at the same child doctype got each other's rows.**
+  - `OfflineRepository.attachChildRows` read rows by `parent_uuid` alone. Those rows share one local table, and only `parentfield` tells them apart, so each field was handed the union.
+  - Saving wrote the union back under each field, the duplication grew with every edit, and it reached the server on the next push.
+  - The read now filters by `parentfield` too, as the server's `load_children_from_db` and every other child-row read and write in the SDK already do.
+- **The session token was sent to whatever host a file URL named.**
+  - `ImageField` (preview and full-screen view), `AttachField` (view button) and the media resolver's fetcher in `FormScreen` sent the session headers with every file request. A file value can be an absolute URL on object storage or a CDN, so the token reached a third party. The fetcher runs first whenever a form opens online, so it was the main path.
+  - Object stores also reject a foreign `Authorization` header, which made those files fail with HTTP 400.
+  - New `authHeadersForUrl` keeps the headers for relative URLs and for URLs whose scheme, host and port match `fileUrlBase`, and drops them otherwise. A protocol-relative URL (`//host/x`) is compared with the base's scheme. With no `fileUrlBase` the origin can't be checked, and the headers pass through as before.
+
+### Changed
+
+- The comment on Rating's re-tap-clears behaviour now cites Frappe Desk's Rating control instead of a client app's component. No code change.
+
 ## [2.0.0-beta.4] - 2026-09-21
 
 ### Changed
