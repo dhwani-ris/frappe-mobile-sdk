@@ -42,6 +42,8 @@ export 'src/services/media_resolver.dart' show ResolveMediaFn;
 // factory — has to name the type. `media_store.dart` is otherwise internal, so
 // only the typedef is shown.
 export 'src/utils/media_store.dart' show ReclaimAttachmentFn;
+export 'src/utils/image_downscale.dart'
+    show ImageCaptureLimits, ImageUploadSettings, downscalePickedImage;
 
 // Database
 export 'src/database/app_database.dart';

@@ -5,6 +5,18 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Opt-in server-side image optimisation, as Frappe Desk's uploader does it.** `ImageUploadSettings.serverOptimize = true` sends `optimize` for an image over 200 KB that is not an SVG, so the server stores a copy fitted into 1024x768 at quality 85 (`frappe/handler.py` `upload_file`, `frappe/utils/image.py`). Off by default, which leaves stored files exactly as before: Frappe's `upload_file` API only optimises when the client asks. `uploadFile(optimize: true/false)` forces it for one upload.
+- **Opt-in on-device photo size limit for image fields.** `ImageUploadSettings.captureLimits = const ImageCaptureLimits()` shrinks a photo taken or picked in an `Attach Image` field by a whole factor, keeping the long edge at 1920 px or more (JPEG quality 92), before it is stored or uploaded. Off by default.
+  - Flutter's image decoder shrinks while decoding, so the full-size photo is never held in memory. The size is read from the JPEG header first, and a photo that stays as it is (8 MP and smaller) is not decoded at all.
+  - Camera rotation is applied, other EXIF (time, GPS) is kept, and the file name is unchanged.
+  - The image field shows progress and turns its buttons off while a picked photo is prepared, stored and uploaded.
+  - Do not combine it with `serverOptimize`: the server's resize ignores the EXIF rotation, so an upright portrait photo would be cut to 512x768.
+  - `Attach` fields are not covered.
+
 ## [2.0.0-beta.4] - 2026-09-21
 
 ### Changed

@@ -87,6 +87,10 @@ dependencies:
   # Image picker for image fields
   image_picker: ^1.1.2
 
+  # Pure-Dart decode/resize/encode for the opt-in photo size limit
+  # (ImageUploadSettings.captureLimits). No native code.
+  image: ^4.2.0
+
   # Open downloaded attachments (PDF/doc/etc.) in the device's default app
   open_filex: ^4.7.0
 

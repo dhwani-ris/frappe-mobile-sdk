@@ -1164,6 +1164,28 @@ client.doctype.getByName(doctype, name);
 
 // File Upload
 client.attachment.uploadFile(file, doctype: 'Customer', docname: 'CUST-001');
+// The file is stored as uploaded, as with Frappe's upload_file API. Pass
+// `optimize: true` to ask the server for a copy shrunk to at most 1024x768
+// (quality 85), like the per-file toggle in Desk's uploader.
+
+// Opt-in, app-wide: do what Desk's uploader does by default, which is to ask
+// the server to optimise every image over 200 KB that is not an SVG.
+ImageUploadSettings.serverOptimize = true;
+
+// Opt-in, app-wide: shrink photos taken or picked in image fields (Attach
+// Image) on the device before they are stored or uploaded, for faster uploads
+// on slow networks. Off by default. Files picked in an Attach field are not
+// shrunk.
+ImageUploadSettings.captureLimits = const ImageCaptureLimits();
+// Photos are reduced by a whole factor, keeping the long edge at 1920 px or
+// more, and saved as JPEG quality 92. Flutter's image decoder shrinks while it
+// decodes, so the full-size photo is never held in memory. Camera rotation is
+// applied; other EXIF (time, GPS) and the file name are kept. A 12 MP photo
+// becomes about 2000x1500; 8 MP and smaller are left as they are. While a photo
+// is prepared and uploaded, the field shows progress and its buttons are off.
+//
+// Do not turn on both: the server's resize ignores the EXIF rotation, so a
+// portrait photo already turned upright on the device is cut to 512x768.
 
 // Query Builder
 client.doc('ToDo').where('status', 'Open').get();
