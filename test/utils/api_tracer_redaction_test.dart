@@ -334,4 +334,137 @@ void main() {
       expect(output(), contains('st-visible'));
     });
   });
+
+  group('wider key net', () {
+    void expectAbsent(List<String> values) {
+      final out = output();
+      for (final v in values) {
+        expect(out, isNot(contains(v)), reason: 'secret "$v" leaked:\n$out');
+      }
+    }
+
+    test('session_and_oauth_keys_are_redacted', () {
+      const vals = {
+        'otp': 'OTP-1-SECRET',
+        'tmp_id': 'TMP-2-SECRET',
+        'sid': 'SID-3-SECRET',
+        'csrf_token': 'CSRF-4-SECRET',
+        'authorization': 'AUTHZ-5-SECRET',
+        'cookie': 'COOKIE-6-SECRET',
+        'client_secret': 'CS-7-SECRET',
+        'code': 'CODE-8-SECRET',
+        'code_verifier': 'CV-9-SECRET',
+      };
+      ApiTracer.traceRequest(
+        method: 'POST',
+        url: 'http://x/api/method/m',
+        body: {...vals, 'doctype': 'wider-visible'},
+      );
+
+      expectAbsent(vals.values.toList());
+      expect(output(), contains('wider-visible'));
+    });
+
+    test('session_and_oauth_keys_are_redacted_in_error_response', () {
+      ApiTracer.traceResponse(
+        statusCode: 401,
+        url: 'http://x/api/method/m',
+        body: jsonEncode({
+          'sid': 'SID-R-SECRET',
+          'otp': 'OTP-R-SECRET',
+          'message': 'resp-visible',
+        }),
+      );
+
+      expectAbsent(['SID-R-SECRET', 'OTP-R-SECRET']);
+      expect(output(), contains('resp-visible'));
+    });
+
+    test('key_match_ignores_case_underscore_and_hyphen', () {
+      const vals = {
+        'apiKey': 'CAMEL-AK-SECRET',
+        'accessToken': 'CAMEL-AT-SECRET',
+        'x-frappe-csrf-token': 'HDR-CSRF-SECRET',
+        'Api-Secret': 'HYPH-AS-SECRET',
+        'Refresh-Token': 'HYPH-RT-SECRET',
+        'newPassword': 'CAMEL-NP-SECRET',
+      };
+      ApiTracer.traceRequest(
+        method: 'POST',
+        url: 'http://x/api/method/m',
+        body: {
+          'nested': {...vals},
+          'label': 'norm-visible',
+        },
+      );
+
+      expectAbsent(vals.values.toList());
+      expect(output(), contains('norm-visible'));
+    });
+
+    test('normalised_keys_are_redacted_in_url_query', () {
+      ApiTracer.traceRequest(
+        method: 'GET',
+        url: 'http://x/api/method/m?apiKey=Q-AK-SECRET&Client-Secret=Q-CS-SECRET&page=q-visible',
+      );
+
+      expectAbsent(['Q-AK-SECRET', 'Q-CS-SECRET']);
+      expect(output(), contains('page=q-visible'));
+    });
+
+    test('non_secret_lookalike_keys_stay_visible', () {
+      // "Keep everything else": the wider net must not swallow ordinary
+      // Swasti fields whose names merely contain a secret word.
+      ApiTracer.traceRequest(
+        method: 'POST',
+        url: 'http://x/api/method/m',
+        body: {
+          'pincode': '110001-pin',
+          'country_code': 'IN-cc',
+          'session_name': 'sess-visible',
+        },
+      );
+
+      final out = output();
+      expect(out, contains('110001-pin'));
+      expect(out, contains('IN-cc'));
+      expect(out, contains('sess-visible'));
+    });
+  });
+
+  group('unparseable string bodies', () {
+    test('colon_style_secret_is_not_logged_raw', () {
+      ApiTracer.traceRequest(
+        method: 'POST',
+        url: 'http://x/api/method/m',
+        body: 'username: bob\npassword: hunter2-COLON-SECRET',
+      );
+
+      expect(output(), isNot(contains('hunter2-COLON-SECRET')));
+    });
+
+    test('truncated_json_secret_is_not_logged_raw', () {
+      ApiTracer.traceRequest(
+        method: 'POST',
+        url: 'http://x/api/method/m',
+        body: '{"usr":"bob","password":"TRUNC-PW-SECRET","access_token":"TRUNC-AT-SECRET"',
+      );
+
+      final out = output();
+      expect(out, isNot(contains('TRUNC-PW-SECRET')));
+      expect(out, isNot(contains('TRUNC-AT-SECRET')));
+    });
+
+    test('truncated_json_error_response_secret_is_not_logged_raw', () {
+      ApiTracer.traceResponse(
+        statusCode: 500,
+        url: 'http://x/api/method/m',
+        body: '<html>Traceback ... {"sid": "HTML-SID-SECRET", "Authorization": "Bearer HTML-BEARER-SECRET"',
+      );
+
+      final out = output();
+      expect(out, isNot(contains('HTML-SID-SECRET')));
+      expect(out, isNot(contains('HTML-BEARER-SECRET')));
+    });
+  });
 }

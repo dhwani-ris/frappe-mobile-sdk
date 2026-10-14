@@ -8,26 +8,48 @@ import 'package:flutter/foundation.dart';
 /// Single utility for tracing API calls in debug mode.
 /// Call [traceRequest] before and [traceResponse] after each HTTP call.
 ///
-/// Secrets never reach the log: values under [_secretKeys] (matched
-/// case-insensitively, at any depth) are replaced with [_mask] in URL query
-/// strings, query maps and bodies (Map, List, JSON string or form-encoded
-/// string) before anything is printed or truncated.
+/// Secrets never reach the log: values under [_secretKeys] are replaced with
+/// [_mask] in URL query strings, query maps and bodies (Map, List, JSON
+/// string, form-encoded string, or any other text) before anything is
+/// printed or truncated. Keys match EXACTLY after [_normaliseKey] (so
+/// `apiKey`, `Api-Secret` match, but `pincode`, `country_code` do not).
 class ApiTracer {
   static const String _tag = '[Frappe API]';
   static const String _mask = '***';
   static const int _previewLimit = 500;
+
+  /// Stored in [_normaliseKey] form.
   static const Set<String> _secretKeys = {
     'password',
     'pwd',
-    'new_password',
-    'old_password',
-    'access_token',
-    'refresh_token',
-    'api_secret',
-    'api_key',
+    'newpassword',
+    'oldpassword',
+    'accesstoken',
+    'refreshtoken',
+    'apisecret',
+    'apikey',
     'token',
     'secret',
+    'otp',
+    'tmpid',
+    'sid',
+    'csrftoken',
+    'xfrappecsrftoken',
+    'authorization',
+    'cookie',
+    'clientsecret',
+    'code',
+    'codeverifier',
   };
+
+  /// A `key:` or `key=` in free text; the lookbehind stops `pincode` being
+  /// read as `code`.
+  static final RegExp _textKey = RegExp(
+    r'''(?<![\w-])(["']?)([A-Za-z][\w-]*)\1\s*[:=]\s*''',
+  );
+  static final RegExp _strictForm = RegExp(
+    r'^[^=&\s]+=[^&\s]*(&[^=&\s]+=[^&\s]*)*$',
+  );
 
   /// Log request (method, url, body). No-op in release.
   static void traceRequest({
@@ -76,8 +98,11 @@ class ApiTracer {
     return text;
   }
 
+  static String _normaliseKey(Object? key) =>
+      key.toString().toLowerCase().replaceAll(RegExp('[_-]'), '');
+
   static bool _isSecretKey(Object? key) =>
-      _secretKeys.contains(key.toString().toLowerCase());
+      _secretKeys.contains(_normaliseKey(key));
 
   static dynamic _redact(dynamic value) {
     if (value is Map) {
@@ -90,18 +115,51 @@ class ApiTracer {
     return value;
   }
 
-  /// A string body is either JSON (redacted structurally) or treated as
-  /// form-encoded `k=v&k=v`; text with no `=` passes through untouched.
+  /// A string body is redacted structurally when it is JSON or strict
+  /// form-encoded `k=v&k=v`; any other text (colon-style, truncated JSON,
+  /// an HTML error page) goes through [_redactText].
   static String _redactString(String text) {
     final trimmed = text.trimLeft();
     if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
       try {
         return jsonEncode(_redact(jsonDecode(text)));
       } on FormatException {
-        // Not JSON after all; fall through to the form-encoded pass.
+        // Not valid JSON (e.g. truncated); fall through.
       }
     }
-    return text.contains('=') ? _redactForm(text) : text;
+    return _strictForm.hasMatch(text) ? _redactForm(text) : _redactText(text);
+  }
+
+  /// Masks the value after every secret `key:` / `key=` in free text: a
+  /// quoted value up to its closing quote (or the end, if cut off), else up
+  /// to the end of the line or the next `,;&}]`.
+  static String _redactText(String text) {
+    final out = StringBuffer();
+    var cursor = 0;
+    for (final m in _textKey.allMatches(text)) {
+      if (m.start < cursor || !_isSecretKey(m.group(2))) continue;
+      final valueStart = m.end;
+      var valueEnd = valueStart;
+      final quote = valueStart < text.length ? text[valueStart] : '';
+      if (quote == '"' || quote == "'") {
+        final close = text.indexOf(quote, valueStart + 1);
+        valueEnd = close < 0 ? text.length : close + 1;
+        out
+          ..write(text.substring(cursor, valueStart))
+          ..write(close < 0 ? '$quote$_mask' : '$quote$_mask$quote');
+      } else {
+        while (valueEnd < text.length &&
+            !'\r\n,;&}]'.contains(text[valueEnd])) {
+          valueEnd++;
+        }
+        out
+          ..write(text.substring(cursor, valueStart))
+          ..write(_mask);
+      }
+      cursor = valueEnd;
+    }
+    out.write(text.substring(cursor));
+    return out.toString();
   }
 
   static String _redactForm(String form) {
