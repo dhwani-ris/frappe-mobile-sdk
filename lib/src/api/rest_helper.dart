@@ -6,6 +6,7 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:path/path.dart';
+import 'client_info.dart';
 import 'exceptions.dart';
 import 'utils.dart';
 import '../utils/api_tracer.dart';
@@ -69,6 +70,7 @@ class RestHelper {
   String? _apiKey;
   String? _apiSecret;
   String? _bearerToken;
+  Map<String, String> _clientHeaders = const {};
 
   http.Client get client => _client;
 
@@ -99,6 +101,19 @@ class RestHelper {
     _bearerToken = token;
   }
 
+  /// Sets the [ClientInfo] sent as `X-Client-Info` on every request this
+  /// helper makes, authenticated or not (login, OTP and token refresh
+  /// included). Pass null to stop sending it. Not cleared by [clearSession]:
+  /// it describes the install, not the user.
+  void setClientInfo(ClientInfo? info) {
+    _clientHeaders = info?.toHeaders() ?? const {};
+  }
+
+  /// Headers that describe this install (currently only `X-Client-Info`).
+  /// Empty unless [setClientInfo] was given something to send. Callers that
+  /// make requests outside this helper (OAuth token calls) add these too.
+  Map<String, String> get clientHeaders => Map.of(_clientHeaders);
+
   /// Clears all auth state.
   void clearSession() {
     _sidCookie = null;
@@ -108,7 +123,10 @@ class RestHelper {
   }
 
   Map<String, String> _getHeaders({bool includeAuth = true}) {
-    final headers = <String, String>{'Accept': 'application/json'};
+    final headers = <String, String>{
+      'Accept': 'application/json',
+      ..._clientHeaders,
+    };
 
     if (!includeAuth) {
       return headers;

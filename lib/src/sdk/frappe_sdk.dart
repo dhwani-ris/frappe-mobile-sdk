@@ -8,6 +8,7 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import '../api/client.dart';
+import '../api/client_info.dart';
 import '../api/create_idempotency.dart' show OnResolvedExisting;
 import '../database/daos/media_cache_dao.dart';
 import '../database/daos/pending_attachment_dao.dart';
@@ -85,6 +86,21 @@ class FrappeSDK {
   final bool tamperProtectionEnabled;
   final Set<SecurityCheck> tamperProtectionChecks;
   final int tamperProtectionRestartGapMs;
+
+  /// Send an `X-Client-Info` header (app name and version, platform, OS
+  /// version, and this install's `mobile_uuid`) on every request, including
+  /// login, OTP, token refresh and uploads. Default `true`: Frappe Mobile
+  /// Control builds its device registry and login history from it. It carries
+  /// no personal data. See [ClientInfo].
+  final bool sendClientInfo;
+
+  /// Overrides the app name sent in `X-Client-Info`. Defaults to the name
+  /// `package_info_plus` reports.
+  final String? clientAppName;
+
+  /// Overrides the app version sent in `X-Client-Info`. Defaults to
+  /// `version+buildNumber` from `package_info_plus`.
+  final String? clientAppVersion;
 
   FrappeClient? _client;
   AppDatabase? _database;
@@ -246,6 +262,9 @@ class FrappeSDK {
     this.tamperProtectionEnabled = false,
     this.tamperProtectionChecks = const {},
     this.tamperProtectionRestartGapMs = 600000,
+    this.sendClientInfo = true,
+    this.clientAppName,
+    this.clientAppVersion,
   });
 
   /// Test-only constructor: accepts a pre-built [AppDatabase] (e.g. in-memory).
@@ -276,7 +295,12 @@ class FrappeSDK {
     this.tamperProtectionRestartGapMs = 600000,
   }) : databaseAppName = null,
        payloadTransformer = null,
-       onFfiInitFailure = null {
+       onFfiInitFailure = null,
+       // Collecting client info is async and reads platform channels; tests
+       // that need the header set it on `client.rest` directly.
+       sendClientInfo = false,
+       clientAppName = null,
+       clientAppVersion = null {
     _database = database;
     _modeNotifier = OfflineModeNotifier(offlineMode);
     _syncCompleteController = StreamController<void>.broadcast();
@@ -434,6 +458,17 @@ class FrappeSDK {
     // and per-link-options lambdas below can return it without hitting
     // secure storage again on every dispatch (L1).
     _mobileUuid = await _authService!.getOrCreateMobileUuid();
+
+    // Before any request goes out (restoreSession's refresh included), so
+    // the server sees the device on every call. Built once per SDK instance.
+    if (sendClientInfo) {
+      final info = await ClientInfo.collect(
+        deviceId: _mobileUuid,
+        appName: clientAppName,
+        appVersion: clientAppVersion,
+      );
+      _client!.rest.setClientInfo(info);
+    }
 
     // Resolve session-bound offline mode BEFORE constructing services so
     // every service receives the correct mode through its constructor.

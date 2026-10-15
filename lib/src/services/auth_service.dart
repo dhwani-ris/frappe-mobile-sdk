@@ -681,6 +681,7 @@ class AuthService {
             clientId: oauthClientId,
             refreshToken: refreshToken,
             clientSecret: oauthClientSecret,
+            headers: _client!.rest.clientHeaders,
           );
           await _storeOAuthTokens(
             refreshed.accessToken,
@@ -783,6 +784,7 @@ class AuthService {
         code: code,
         codeVerifier: codeVerifier,
         clientSecret: clientSecret,
+        headers: _client!.rest.clientHeaders,
       );
       dev.log(
         'loginWithOAuth success: access_token length=${tokens.accessToken.length}, refresh_token=${tokens.refreshToken != null ? "set" : "null"}, expires_in=${tokens.expiresIn}',
@@ -1105,6 +1107,7 @@ class AuthService {
         clientId: oauthClientId,
         refreshToken: refreshToken,
         clientSecret: oauthClientSecret,
+        headers: _client?.rest.clientHeaders,
       );
       await _storeOAuthTokens(
         refreshed.accessToken,
