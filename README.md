@@ -13,6 +13,7 @@ Flutter package for Frappe integration with direct API access, dynamic form rend
 5. [Quick Start](#quick-start)  
    - [App Status Guard (`FrappeAppGuard`)](#app-status-guard-frappeappguard)  
    - [Translations](#translations)  
+   - [Encrypting attachments on the device](#encrypting-attachments-on-the-device)  
 6. [Core Features](#core-features)  
 7. [Usage Patterns](#usage-patterns)  
    - [API Usage (no form renderer)](#api-usage-no-form-renderer)  
@@ -306,6 +307,36 @@ Server requirement for translations (handled by `frappe_mobile_control`):
 
 - Endpoint like: `GET /api/v2/method/mobile_auth.get_translations?lang=en`  
   Response shape: `{ "data": { "lang": "en", "translations": { "Source": "Translated" } } }`.
+
+### Encrypting attachments on the device
+
+Photos and files picked in a form are copied to the app's documents folder (`mform_attachments/outbox/`) and stay there until they upload. Uploaded and downloaded attachments are kept in `mform_attachments/cache/`. By default these are plain files, so anyone who gets the phone's storage can read them.
+
+Turn on encryption at rest with one option:
+
+```dart
+final sdk = FrappeSDK(
+  baseUrl: 'https://your-frappe-site.com/',
+  encryptAttachments: true, // default: false
+);
+await sdk.initialize();
+```
+
+What it does:
+
+- Staged files and cached media are written as AES-256-GCM ciphertext. Each file is `FMSDK-ENC1\n` + a 12-byte nonce + ciphertext + a 16-byte tag. The file is written to a temp file and renamed, so a crash never leaves a plain copy in the store.
+- The 32-byte key is generated once and kept in `FlutterSecureStorage` (Android Keystore / iOS Keychain), under a name that includes `databaseAppName`.
+- Uploads decrypt in memory and send the bytes. No plain temp file is written.
+- The SDK's image and attach field previews decrypt in memory. If you show a staged or cached file in your own widget, use `LocalAttachmentImage(path)` instead of `FileImage`.
+- After a pick is staged, the picker's own copy is deleted if it sits in the app's temp/cache folder (where `image_picker` and `file_picker` put their copies). Files anywhere else, such as the gallery, are never deleted.
+- Files staged before you turned the option on have no header and are read as plain files, so they keep working. If you turn the option off later, the existing key is still loaded so older encrypted files stay readable; new files are written plain.
+
+Limits to know:
+
+- Opening a non-image attachment in another app (PDF viewer, etc.) needs a plain copy. The SDK writes it to the viewer scratch folder, which logout and `clearMediaCache()` delete.
+- `AuthService.clearCredentials()` deletes everything in secure storage, including this key. Encrypted files that have not uploaded yet cannot be read after that; the upload is rejected with a clear reason.
+- Files are encrypted and decrypted whole, in memory. This fits the 10 MB pick limit and the 25 MB download cap.
+- `initialize()` throws if the option is on and the key cannot be read or created, rather than writing plain files.
 
 ---
 
