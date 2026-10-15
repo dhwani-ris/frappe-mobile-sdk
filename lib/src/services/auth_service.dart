@@ -111,7 +111,11 @@ class AuthService {
     }
 
     try {
-      final result = await _client!.rest.call(
+      // Sent WITHOUT any stored credential (callPublic → includeAuth:false).
+      // The endpoint is guest-callable, and a bearer left over from a dead
+      // session (e.g. a token row restored from an Android backup) would make
+      // Frappe answer 401 before the method runs (SPEC-0016 A-D1).
+      final result = await _client!.rest.callPublic(
         'mobile_auth.login',
         args: {'username': username, 'password': password},
       );
@@ -192,7 +196,8 @@ class AuthService {
       );
     }
     try {
-      final result = await _client!.rest.call(
+      // No stored credential on a sign-in request — see [login].
+      final result = await _client!.rest.callPublic(
         'mobile_auth.verify_login_otp',
         args: {'tmp_id': tmpId, 'otp': otp},
       );
@@ -770,7 +775,8 @@ class AuthService {
               await _database!.authTokenDao.deleteAll();
               _isAuthenticated = false;
               // Fall through to the OAuth fallback below (returns false for
-              // mobile-auth users, who have no OAuth tokens stored).
+              // mobile-auth users, who have no OAuth tokens stored), which
+              // also drops the dead bearer when it fails.
             } else {
               // Offline / timeout / 5xx / rate-limit — retryable. Keep the
               // tokens AND the bearer untouched and stay authenticated; the
@@ -803,6 +809,9 @@ class AuthService {
     // mobile-auth rejection).
     final refreshed = await _tryRefreshOAuthToken();
     if (!refreshed) {
+      // Every de-authenticating path ends here: drop the bearer too, so no
+      // later request carries a token the SDK has declared dead.
+      _client?.rest.setBearerToken(null);
       _isAuthenticated = false;
     }
     return refreshed;
