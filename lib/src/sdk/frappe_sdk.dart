@@ -6,12 +6,14 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../api/client.dart';
 import '../api/create_idempotency.dart' show OnResolvedExisting;
 import '../database/daos/media_cache_dao.dart';
 import '../database/daos/pending_attachment_dao.dart';
 import '../models/media_store_usage.dart';
+import '../utils/attachment_cipher.dart';
 import '../utils/media_store.dart';
 import '../utils/sdk_log.dart';
 import '../api/exceptions.dart';
@@ -84,6 +86,24 @@ class FrappeSDK {
 
   final bool tamperProtectionEnabled;
   final Set<SecurityCheck> tamperProtectionChecks;
+
+  /// Encrypt attachment files at rest. Off by default.
+  ///
+  /// When true, photos and files staged for upload (`outbox/`) and attachment
+  /// media cached after upload or download (`cache/`) are written as
+  /// AES-256-GCM ciphertext. The 32-byte key is generated on first use and
+  /// kept in `FlutterSecureStorage`, namespaced by [databaseAppName]. Uploads
+  /// decrypt in memory; previews decrypt in memory; opening a non-image file
+  /// in another app writes a plain copy to the viewer scratch directory, which
+  /// logout and `clearMediaCache` wipe. Files written before the option was
+  /// enabled stay plain and keep working.
+  ///
+  /// Turning it off again does not strand earlier files: if a key exists it is
+  /// still loaded to read them, but new files are written plain.
+  ///
+  /// [initialize] throws if the key cannot be read or created while this is
+  /// true, rather than silently writing plain files.
+  final bool encryptAttachments;
   final int tamperProtectionRestartGapMs;
 
   FrappeClient? _client;
@@ -246,6 +266,7 @@ class FrappeSDK {
     this.tamperProtectionEnabled = false,
     this.tamperProtectionChecks = const {},
     this.tamperProtectionRestartGapMs = 600000,
+    this.encryptAttachments = false,
   });
 
   /// Test-only constructor: accepts a pre-built [AppDatabase] (e.g. in-memory).
@@ -276,7 +297,8 @@ class FrappeSDK {
     this.tamperProtectionRestartGapMs = 600000,
   }) : databaseAppName = null,
        payloadTransformer = null,
-       onFfiInitFailure = null {
+       onFfiInitFailure = null,
+       encryptAttachments = false {
     _database = database;
     _modeNotifier = OfflineModeNotifier(offlineMode);
     _syncCompleteController = StreamController<void>.broadcast();
@@ -365,6 +387,35 @@ class FrappeSDK {
     _initialized = true;
   }
 
+  /// Loads (or, when [encryptAttachments] is on, creates) the attachment key
+  /// and installs it process-wide. See [encryptAttachments].
+  Future<void> _configureAttachmentEncryption() async {
+    const storage = FlutterSecureStorage();
+    if (encryptAttachments) {
+      // Fail closed: a host that asked for encryption must not get plain files
+      // because the keystore misbehaved.
+      final cipher = await AttachmentCipher.loadOrCreate(
+        storage,
+        databaseAppName: databaseAppName,
+      );
+      AttachmentCipher.configure(cipher, encryptNewFiles: true);
+      return;
+    }
+    // Option off: load an existing key, if any, ONLY so files encrypted while
+    // it was on stay readable. Never creates one. Failure here is not fatal —
+    // a host that never enabled the option has no encrypted files.
+    AttachmentCipher? existing;
+    try {
+      existing = await AttachmentCipher.loadExisting(
+        storage,
+        databaseAppName: databaseAppName,
+      );
+    } catch (e, st) {
+      sdkLog('FrappeSDK: attachment key lookup failed — $e\n$st');
+    }
+    AttachmentCipher.configure(existing, encryptNewFiles: false);
+  }
+
   /// Wires a server meta refresh to offline-cache invalidation: whenever
   /// [MetaService] rewrites a doctype's meta (boot sync, reconnect resync,
   /// config refresh) it evicts [OfflineRepository]'s per-doctype cache so the
@@ -425,6 +476,9 @@ class FrappeSDK {
     // client that every DocumentService call actually uses.
     _authService!.onResolvedExisting = onResolvedExisting;
     _authService!.initialize(baseUrl, database: _database);
+
+    // Before any service that stages, caches or uploads attachments exists.
+    await _configureAttachmentEncryption();
 
     // Use the same authenticated client instance everywhere so that
     // meta/sync/link-options calls always carry the Bearer token / API key.

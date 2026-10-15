@@ -18,6 +18,7 @@ import 'package:frappe_mobile_sdk/src/models/doc_field.dart';
 import 'package:frappe_mobile_sdk/src/services/media_resolver.dart';
 import 'package:frappe_mobile_sdk/src/ui/widgets/fields/attach_field.dart';
 import 'package:frappe_mobile_sdk/src/ui/widgets/fields/image_field.dart';
+import 'package:frappe_mobile_sdk/src/ui/widgets/fields/local_attachment_image.dart';
 
 /// Mirrors the real resolver's marker branch: a marker resolves ONLY through
 /// the map handed in at call time, never over the network.
@@ -112,11 +113,13 @@ void main() {
     hostKey.currentState!.arrive({7: '/outbox/abc/staged.jpg'});
     await tester.pumpAndSettle();
 
-    // The staged path must reach an Image.file — that IS the preview.
+    // The staged path must reach the local-file image — that IS the preview.
+    // (LocalAttachmentImage rather than FileImage: it decrypts files that are
+    // encrypted at rest.)
     final fileImagePaths = tester
         .widgetList<Image>(find.byType(Image))
-        .where((w) => w.image is FileImage)
-        .map((w) => (w.image as FileImage).file.path)
+        .where((w) => w.image is LocalAttachmentImage)
+        .map((w) => (w.image as LocalAttachmentImage).path)
         .toList();
     expect(fileImagePaths, contains('/outbox/abc/staged.jpg'));
   });

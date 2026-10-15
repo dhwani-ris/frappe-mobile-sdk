@@ -441,6 +441,24 @@ class RestHelper {
     }
   }
 
+  /// Uploads in-memory [bytes] via multipart/form-data.
+  ///
+  /// Used for attachments encrypted at rest: they are decrypted in memory and
+  /// sent from there, so no plain copy is written to disk for the upload.
+  Future<dynamic> uploadBytes(
+    String endpoint,
+    String fieldName,
+    List<int> bytes, {
+    required String filename,
+    Map<String, String>? fields,
+  }) {
+    return _sendMultipart(
+      endpoint,
+      http.MultipartFile.fromBytes(fieldName, bytes, filename: filename),
+      fields: fields,
+    );
+  }
+
   /// Uploads a file via multipart/form-data.
   Future<dynamic> uploadFile(
     String endpoint,
@@ -449,15 +467,6 @@ class RestHelper {
     Map<String, String>? fields,
     String? filename,
   }) async {
-    var uri = Uri.parse('$baseUrl$endpoint');
-    var request = http.MultipartRequest('POST', uri);
-
-    request.headers.addAll(_getHeaders());
-
-    if (fields != null) {
-      request.fields.addAll(fields);
-    }
-
     var stream = http.ByteStream(file.openRead());
     var length = await file.length();
 
@@ -472,6 +481,23 @@ class RestHelper {
       // every upload land server-side as an opaque uuid.)
       filename: filename ?? basename(file.path),
     );
+
+    return _sendMultipart(endpoint, multipartFile, fields: fields);
+  }
+
+  Future<dynamic> _sendMultipart(
+    String endpoint,
+    http.MultipartFile multipartFile, {
+    Map<String, String>? fields,
+  }) async {
+    var uri = Uri.parse('$baseUrl$endpoint');
+    var request = http.MultipartRequest('POST', uri);
+
+    request.headers.addAll(_getHeaders());
+
+    if (fields != null) {
+      request.fields.addAll(fields);
+    }
 
     request.files.add(multipartFile);
 

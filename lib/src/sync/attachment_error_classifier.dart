@@ -1,6 +1,7 @@
 import '../api/exceptions.dart';
 // For the `ErrorCode.isTerminal` extension.
 import '../models/outbox_row.dart';
+import '../utils/attachment_cipher.dart';
 import 'push_error.dart';
 
 /// Frappe exception names that can never succeed on retry.
@@ -63,6 +64,11 @@ bool isTerminalAttachmentError(Object error) {
 
   // Transport failure — always worth another attempt.
   if (error is NetworkException) return false;
+
+  // An encrypted staged file that will not decrypt (altered on disk, or its
+  // key is gone) fails identically on every attempt. Retrying would loop
+  // forever; rejecting surfaces it to the user.
+  if (error is AttachmentDecryptionException) return true;
 
   // HTTP 417 — where EVERY `frappe.throw` lands, so the status alone says
   // nothing about whether a retry could succeed. A site storage-quota rule, a
