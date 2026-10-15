@@ -11,6 +11,7 @@
 import 'dart:convert';
 
 import 'package:flutter/services.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -48,6 +49,13 @@ void _mockSecureStorage({
           case 'read':
             final key = (call.arguments as Map)['key'] as String;
             return values[key];
+          case 'write':
+            final args = call.arguments as Map;
+            values[args['key'] as String] = args['value'] as String?;
+            return null;
+          case 'delete':
+            values.remove((call.arguments as Map)['key'] as String);
+            return null;
           case 'readAll':
             return <String, String>{};
           case 'containsKey':
@@ -81,6 +89,7 @@ void main() {
   group('(a) fresh credential clears the dead-session latch', () {
     test('persistExternalLoginResponse after debugMarkExpired leaves refresh '
         're-armed and session healthy', () async {
+      _mockSecureStorage();
       final auth = AuthService.forTesting(
         FrappeClient('http://x'),
         database: db,
@@ -213,7 +222,15 @@ void main() {
       expect(auth.debugRefreshAllowed(), isFalse);
       final surviving = await db.authTokenDao.getCurrentToken();
       expect(surviving, isNotNull);
-      expect(surviving!.refreshToken, 'RT-old');
+      expect(surviving!.user, 'user@example.com');
+      // The refresh token itself lives in secure storage, not the row.
+      expect(surviving.refreshToken, isEmpty);
+      expect(
+        await const FlutterSecureStorage().read(
+          key: 'frappe_mobile_refresh_token',
+        ),
+        'RT-old',
+      );
     });
   });
 
@@ -381,8 +398,14 @@ void main() {
             switch (call.method) {
               case 'read':
                 return values[(call.arguments as Map)['key'] as String];
+              case 'write':
+                final args = call.arguments as Map;
+                values[args['key'] as String] = args['value'] as String?;
+                return null;
               case 'delete':
-                deleted.add((call.arguments as Map)['key'] as String);
+                final key = (call.arguments as Map)['key'] as String;
+                deleted.add(key);
+                values.remove(key);
                 return null;
               case 'readAll':
                 return <String, String>{};

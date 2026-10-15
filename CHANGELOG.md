@@ -5,6 +5,13 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+
+- **Mobile login tokens are no longer stored in the SQLite database.** The access and refresh tokens from `login`, `verifyLoginOtp`, `persistExternalLoginResponse` and the refresh path were written in plain text to the `auth_tokens` table, so a copy of the database file carried a live session. They are now kept only in `FlutterSecureStorage` (as the OAuth tokens and API key already were); the `auth_tokens` row keeps only the user, full name and issue time, with its token columns written empty. Existing installs migrate on first use: a row that still holds tokens has them copied to secure storage and the columns blanked. `logout` and a definitively rejected refresh now delete the secure-storage entries as well as the row. The public API is unchanged.
+- **Tokens and passwords are no longer logged.** `login` and `verifyLoginOtp` logged the full access token through `dart:developer` `log`. Those lines are removed. The debug-mode request tracer (`[Frappe API]`) printed request bodies verbatim, including the login password, the OTP and the refresh token; credential-named fields (`password`, `otp`, `*token*`, `*secret*` and similar) are now replaced with `REDACTED` in traced bodies, query parameters and URLs.
+
 ## [2.0.0-beta.4] - 2026-09-21
 
 ### Changed

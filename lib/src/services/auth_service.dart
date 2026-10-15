@@ -28,6 +28,14 @@ class AuthService {
   static const String _keyOAuthClientSecret = 'frappe_oauth_client_secret';
   static const String _keyMobileUuid = 'frappe_mobile_uuid';
 
+  /// Mobile-auth (`mobile_auth.login` / OTP / external login) tokens. These
+  /// live ONLY in secure storage; the `auth_tokens` SQLite row keeps the
+  /// non-secret metadata (user, full name, issue time) with its token columns
+  /// written empty, because the database file is plain SQLite and a copy of it
+  /// must not carry a live credential.
+  static const String _keyMobileAccessToken = 'frappe_mobile_access_token';
+  static const String _keyMobileRefreshToken = 'frappe_mobile_refresh_token';
+
   // Deliberately left on the plugin's DEFAULT options. A
   // `MacOsOptions(usesDataProtectionKeychain: false)` override was added here
   // and has been reverted: it moves macOS reads/writes to the legacy
@@ -183,8 +191,9 @@ class AuthService {
   AuthService();
 
   /// Named constructor used by [FrappeSDK.forTesting]: wires [client] and
-  /// [database] directly without touching [FlutterSecureStorage] (which is
-  /// unavailable in unit/widget tests).
+  /// [database] directly, skipping [initialize] (which writes the base URL to
+  /// [FlutterSecureStorage]). Login, restore and logout still use secure
+  /// storage, so tests exercising them must mock it.
   AuthService.forTesting(FrappeClient client, {AppDatabase? database}) {
     _client = client;
     _database = database;
@@ -242,7 +251,8 @@ class AuthService {
 
   /// Authenticates with username and password using mobile_auth.login (stateless).
   ///
-  /// This is the default login method. Stores access_token and refresh_token in database.
+  /// This is the default login method. Stores access_token and refresh_token
+  /// in secure storage, and the user metadata in the database.
   /// Returns user info including mobile_form_names.
   /// Throws if not initialized, database not set, or credentials are invalid.
   Future<Map<String, dynamic>> login(String username, String password) async {
@@ -285,7 +295,6 @@ class AuthService {
       if (user == null || user.isEmpty) {
         throw Exception('Login response missing user');
       }
-      dev.log('access_token: $accessToken', name: 'Auth');
 
       await _processLoginResponse(
         response,
@@ -305,9 +314,9 @@ class AuthService {
 
   /// Persist a login response obtained OUTSIDE the SDK (e.g. a custom SSO /
   /// `mobile_login` endpoint) into the SDK session exactly like [login] does
-  /// after its own network call: writes the token to the SQLite `auth_tokens`
-  /// table, sets the bearer, records `mobile_form_names`, and marks the client
-  /// authenticated. This lets [restoreSession] rehydrate the session on the
+  /// after its own network call: writes the token to secure storage (and the
+  /// user metadata to the SQLite `auth_tokens` table), sets the bearer,
+  /// records `mobile_form_names`, and marks the client authenticated. This lets [restoreSession] rehydrate the session on the
   /// next cold start with no forced re-login.
   ///
   /// Tolerates a missing `refresh_token` (custom endpoints may omit it).
@@ -397,7 +406,6 @@ class AuthService {
       if (user == null || user.isEmpty) {
         throw Exception('Verify OTP response missing user');
       }
-      dev.log('access_token: $accessToken', name: 'Auth');
 
       _roles = _parseRoles(response['roles']);
       _language = response['language'] as String?;
@@ -449,20 +457,15 @@ class AuthService {
     String? fullName,
     List<dynamic>? mobileFormNamesJson,
   ) async {
-    final tokenEntity = AuthTokenEntity(
-      accessToken: accessToken,
-      refreshToken: refreshToken,
-      user: user,
-      fullName: fullName,
-      createdAt: DateTime.now().millisecondsSinceEpoch,
+    await _saveMobileToken(
+      AuthTokenEntity(
+        accessToken: accessToken,
+        refreshToken: refreshToken,
+        user: user,
+        fullName: fullName,
+        createdAt: DateTime.now().millisecondsSinceEpoch,
+      ),
     );
-
-    final existing = await _database!.authTokenDao.getCurrentToken();
-    if (existing != null) {
-      await _database!.authTokenDao.updateToken(tokenEntity);
-    } else {
-      await _database!.authTokenDao.insertToken(tokenEntity);
-    }
 
     if (mobileFormNamesJson != null && mobileFormNamesJson.isNotEmpty) {
       final mobileFormNames = mobileFormNamesJson
@@ -584,7 +587,8 @@ class AuthService {
 
   /// Restores session from stored credentials.
   ///
-  /// Tries mobile auth tokens (from DB) first, then OAuth tokens, then API key.
+  /// Tries mobile auth tokens (secure storage, with user metadata from the DB)
+  /// first, then OAuth tokens, then API key.
   /// Returns true if a valid session was restored.
   Future<bool> restoreSession({bool isOnline = true}) async {
     final baseUrl = await getBaseUrl();
@@ -594,10 +598,10 @@ class AuthService {
       initialize(baseUrl, database: _database);
     }
 
-    // Try mobile auth tokens from database first
+    // Try mobile auth tokens (secure storage + DB metadata) first
     if (_database != null) {
       try {
-        final token = await _database!.authTokenDao.getCurrentToken();
+        final token = await _readMobileToken();
         if (token != null && token.accessToken.isNotEmpty) {
           final ageMs = DateTime.now().millisecondsSinceEpoch - token.createdAt;
           if (ageMs >=
@@ -627,7 +631,7 @@ class AuthService {
             // (401/403) already deleted the token inside the refresh; if a
             // token row still survives it is our best credential, so install it
             // rather than forcing a re-login the offline user cannot complete.
-            final surviving = await _database!.authTokenDao.getCurrentToken();
+            final surviving = await _readMobileToken();
             if (surviving != null && surviving.accessToken.isNotEmpty) {
               _client!.rest.setBearerToken(surviving.accessToken);
               _isAuthenticated = true;
@@ -932,9 +936,7 @@ class AuthService {
     await _storage.delete(key: _keyApiKey);
     await _storage.delete(key: _keyApiSecret);
     await _clearOAuthTokens();
-    if (_database != null) {
-      await _database!.authTokenDao.deleteAll();
-    }
+    await _clearMobileTokens();
     if (clearDatabase) {
       await AppDatabase.clearAllData();
     }
@@ -982,7 +984,7 @@ class AuthService {
     // Try mobile auth refresh first.
     if (_database != null) {
       try {
-        final token = await _database!.authTokenDao.getCurrentToken();
+        final token = await _readMobileToken();
         if (token != null && token.refreshToken.isNotEmpty) {
           final baseUrl = await getBaseUrl();
           if (baseUrl != null) {
@@ -1003,14 +1005,15 @@ class AuthService {
                   response['refresh_token'] as String? ?? token.refreshToken;
 
               if (newAccessToken != null && newAccessToken.isNotEmpty) {
-                final updatedToken = AuthTokenEntity(
-                  accessToken: newAccessToken,
-                  refreshToken: newRefreshToken,
-                  user: token.user,
-                  fullName: token.fullName,
-                  createdAt: DateTime.now().millisecondsSinceEpoch,
+                await _saveMobileToken(
+                  AuthTokenEntity(
+                    accessToken: newAccessToken,
+                    refreshToken: newRefreshToken,
+                    user: token.user,
+                    fullName: token.fullName,
+                    createdAt: DateTime.now().millisecondsSinceEpoch,
+                  ),
                 );
-                await _database!.authTokenDao.updateToken(updatedToken);
                 _client?.rest.setBearerToken(newAccessToken);
                 _isAuthenticated = true;
                 markSessionRecovered();
@@ -1039,7 +1042,7 @@ class AuthService {
                 _expiredSessionEmail = token.user;
                 _sessionDead = true;
                 sessionHealth.value = SessionHealth.expired;
-                await _database!.authTokenDao.deleteAll();
+                await _clearMobileTokens();
               } else {
                 final status = e is FrappeException ? e.statusCode : null;
                 debugRecordTransientFailure(
@@ -1177,6 +1180,73 @@ class AuthService {
     }
     return null;
   }
+
+  /// Persists a mobile-auth token: the secrets to secure storage, the
+  /// non-secret metadata to the `auth_tokens` row with its token columns
+  /// written EMPTY. Secure storage is written first so a failure there leaves
+  /// the previous session intact rather than a row with no credential.
+  Future<void> _saveMobileToken(AuthTokenEntity token) async {
+    await _storage.write(key: _keyMobileAccessToken, value: token.accessToken);
+    await _storage.write(
+      key: _keyMobileRefreshToken,
+      value: token.refreshToken,
+    );
+    await _database!.authTokenDao.insertToken(_withoutSecrets(token));
+  }
+
+  /// Reads the mobile-auth token: metadata from the `auth_tokens` row, the
+  /// access and refresh tokens from secure storage. Returns null when there is
+  /// no row.
+  ///
+  /// Also performs the one-time migration from SDK versions that stored the
+  /// tokens in the row itself: a row whose token columns are not empty has its
+  /// tokens copied into secure storage and the columns blanked. This SDK never
+  /// writes a token into the row, so a non-empty column can only have come
+  /// from an older version and is the most recent token on the device; it is
+  /// therefore copied over whatever secure storage holds. The columns are
+  /// blanked only AFTER the secure-storage write has succeeded, so a failed
+  /// write never loses the session.
+  Future<AuthTokenEntity?> _readMobileToken() async {
+    final row = await _database!.authTokenDao.getCurrentToken();
+    if (row == null) return null;
+    if (row.accessToken.isNotEmpty || row.refreshToken.isNotEmpty) {
+      await _saveMobileToken(row);
+      dev.log(
+        'Moved stored login token from the database to secure storage',
+        name: 'Auth',
+      );
+      return row;
+    }
+    final accessToken = await _storage.read(key: _keyMobileAccessToken);
+    final refreshToken = await _storage.read(key: _keyMobileRefreshToken);
+    return AuthTokenEntity(
+      id: row.id,
+      accessToken: accessToken ?? '',
+      refreshToken: refreshToken ?? '',
+      user: row.user,
+      fullName: row.fullName,
+      createdAt: row.createdAt,
+    );
+  }
+
+  /// Deletes the mobile-auth token from secure storage and the database.
+  Future<void> _clearMobileTokens() async {
+    await _storage.delete(key: _keyMobileAccessToken);
+    await _storage.delete(key: _keyMobileRefreshToken);
+    if (_database != null) {
+      await _database!.authTokenDao.deleteAll();
+    }
+  }
+
+  static AuthTokenEntity _withoutSecrets(AuthTokenEntity token) =>
+      AuthTokenEntity(
+        id: token.id,
+        accessToken: '',
+        refreshToken: '',
+        user: token.user,
+        fullName: token.fullName,
+        createdAt: token.createdAt,
+      );
 
   Future<void> _clearOAuthTokens() async {
     await _storage.delete(key: _keyOAuthAccessToken);
