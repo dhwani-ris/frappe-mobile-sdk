@@ -18,6 +18,7 @@ import '../api/exceptions.dart';
 import '../concurrency/concurrency_pool.dart';
 import '../concurrency/connectivity_watcher.dart';
 import '../database/app_database.dart';
+import '../database/encrypted_database.dart';
 import '../database/daos/doctype_meta_dao.dart';
 import '../database/daos/outbox_dao.dart';
 import '../database/daos/sdk_meta_dao.dart';
@@ -65,6 +66,40 @@ class FrappeSDK {
   /// fallback activates. Use to record a non-fatal Crashlytics event.
   /// The SDK continues normally on the MethodChannel path regardless.
   final void Function(Object, StackTrace)? onFfiInitFailure;
+
+  /// Chooses the database engine. Passed to [AppDatabase.getInstance] as its
+  /// `factoryResolver`. When null (the default) the SDK uses SQLite FFI and
+  /// falls back to `sqflite`, or SQLCipher when [encryptDatabase] is true.
+  /// When set, it wins over [encryptDatabase].
+  final DatabaseFactoryResolver? databaseFactoryResolver;
+
+  /// Opens the local database encrypted with SQLCipher. Default `false`.
+  ///
+  /// The key is 32 random bytes made on first run and kept only in
+  /// `FlutterSecureStorage`, under a name scoped by [databaseAppName].
+  ///
+  /// An existing unencrypted database is replaced by an empty encrypted one
+  /// if it holds no unsynced changes; otherwise [initialize] throws a
+  /// [StateError] and the app must sync (or sign out) without encryption
+  /// first. Ignored when [databaseFactoryResolver] is set.
+  final bool encryptDatabase;
+
+  /// True when this SDK opens its database encrypted ([encryptDatabase] set
+  /// and no [databaseFactoryResolver] given).
+  bool get isDatabaseEncrypted =>
+      encryptDatabase && databaseFactoryResolver == null;
+
+  /// The resolver handed to [AppDatabase.getInstance]: the explicit
+  /// [databaseFactoryResolver], else SQLCipher when [encryptDatabase], else
+  /// null (default FFI-then-sqflite resolution).
+  @visibleForTesting
+  DatabaseFactoryResolver? get effectiveDatabaseFactoryResolver {
+    if (databaseFactoryResolver != null) return databaseFactoryResolver;
+    if (encryptDatabase) {
+      return encryptedDatabaseResolver(appName: databaseAppName);
+    }
+    return null;
+  }
 
   /// Rows per page for `PullEngine`. Default 500. Increase for servers with
   /// fast response times and large doctypes; decrease if requests time out.
@@ -237,6 +272,8 @@ class FrappeSDK {
     this.databaseAppName,
     this.payloadTransformer,
     this.onFfiInitFailure,
+    this.databaseFactoryResolver,
+    this.encryptDatabase = false,
     this.onResolvedExisting,
     this.pullPageSize = 500,
     this.syncServicePageSize = 1000,
@@ -276,7 +313,9 @@ class FrappeSDK {
     this.tamperProtectionRestartGapMs = 600000,
   }) : databaseAppName = null,
        payloadTransformer = null,
-       onFfiInitFailure = null {
+       onFfiInitFailure = null,
+       databaseFactoryResolver = null,
+       encryptDatabase = false {
     _database = database;
     _modeNotifier = OfflineModeNotifier(offlineMode);
     _syncCompleteController = StreamController<void>.broadcast();
@@ -412,6 +451,7 @@ class FrappeSDK {
     _database = await AppDatabase.getInstance(
       appName: databaseAppName,
       onFfiInitFailure: onFfiInitFailure,
+      factoryResolver: effectiveDatabaseFactoryResolver,
     );
     _securityService = FrappeSecurityService(
       database: _database!,

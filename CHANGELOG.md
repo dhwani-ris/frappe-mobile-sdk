@@ -5,6 +5,17 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Opt-in encrypted local database.** `FrappeSDK(encryptDatabase: true)` opens the database with SQLCipher (`sqflite_sqlcipher`), using a 32-byte random key made on first run and kept in `FlutterSecureStorage` under a name scoped by `databaseAppName`. `sdk.isDatabaseEncrypted` reports it. An existing unencrypted database is recreated encrypted when it has no unsynced outbox rows or pending uploads; otherwise `initialize()` throws a `StateError` asking the app to sync or sign out first. Default behaviour (FFI, then `sqflite`) is unchanged.
+- **`FrappeSDK(databaseFactoryResolver: ...)`** passes a `DatabaseFactoryResolver` through to `AppDatabase.getInstance`, so an app can choose the database engine without opening `AppDatabase` itself before `initialize()`. It takes precedence over `encryptDatabase`. `CipherDatabaseFactory` is exported.
+
+### Changed
+
+- `sqflite` floor raised to `^2.3.2` (the first release without the iOS `FMDB` pod, which cannot be linked alongside `sqflite_sqlcipher`). New dependency: `sqflite_sqlcipher: ^3.1.0`.
+
 ## [2.0.0-beta.4] - 2026-09-21
 
 ### Changed

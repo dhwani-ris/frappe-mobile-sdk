@@ -13,6 +13,7 @@ Flutter package for Frappe integration with direct API access, dynamic form rend
 5. [Quick Start](#quick-start)  
    - [App Status Guard (`FrappeAppGuard`)](#app-status-guard-frappeappguard)  
    - [Translations](#translations)  
+   - [Encrypted database](#encrypted-database)  
 6. [Core Features](#core-features)  
 7. [Usage Patterns](#usage-patterns)  
    - [API Usage (no form renderer)](#api-usage-no-form-renderer)  
@@ -306,6 +307,38 @@ Server requirement for translations (handled by `frappe_mobile_control`):
 
 - Endpoint like: `GET /api/v2/method/mobile_auth.get_translations?lang=en`  
   Response shape: `{ "data": { "lang": "en", "translations": { "Source": "Translated" } } }`.
+
+### Encrypted database
+
+The local database (records, outbox, login token) is plain SQLite by default.
+To encrypt it on disk with SQLCipher, opt in:
+
+```dart
+final sdk = FrappeSDK(
+  baseUrl: 'https://your-site.example',
+  databaseAppName: 'myapp',
+  encryptDatabase: true,
+);
+await sdk.initialize();
+assert(sdk.isDatabaseEncrypted);
+```
+
+- The key is 32 random bytes made on first run and kept only in
+  `FlutterSecureStorage` (Keychain / Android Keystore), under a name scoped by
+  `databaseAppName`. If that storage is cleared, the database cannot be read
+  again: delete it (unsynced changes in it are lost; synced data is pulled
+  again).
+- **Existing unencrypted database:** SQLCipher cannot open a plain file with a
+  key. On first start with `encryptDatabase: true`, a plain database with no
+  unsynced changes (outbox and pending uploads empty) is deleted and recreated
+  encrypted, and data is pulled again on the next sync. If unsynced changes
+  exist, `initialize()` throws a `StateError`: ship a release that syncs (or
+  signs out) first, then turn encryption on.
+- To choose the engine yourself, pass `databaseFactoryResolver:` (it is handed
+  to `AppDatabase.getInstance` and takes precedence over `encryptDatabase`).
+  `CipherDatabaseFactory` is exported for building your own.
+- `AtomicWipe.wipe` recreates the file with the default (unencrypted) factory,
+  so do not use it on an encrypted database.
 
 ---
 
