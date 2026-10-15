@@ -220,6 +220,39 @@ MaterialApp(
 
 > Note: your `app_config.dart` should typically be git‑ignored; only `app_config.example.dart` should be committed.
 
+### Client info header (`X-Client-Info`)
+
+Every request the SDK makes (REST calls, login, OTP, token refresh, OAuth token calls and file uploads) carries an `X-Client-Info` header. Frappe Mobile Control reads it to build its device registry (Mobile Device Log) and login history.
+
+```text
+X-Client-Info: app=Field App;ver=2.9.0+72;platform=android;os=<os version>;device=<mobile_uuid>
+```
+
+| Key | Value |
+| --- | --- |
+| `app` | App name from `package_info_plus` |
+| `ver` | `version+buildNumber` from `package_info_plus` |
+| `platform` | `android`, `ios`, ... (`Platform.operatingSystem`) |
+| `os` | `Platform.operatingSystemVersion` |
+| `device` | The SDK's per-install `mobile_uuid` (`sdk.getMobileUuid()`) |
+
+The device model is not sent: that would need `device_info_plus`, which the SDK does not depend on. Values are cleaned before sending (no `;`, `=`, newlines or non-ASCII characters; at most 140 characters each), and empty values are left out. The header is built once, when `initialize()` runs.
+
+It carries no personal data. `device` is a random ID created on first launch and stored in secure storage; it is not a hardware ID and changes if the app is reinstalled.
+
+Override the app name or version, or turn the header off:
+
+```dart
+final sdk = FrappeSDK(
+  baseUrl: config.AppConfig.baseUrl,
+  clientAppName: 'Field App',   // default: package_info_plus appName
+  clientAppVersion: '2.9.0+72', // default: package_info_plus version+buildNumber
+  // sendClientInfo: false,     // opt out (default: true)
+);
+```
+
+If you use `FrappeClient` directly instead of `FrappeSDK`, set it yourself: `client.rest.setClientInfo(await ClientInfo.collect(deviceId: myInstallId))`.
+
 ---
 
 ## Quick Start

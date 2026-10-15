@@ -5,6 +5,14 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Every request now carries an `X-Client-Info` header** describing the install: `app`, `ver` (`version+buildNumber`), `platform`, `os` and `device` (the SDK's per-install `mobile_uuid`), as `key=value` pairs joined by `;`. Frappe Mobile Control reads this header to build its device registry and login history; until now the SDK never sent the `mobile_uuid` on any request, so the server only saw the Dart User-Agent. The header is built once in `FrappeSDK.initialize()` and added in one place, `RestHelper`, so REST calls, login, OTP, token refresh and uploads all carry it. OAuth token calls (`OAuth2Helper`) take a new optional `headers` argument, which `AuthService` fills from `RestHelper.clientHeaders`. Values are cleaned (no `;`, `=`, control or non-ASCII characters) and clipped to 140 characters, matching the server's column size. The device model is not sent, because the SDK does not depend on `device_info_plus`. No personal data is included.
+- **`FrappeSDK(sendClientInfo:, clientAppName:, clientAppVersion:)`.** `sendClientInfo` defaults to `true`; pass `false` to stop sending the header. The other two override what `package_info_plus` reports.
+- **`ClientInfo`** (exported) builds and sanitises the header, and `RestHelper.setClientInfo` / `clientHeaders` let apps that use `FrappeClient` directly send it too.
+
 ## [2.0.0-beta.4] - 2026-09-21
 
 ### Changed
