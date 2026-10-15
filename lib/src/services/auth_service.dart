@@ -941,11 +941,24 @@ class AuthService {
   }
 
   /// Clears all stored credentials without touching the database.
+  ///
+  /// Keeps the SDK's own encryption keys (the local database key): they are not credentials,
+  /// and deleting them would leave data already on the device unreadable.
   Future<void> clearCredentials() async {
-    await _storage.deleteAll();
+    final stored = await _storage.readAll();
+    for (final key in stored.keys.toList()) {
+      if (isSdkEncryptionKey(key)) continue;
+      await _storage.delete(key: key);
+    }
     _isAuthenticated = false;
     _client = null;
   }
+
+  /// True for secure-storage entries that hold the SDK's own encryption keys,
+  /// which [clearCredentials] keeps.
+  @visibleForTesting
+  static bool isSdkEncryptionKey(String key) =>
+      key.startsWith('frappe_mobile_sdk.db_key.');
 
   Future<void> _storeOAuthTokens(
     String accessToken,

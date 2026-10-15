@@ -1,0 +1,34 @@
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:frappe_mobile_sdk/src/services/auth_service.dart';
+
+void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
+  test(
+    'clearCredentials deletes credentials but keeps the database key',
+    () async {
+      FlutterSecureStorage.setMockInitialValues(<String, String>{
+        'frappe_api_key': 'k',
+        'frappe_api_secret': 's',
+        'frappe_oauth_access_token': 't',
+        'frappe_mobile_sdk.db_key.myapp': 'db-key',
+      });
+      await AuthService().clearCredentials();
+      final left = await const FlutterSecureStorage().readAll();
+      expect(left, {'frappe_mobile_sdk.db_key.myapp': 'db-key'});
+    },
+  );
+
+  test('only the SDK encryption keys are kept', () {
+    expect(
+      AuthService.isSdkEncryptionKey('frappe_mobile_sdk.db_key.default'),
+      isTrue,
+    );
+    expect(
+      AuthService.isSdkEncryptionKey('frappe_mobile_sdk.db_key.app'),
+      isTrue,
+    );
+    expect(AuthService.isSdkEncryptionKey('frappe_api_secret'), isFalse);
+  });
+}
