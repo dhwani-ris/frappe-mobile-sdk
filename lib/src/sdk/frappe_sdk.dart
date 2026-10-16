@@ -61,6 +61,25 @@ class FrappeSDK {
   /// to `docstatus=1` on sync).
   final PayloadTransformerFn? payloadTransformer;
 
+  /// Doctypes whose push responses are written back in full. Default empty:
+  /// a successful push then stores only the server's `name`, `modified` and
+  /// audit fields, and any other value the server set on save reaches the
+  /// device on the next pull (if the doctype is pulled at all).
+  ///
+  /// For a doctype listed here, after every successful insert / update /
+  /// submit / cancel push, each field of the returned document that has a
+  /// column in the local table is written into the local row (and its child
+  /// rows) in the same transaction: naming-series fields, totals, a status
+  /// set by a server controller, a signature. System and sync columns are
+  /// never written, nor are fields the device has no column for. If the user
+  /// edited the document again while the push was in flight, nothing is
+  /// written; the follow-up push's response brings the server values.
+  ///
+  /// ```dart
+  /// FrappeSDK(baseUrl: url, writeBackDoctypes: {'Sales Invoice'});
+  /// ```
+  final Set<String> writeBackDoctypes;
+
   /// Called when SQLite FFI initialization fails before the MethodChannel
   /// fallback activates. Use to record a non-fatal Crashlytics event.
   /// The SDK continues normally on the MethodChannel path regardless.
@@ -236,6 +255,7 @@ class FrappeSDK {
     required this.baseUrl,
     this.databaseAppName,
     this.payloadTransformer,
+    this.writeBackDoctypes = const {},
     this.onFfiInitFailure,
     this.onResolvedExisting,
     this.pullPageSize = 500,
@@ -266,6 +286,7 @@ class FrappeSDK {
     ),
     http.Client? httpClient,
     this.onResolvedExisting,
+    this.writeBackDoctypes = const {},
     this.pullPageSize = 500,
     this.syncServicePageSize = 1000,
     this.listChildDocsPageSize = 1000,
@@ -505,6 +526,7 @@ class FrappeSDK {
       // each doctype's pull loop runs.
       schemaReconciler: _repository!.reconcileParentTableForMeta,
       payloadTransformer: payloadTransformer,
+      writeBackDoctypes: writeBackDoctypes,
       pullPageSize: pullPageSize,
       // Supplies error-log capture with the current user identity + roles.
       sessionUserService: _sessionUserService,
