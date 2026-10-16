@@ -6,21 +6,33 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   test(
-    'clearCredentials deletes credentials but keeps the attachment key',
+    'clearCredentials deletes credentials but keeps the SDK encryption keys',
     () async {
       FlutterSecureStorage.setMockInitialValues(<String, String>{
         'frappe_api_key': 'k',
         'frappe_api_secret': 's',
         'frappe_oauth_access_token': 't',
+        'frappe_mobile_sdk.db_key.myapp': 'db-key',
         'frappe_sdk_attachment_key__myapp': 'attachment-key',
       });
       await AuthService().clearCredentials();
       final left = await const FlutterSecureStorage().readAll();
-      expect(left, {'frappe_sdk_attachment_key__myapp': 'attachment-key'});
+      expect(left, {
+        'frappe_mobile_sdk.db_key.myapp': 'db-key',
+        'frappe_sdk_attachment_key__myapp': 'attachment-key',
+      });
     },
   );
 
   test('only the SDK encryption keys are kept', () {
+    expect(
+      AuthService.isSdkEncryptionKey('frappe_mobile_sdk.db_key.default'),
+      isTrue,
+    );
+    expect(
+      AuthService.isSdkEncryptionKey('frappe_mobile_sdk.db_key.app'),
+      isTrue,
+    );
     expect(AuthService.isSdkEncryptionKey('frappe_sdk_attachment_key'), isTrue);
     expect(
       AuthService.isSdkEncryptionKey('frappe_sdk_attachment_key__app'),

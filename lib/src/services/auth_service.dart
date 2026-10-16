@@ -942,7 +942,7 @@ class AuthService {
 
   /// Clears all stored credentials without touching the database.
   ///
-  /// Keeps the SDK's own encryption keys (the attachment key): they are not credentials,
+  /// Keeps the SDK's own encryption keys (the local database and attachment keys): they are not credentials,
   /// and deleting them would leave data already on the device unreadable.
   Future<void> clearCredentials() async {
     final stored = await _storage.readAll();
@@ -958,6 +958,7 @@ class AuthService {
   /// which [clearCredentials] keeps.
   @visibleForTesting
   static bool isSdkEncryptionKey(String key) =>
+      key.startsWith('frappe_mobile_sdk.db_key.') ||
       key.startsWith('frappe_sdk_attachment_key');
 
   Future<void> _storeOAuthTokens(
