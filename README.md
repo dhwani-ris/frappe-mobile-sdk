@@ -305,7 +305,7 @@ What it does:
 Limits to know:
 
 - Opening a non-image attachment in another app (PDF viewer, etc.) needs a plain copy. The SDK writes it to the viewer scratch folder, which logout and `clearMediaCache()` delete.
-- `AuthService.clearCredentials()` deletes everything in secure storage, including this key. Encrypted files that have not uploaded yet cannot be read after that; the upload is rejected with a clear reason.
+- `AuthService.clearCredentials()` keeps this key, so files that have not uploaded yet stay readable after signing in again. If the phone's secure storage itself is cleared (for example by clearing the app's data), encrypted files that have not uploaded yet cannot be read; the upload is rejected with a clear reason.
 - Files are encrypted and decrypted whole, in memory. This fits the 10 MB pick limit and the 25 MB download cap.
 - `initialize()` throws if the option is on and the key cannot be read or created, rather than writing plain files.
 
