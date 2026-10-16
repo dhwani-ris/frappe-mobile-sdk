@@ -6,6 +6,7 @@ import '../database/field_type_mapping.dart';
 import '../database/normalize_for_search.dart';
 import '../database/schema/system_columns.dart';
 import '../database/table_name.dart';
+import '../models/doc_field.dart';
 import '../models/doc_type_meta.dart';
 import '../utils/sdk_log.dart';
 import '../utils/uuid_pattern.dart';
@@ -187,6 +188,45 @@ void _copyServerAuditFields({
   for (final col in serverAuditColumnNames) {
     if (!from.containsKey(col)) continue;
     into[col] = from[col];
+  }
+}
+
+/// Whether [field] has its own column in a `docs__<doctype>` mirror that a
+/// server value is copied into: it has a fieldname, its fieldtype maps to a
+/// SQLite column ([sqliteColumnTypeFor] is non-null, which also rules out
+/// `Table` / `Table MultiSelect` and `Password`), and it is not one of the
+/// [systemColumns] the mirror manages itself.
+///
+/// Shared by [PullApply] (all four write paths) and `ResponseWriteback`'s
+/// opt-in server-field writeback so the two cannot disagree on which fields
+/// the server is allowed to write.
+bool isServerMirroredField(DocField field, Set<String> systemColumns) {
+  final name = field.fieldname;
+  if (name == null) return false;
+  if (sqliteColumnTypeFor(field.fieldtype) == null) return false;
+  return !systemColumns.contains(name);
+}
+
+/// Writes one server-sent [value] for [field] into the row map [into], the
+/// way a pull stores it: the raw value under the fieldname, `__is_local = 0`
+/// for a Link / Dynamic Link (a server value is a server name, never a local
+/// uuid), and the `__norm` search column for a TEXT field in [normFields].
+///
+/// Callers check [isServerMirroredField] first.
+void putServerFieldValue({
+  required Map<String, Object?> into,
+  required DocField field,
+  required Object? value,
+  Set<String> normFields = const <String>{},
+}) {
+  final name = field.fieldname!;
+  final type = field.fieldtype;
+  into[name] = value;
+  if (isLinkFieldType(type)) {
+    into['${name}__is_local'] = 0;
+  }
+  if (normFields.contains(name) && sqliteColumnTypeFor(type) == 'TEXT') {
+    into['${name}__norm'] = normalizeForSearch(value?.toString());
   }
 }
 
@@ -513,21 +553,13 @@ class PullApply {
       _copyServerAuditFields(from: r, into: parentRow);
 
       for (final f in parentMeta.fields) {
-        final name = f.fieldname;
-        final type = f.fieldtype;
-        if (name == null) continue;
-        if (type == 'Table' || type == 'Table MultiSelect') continue;
-        if (sqliteColumnTypeFor(type) == null) continue;
-        if (_systemParentColumnNames.contains(name)) continue;
-        final v = r[name];
-        parentRow[name] = v;
-        if (isLinkFieldType(type)) {
-          parentRow['${name}__is_local'] = 0;
-        }
-        if (parentNormFields.contains(name) &&
-            sqliteColumnTypeFor(type) == 'TEXT') {
-          parentRow['${name}__norm'] = normalizeForSearch(v?.toString());
-        }
+        if (!isServerMirroredField(f, _systemParentColumnNames)) continue;
+        putServerFieldValue(
+          into: parentRow,
+          field: f,
+          value: r[f.fieldname],
+          normFields: parentNormFields,
+        );
       }
 
       if (existing.isEmpty) {
@@ -615,15 +647,12 @@ class PullApply {
             'modified': cr['modified'] as String?,
           };
           for (final cf in childInfo.meta.fields) {
-            final cn = cf.fieldname;
-            final ct = cf.fieldtype;
-            if (cn == null) continue;
-            if (sqliteColumnTypeFor(ct) == null) continue;
-            if (_systemChildColumnNames.contains(cn)) continue;
-            childRow[cn] = cr[cn];
-            if (isLinkFieldType(ct)) {
-              childRow['${cn}__is_local'] = 0;
-            }
+            if (!isServerMirroredField(cf, _systemChildColumnNames)) continue;
+            putServerFieldValue(
+              into: childRow,
+              field: cf,
+              value: cr[cf.fieldname],
+            );
           }
           batch.insert(childTable, childRow);
         }
@@ -698,21 +727,13 @@ class PullApply {
       _copyServerAuditFields(from: r, into: parentRow);
 
       for (final f in parentMeta.fields) {
-        final name = f.fieldname;
-        final type = f.fieldtype;
-        if (name == null) continue;
-        if (type == 'Table' || type == 'Table MultiSelect') continue;
-        if (sqliteColumnTypeFor(type) == null) continue;
-        if (_systemParentColumnNames.contains(name)) continue;
-        final v = r[name];
-        parentRow[name] = v;
-        if (isLinkFieldType(type)) {
-          parentRow['${name}__is_local'] = 0;
-        }
-        if (parentNormFields.contains(name) &&
-            sqliteColumnTypeFor(type) == 'TEXT') {
-          parentRow['${name}__norm'] = normalizeForSearch(v?.toString());
-        }
+        if (!isServerMirroredField(f, _systemParentColumnNames)) continue;
+        putServerFieldValue(
+          into: parentRow,
+          field: f,
+          value: r[f.fieldname],
+          normFields: parentNormFields,
+        );
       }
 
       batch.insert(
@@ -754,15 +775,12 @@ class PullApply {
           };
 
           for (final cf in childInfo.meta.fields) {
-            final cn = cf.fieldname;
-            final ct = cf.fieldtype;
-            if (cn == null) continue;
-            if (sqliteColumnTypeFor(ct) == null) continue;
-            if (_systemChildColumnNames.contains(cn)) continue;
-            childRow[cn] = cr[cn];
-            if (isLinkFieldType(ct)) {
-              childRow['${cn}__is_local'] = 0;
-            }
+            if (!isServerMirroredField(cf, _systemChildColumnNames)) continue;
+            putServerFieldValue(
+              into: childRow,
+              field: cf,
+              value: cr[cf.fieldname],
+            );
           }
           batch.insert(childTable, childRow);
         }
