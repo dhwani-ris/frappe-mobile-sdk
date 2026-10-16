@@ -1194,6 +1194,39 @@ sdk.sessionUser$     // Stream<SessionUser?>
 sdk.sessionUserService  // SessionUserService (set / clear / restore)
 ```
 
+#### Writing back server-set fields after a push
+
+By default a successful push stores only the server's `name`, `modified` and
+audit fields (`owner`, `creation`, `modified_by`) on the local row. Anything
+else the server sets when it saves the document (a naming-series number, a
+computed total, a status set by a controller, a signature) reaches the device
+on the next pull, and only if the doctype is pulled.
+
+List the doctypes that should take the server's values straight from the push
+response:
+
+```dart
+final sdk = FrappeSDK(
+  baseUrl: '...',
+  writeBackDoctypes: {'Sales Invoice'},
+);
+```
+
+For those doctypes, after a successful insert, update, submit or cancel, every
+field of the returned document that has a column in the local table is written
+into the local row and its child rows, in the same transaction as the rest of
+the writeback. Values are stored the way a pull stores them. Not written:
+
+- system and sync columns (`mobile_uuid`, `sync_status`, `docstatus`, `idx`, ...);
+- fields the device has no column for, and keys the response does not carry;
+- anything at all if the user saved the document again while the push was in
+  flight. The follow-up push sends those edits, and its response brings the
+  server's values.
+
+Child rows are matched to the local ones (by `mobile_uuid`, then position)
+and their values written. Rows the server adds or removes on save are not
+created or deleted locally; they reach the device on the next pull.
+
 ### SyncController
 
 ```dart

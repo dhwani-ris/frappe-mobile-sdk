@@ -5,6 +5,12 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`FrappeSDK(writeBackDoctypes: {...})`: write server-set fields back after a push.** For the listed doctypes, a successful insert / update / submit / cancel now writes every field of the server's returned document that has a local column into the local row and its child rows (matched as before: `mobile_uuid`, then position), in the same transaction as the existing writeback. Server-computed values (naming-series fields, totals, a controller-set status, a signature) are visible at once instead of on the next pull, and no longer depend on the doctype being in the pull set. Values go through the same field handling as a pull (`isServerMirroredField` / `putServerFieldValue`, now shared by `PullApply` and `ResponseWriteback`): Link fields get `__is_local = 0`, search fields get their `__norm` column. System and sync columns are never written; keys the response omits, fields not in the local meta, columns missing from the live table and `Map`/`List` values are skipped. If more local work is queued for the document (the user saved again during the push), no fields are written, matching the existing rule that keeps `sync_status = 'dirty'`. Child rows the server adds or removes are not created or deleted locally; they arrive on the next pull. The writeback's diagnostics go through `sdkLog` (stripped in release). Default is an empty set: no behaviour change. Also exposed on `PushEngine`, `SyncEngineBuilder.build` and `ResponseWriteback.apply` / `applyInTxn` (`writeBackMeta`, `writeBackChildMetas`).
+
 ## [2.0.0-beta.4] - 2026-09-21
 
 ### Changed
