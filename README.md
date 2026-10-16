@@ -12,8 +12,8 @@ Flutter package for Frappe integration with direct API access, dynamic form rend
 4. [Configuration](#configuration)  
 5. [Quick Start](#quick-start)  
    - [App Status Guard (`FrappeAppGuard`)](#app-status-guard-frappeappguard)  
-   - [Translations](#translations)  
    - [Encrypting attachments on the device](#encrypting-attachments-on-the-device)  
+   - [Translations](#translations)  
 6. [Core Features](#core-features)  
 7. [Usage Patterns](#usage-patterns)  
    - [API Usage (no form renderer)](#api-usage-no-form-renderer)  
@@ -279,35 +279,6 @@ MaterialApp(
 
 > Requires the `frappe_mobile_control` server app – see [Prerequisites](#prerequisites).
 
-### Translations
-
-The SDK can load translation dictionaries from your Frappe server and use them for **doctype labels**, **field labels**, **section/tab titles**, and validation messages.
-
-- **Automatically**: when you call `sdk.initialize(true)` and session restore succeeds (loads English `en` dictionary once).
-- **Manually**: call `sdk.translations.loadTranslations(lang)` or `sdk.translations.setLocale(lang)` to load/switch language.
-
-Example:
-
-```dart
-// After init, optionally set language
-await sdk.translations.setLocale('en');  // or 'hi', 'es', etc.
-
-DocumentListScreen(
-  doctype: doctype,
-  meta: meta,
-  repository: sdk.repository,
-  syncService: sdk.sync,
-  metaService: sdk.meta,
-  permissionService: sdk.permissions,
-  translate: (s) => sdk.translations.translate(s),
-);
-```
-
-Server requirement for translations (handled by `frappe_mobile_control`):
-
-- Endpoint like: `GET /api/v2/method/mobile_auth.get_translations?lang=en`  
-  Response shape: `{ "data": { "lang": "en", "translations": { "Source": "Translated" } } }`.
-
 ### Encrypting attachments on the device
 
 Photos and files picked in a form are copied to the app's documents folder (`mform_attachments/outbox/`) and stay there until they upload. Uploaded and downloaded attachments are kept in `mform_attachments/cache/`. By default these are plain files, so anyone who gets the phone's storage can read them.
@@ -337,6 +308,35 @@ Limits to know:
 - `AuthService.clearCredentials()` deletes everything in secure storage, including this key. Encrypted files that have not uploaded yet cannot be read after that; the upload is rejected with a clear reason.
 - Files are encrypted and decrypted whole, in memory. This fits the 10 MB pick limit and the 25 MB download cap.
 - `initialize()` throws if the option is on and the key cannot be read or created, rather than writing plain files.
+
+### Translations
+
+The SDK can load translation dictionaries from your Frappe server and use them for **doctype labels**, **field labels**, **section/tab titles**, and validation messages.
+
+- **Automatically**: when you call `sdk.initialize(true)` and session restore succeeds (loads English `en` dictionary once).
+- **Manually**: call `sdk.translations.loadTranslations(lang)` or `sdk.translations.setLocale(lang)` to load/switch language.
+
+Example:
+
+```dart
+// After init, optionally set language
+await sdk.translations.setLocale('en');  // or 'hi', 'es', etc.
+
+DocumentListScreen(
+  doctype: doctype,
+  meta: meta,
+  repository: sdk.repository,
+  syncService: sdk.sync,
+  metaService: sdk.meta,
+  permissionService: sdk.permissions,
+  translate: (s) => sdk.translations.translate(s),
+);
+```
+
+Server requirement for translations (handled by `frappe_mobile_control`):
+
+- Endpoint like: `GET /api/v2/method/mobile_auth.get_translations?lang=en`  
+  Response shape: `{ "data": { "lang": "en", "translations": { "Source": "Translated" } } }`.
 
 ---
 

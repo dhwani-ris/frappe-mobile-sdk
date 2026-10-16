@@ -296,9 +296,9 @@ class FrappeSDK {
     this.tamperProtectionChecks = const {},
     this.tamperProtectionRestartGapMs = 600000,
   }) : databaseAppName = null,
+       encryptAttachments = false,
        payloadTransformer = null,
-       onFfiInitFailure = null,
-       encryptAttachments = false {
+       onFfiInitFailure = null {
     _database = database;
     _modeNotifier = OfflineModeNotifier(offlineMode);
     _syncCompleteController = StreamController<void>.broadcast();
