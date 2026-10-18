@@ -42,6 +42,13 @@ export 'src/services/media_resolver.dart' show ResolveMediaFn;
 // factory — has to name the type. `media_store.dart` is otherwise internal, so
 // only the typedef is shown.
 export 'src/utils/media_store.dart' show ReclaimAttachmentFn;
+// `FrappeSDK(encryptAttachments: true)`: a host rendering a staged or cached
+// attachment in its own widget needs the decrypting image provider (a plain
+// `FileImage` would show ciphertext), and may need to catch the error a
+// tampered or keyless file raises.
+export 'src/ui/widgets/fields/local_attachment_image.dart'
+    show LocalAttachmentImage;
+export 'src/utils/attachment_cipher.dart' show AttachmentDecryptionException;
 
 // Database
 export 'src/database/app_database.dart';

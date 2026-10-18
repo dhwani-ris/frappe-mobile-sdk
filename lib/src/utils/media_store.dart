@@ -8,6 +8,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:uuid/uuid.dart';
 
 import '../models/media_store_usage.dart';
+import 'attachment_cipher.dart';
 import 'attachment_paths.dart';
 import 'sdk_log.dart';
 
@@ -102,6 +103,30 @@ class MediaStore {
   static Future<String> _osTempRoot() async =>
       _testTempRoot ?? (await getTemporaryDirectory()).path;
 
+  /// A path an EXTERNAL app can open for the local attachment at [path].
+  ///
+  /// A plain file is returned as is. An encrypted one (see [AttachmentCipher])
+  /// is decrypted into [viewerTempDir] — the scratch directory already used for
+  /// downloaded attachments, which [clearAll] (logout) and [clearCache] wipe —
+  /// because another app cannot read the SDK's ciphertext. The copy is keyed
+  /// by a digest of [path] so repeated opens reuse one file.
+  ///
+  /// Throws [AttachmentDecryptionException] when the file cannot be decrypted.
+  static Future<String> plainPathForViewer(String path) async {
+    if (!await AttachmentCipher.isEncryptedFile(path)) return path;
+    final bytes = await AttachmentCipher.readPlainBytes(path);
+    final digest = sha256
+        .convert(utf8.encode(path))
+        .toString()
+        .substring(0, 16);
+    final target = File(
+      p.join(await viewerTempDir(), 'dec_$digest', p.basename(path)),
+    );
+    await target.parent.create(recursive: true);
+    await target.writeAsBytes(bytes, flush: true);
+    return target.path;
+  }
+
   /// Absolute path of the camera-capture marker.
   ///
   /// Deliberately in the temp ROOT rather than inside [viewerTempDir]: that is
@@ -171,6 +196,11 @@ class MediaStore {
   /// cannot travel any other way — it does not fit through the field's
   /// `onChanged`, and renaming to `<uuid><ext>` (the previous behaviour) lost
   /// it permanently, so every upload landed server-side as an opaque uuid.
+  ///
+  /// When `FrappeSDK(encryptAttachments: true)` is in force the staged file is
+  /// AES-256-GCM ciphertext (see [AttachmentCipher]) and a picker scratch copy
+  /// of [source] is deleted afterwards (see [_deletePickerScratch]). The name
+  /// and extension stay the user's either way.
   static Future<String> stageToOutbox(
     File source, {
     String Function()? nameGen,
@@ -184,8 +214,49 @@ class MediaStore {
     // pending_attachments row nor a live-set entry, and delete a pick that is
     // about to become live.
     _stagedThisSession.add(dest);
-    await source.copy(dest);
+    if (!AttachmentCipher.encryptsNewFiles) {
+      await source.copy(dest);
+      return dest;
+    }
+    // Encrypted staging. The bytes are encrypted in memory and land through a
+    // temp file + rename, so no plain copy is ever written under outbox/. The
+    // temp path is registered too, so a concurrent sweep cannot delete it
+    // between the write and the rename.
+    _stagedThisSession.add(AttachmentCipher.tempPathFor(dest));
+    await AttachmentCipher.writeEncrypted(dest, await source.readAsBytes());
+    await _deletePickerScratch(source);
     return dest;
+  }
+
+  /// Deletes [source] after an encrypted stage, but ONLY when it is a picker's
+  /// scratch copy.
+  ///
+  /// `image_picker` and `file_picker` hand back a COPY in the app's own temp or
+  /// cache directory. Left there, it is a plain duplicate of the attachment the
+  /// outbox has just encrypted. A path anywhere else — the gallery, Downloads,
+  /// a host-supplied file, this store itself — is the user's or the host's,
+  /// and is never touched.
+  ///
+  /// The roots are the path_provider temp directory (Android: the app cache
+  /// dir, where both pickers write) and, on iOS, the app's sandboxed `tmp/`
+  /// (`Directory.systemTemp`), where `image_picker` writes. Containment is
+  /// canonical, as in [isStagedPath]. Best-effort: failing to delete never
+  /// fails the pick; the OS reclaims temp files eventually.
+  static Future<void> _deletePickerScratch(File source) async {
+    try {
+      final src = p.canonicalize(source.path);
+      final storeRoot = p.canonicalize(await _root());
+      if (src == storeRoot || p.isWithin(storeRoot, src)) return;
+      final roots = <String>[
+        await _osTempRoot(),
+        if (_testTempRoot == null && Platform.isIOS) Directory.systemTemp.path,
+      ];
+      final inScratch = roots.any((r) => p.isWithin(p.canonicalize(r), src));
+      if (!inScratch) return;
+      if (await source.exists()) await source.delete();
+    } catch (e, st) {
+      sdkLog('MediaStore: could not delete picker scratch copy — $e\n$st');
+    }
   }
 
   /// Deterministic cache location for [fileUrl].

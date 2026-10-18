@@ -15,6 +15,7 @@ import '../../../utils/attachment_pick.dart';
 import '../../../utils/sdk_log.dart';
 import 'base_field.dart';
 import 'field_helpers.dart';
+import 'local_attachment_image.dart';
 import 'media_resolve_builder.dart';
 
 /// Shows [image] full-screen in a zoomable, dismissible viewer with a dark
@@ -486,7 +487,9 @@ class ImageField extends BaseField {
                         } else if (isLocalFile) {
                           showFullScreenImageProvider(
                             context,
-                            FileImage(File(localPath)),
+                            // Decrypts in memory when the file is encrypted
+                            // at rest; a plain file reads as before.
+                            LocalAttachmentImage(localPath),
                           );
                         }
                       },
@@ -510,8 +513,8 @@ class ImageField extends BaseField {
                                     },
                                   )
                                 : isLocalFile
-                                ? Image.file(
-                                    File(localPath),
+                                ? Image(
+                                    image: LocalAttachmentImage(localPath),
                                     height: 150,
                                     width: double.infinity,
                                     fit: BoxFit.cover,

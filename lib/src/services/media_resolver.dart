@@ -2,6 +2,7 @@ import 'dart:io';
 
 import '../database/daos/media_cache_dao.dart';
 import '../models/media_cache_entry.dart';
+import '../utils/attachment_cipher.dart';
 import '../utils/attachment_paths.dart';
 import '../utils/media_store.dart';
 import '../utils/sdk_log.dart';
@@ -123,7 +124,14 @@ class MediaResolver {
       final dest = await MediaStore.cachePathFor(v);
       final file = File(dest);
       await file.parent.create(recursive: true);
-      await file.writeAsBytes(bytes, flush: true);
+      if (AttachmentCipher.encryptsNewFiles) {
+        // `encryptAttachments` is on: the cache holds ciphertext, like the
+        // uploaded files `moveToCache` moves in from outbox/. Readers decrypt
+        // through `AttachmentCipher.readPlainBytes`.
+        await AttachmentCipher.writeEncrypted(dest, bytes);
+      } else {
+        await file.writeAsBytes(bytes, flush: true);
+      }
       await cache.upsert(
         fileUrl: v,
         localPath: dest,

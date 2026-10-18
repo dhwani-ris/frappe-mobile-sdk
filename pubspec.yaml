@@ -62,6 +62,11 @@ dependencies:
   # OAuth PKCE
   crypto: ^3.0.3
 
+  # AES-256-GCM for opt-in at-rest encryption of staged / cached attachments
+  # (`FrappeSDK(encryptAttachments: true)`). Pure Dart, so it runs in plain
+  # `flutter test` with no platform channel.
+  cryptography: ^2.7.0
+
   # Open OAuth URL in browser
   url_launcher: ^6.2.0
 

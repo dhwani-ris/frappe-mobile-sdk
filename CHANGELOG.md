@@ -5,6 +5,12 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Opt-in encryption of attachment files on the device: `FrappeSDK(encryptAttachments: true)`.** Off by default, so existing apps are unchanged. Until now a picked photo was copied in clear to `mform_attachments/outbox/` and stayed there until it uploaded, and uploaded or downloaded media sat in clear under `cache/`; a lost phone exposed them. With the option on, staged and cached files are AES-256-GCM ciphertext (`FMSDK-ENC1\n` + 12-byte nonce + ciphertext + 16-byte tag, via the pure-Dart `cryptography` package), written through a temp file and a rename. The 32-byte key is generated once and kept in `FlutterSecureStorage`, namespaced by `databaseAppName`. `AttachmentService.uploadFile` detects the header, decrypts in memory and sends the bytes through the new `uploadBytes` (`RestHelper.uploadBytes`), so no plain temp file is written; this covers both the sync pipeline and the inline upload on pick. The image and attach field previews read through the new `LocalAttachmentImage` provider (exported) instead of `FileImage`; opening a local non-image file in another app decrypts it into the viewer scratch folder, which logout and `clearMediaCache()` already wipe. Downloaded media is cached encrypted, the same as files moved into the cache after upload. After an encrypted stage, the picker's own scratch copy is deleted when it lies in the app temp/cache folder; nothing outside it is touched. Files without the header are read as plain, so files staged before the option was enabled keep working, and turning the option off still loads an existing key so earlier files stay readable. A file that fails to decrypt raises `AttachmentDecryptionException` (exported), which the upload pipeline treats as terminal instead of retrying forever.
+
 ## [2.0.0-beta.4] - 2026-09-21
 
 ### Changed

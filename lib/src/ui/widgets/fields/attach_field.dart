@@ -23,6 +23,7 @@ import 'field_helpers.dart';
 // showFullScreenImageProvider) so image attachments open exactly like
 // ImageField previews, with the same auth headers.
 import 'image_field.dart';
+import 'local_attachment_image.dart';
 
 /// Normalises the result of `FilePicker.pickFiles()` across the file_picker
 /// major versions this SDK supports (`>=11.0.2 <14.0.0`).
@@ -680,7 +681,7 @@ class _AttachViewButtonState extends State<_AttachViewButton> {
     if (widget.isImage) {
       if (!mounted) return;
       if (isLocal) {
-        showFullScreenImageProvider(context, FileImage(File(url)));
+        showFullScreenImageProvider(context, LocalAttachmentImage(url));
       } else {
         showFullScreenImage(context, url, widget.headers);
       }
@@ -689,7 +690,18 @@ class _AttachViewButtonState extends State<_AttachViewButton> {
 
     // Local non-image file — open directly, no download required.
     if (isLocal) {
-      final result = await OpenFilex.open(url);
+      // An external app cannot read the SDK's ciphertext, so an encrypted file
+      // is decrypted into the viewer scratch dir first (wiped on logout and by
+      // clearCache). A plain file opens in place, as before.
+      final String openPath;
+      try {
+        openPath = await MediaStore.plainPathForViewer(url);
+      } catch (e, st) {
+        sdkLog('AttachField: could not prepare local file — $e\n$st');
+        if (mounted) _showError('Could not open file.');
+        return;
+      }
+      final result = await OpenFilex.open(openPath);
       if (result.type != ResultType.done && mounted) {
         _showError('Could not open file: ${result.message}');
       }
