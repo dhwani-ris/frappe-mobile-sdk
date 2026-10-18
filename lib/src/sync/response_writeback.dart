@@ -1,8 +1,10 @@
-import 'package:flutter/foundation.dart';
 import 'package:sqflite/sqflite.dart';
 
 import '../database/schema/system_columns.dart';
+import '../models/doc_type_meta.dart';
 import '../models/outbox_row.dart';
+import '../utils/sdk_log.dart';
+import 'pull_apply.dart' show isServerMirroredField, putServerFieldValue;
 import 'push_error.dart';
 
 /// Applies a successful Frappe push response to local state. Spec §5.2.
@@ -16,6 +18,14 @@ import 'push_error.dart';
 ///    `name` + `modified` for that idx slot.
 /// 3. Flips the originating outbox row to `done`, stamping its
 ///    `server_name` and `last_attempt_at`.
+///
+/// Opt-in server-field writeback: when a `writeBackMeta` is passed (PushEngine
+/// does so for the doctypes in `FrappeSDK.writeBackDoctypes`), every field of
+/// the returned document that has a column in the local mirror is also
+/// written, parent and children, so values the server computed on save
+/// (naming-series fields, totals, a status set by a controller, a signature)
+/// are visible locally at once instead of after the next pull. See
+/// [_serverFieldValues] for what is and is not written.
 class ResponseWriteback {
   /// Apply in a fresh `db.transaction(...)`. Use this when no surrounding
   /// transaction is active (tests, single-shot callers). PushEngine routes
@@ -26,6 +36,8 @@ class ResponseWriteback {
     required String parentTable,
     required Map<String, String> childTablesByFieldname,
     required Map<String, dynamic> response,
+    DocTypeMeta? writeBackMeta,
+    Map<String, DocTypeMeta> writeBackChildMetas = const {},
   }) async {
     await db.transaction((txn) async {
       await applyInTxn(
@@ -34,6 +46,8 @@ class ResponseWriteback {
         parentTable: parentTable,
         childTablesByFieldname: childTablesByFieldname,
         response: response,
+        writeBackMeta: writeBackMeta,
+        writeBackChildMetas: writeBackChildMetas,
       );
     });
   }
@@ -41,12 +55,21 @@ class ResponseWriteback {
   /// Apply using a caller-supplied transaction. PushEngine's WriteQueue
   /// path uses this so we don't nest `db.transaction(...)` (sqflite would
   /// deadlock).
+  ///
+  /// [writeBackMeta] turns on the server-field writeback for this row: the
+  /// parent doctype's meta, used to decide which response keys are fields
+  /// with a local column. [writeBackChildMetas] does the same for child rows,
+  /// keyed by the parent's Table fieldname (a child table with no entry gets
+  /// only `server_name` / `modified`, as before). With [writeBackMeta] null
+  /// (the default) the writeback is exactly what it was.
   static Future<void> applyInTxn({
     required Transaction txn,
     required OutboxRow row,
     required String parentTable,
     required Map<String, String> childTablesByFieldname,
     required Map<String, dynamic> response,
+    DocTypeMeta? writeBackMeta,
+    Map<String, DocTypeMeta> writeBackChildMetas = const {},
   }) async {
     // DELETE: server sends no body. Hard-delete the local mirror and outbox
     // row — the tombstone is no longer needed once the server confirms.
@@ -108,6 +131,20 @@ class ResponseWriteback {
     );
     final hasMore = more.isNotEmpty;
 
+    // Server-field writeback is skipped as a whole while more local work is
+    // queued for this doc ([hasMore]). A save made while this push was in
+    // flight always queues a fresh outbox row (`OutboxDao.recordSave` never
+    // collapses into an `in_flight` row), so [hasMore] is exactly "the user
+    // edited this doc after the payload we just sent was assembled". The
+    // server's copy of a field may then be older than the local one, and we
+    // cannot tell which fields were touched, so none are written: the queued
+    // push sends the local edits and ITS response carries the server-computed
+    // values. Same rule as `sync_status` staying `dirty` below.
+    final writeServerFields = writeBackMeta != null && !hasMore;
+    // Live column set per table, read once per writeback (children would
+    // otherwise re-read it for every row).
+    final columnsByTable = <String, Set<String?>>{};
+
     // Frappe assigns `owner` / `creation` on insert and `modified_by` on every
     // save, and the push response is the first place a client legitimately
     // learns the AUTHORITATIVE values for a doc it just created.
@@ -150,9 +187,24 @@ class ResponseWriteback {
       auditValues.removeWhere((col, _) => !tableCols.contains(col));
     }
 
+    final parentFieldValues = writeServerFields
+        ? await _serverFieldValues(
+            txn: txn,
+            table: parentTable,
+            meta: writeBackMeta,
+            systemColumns: systemParentColumnNames,
+            doc: response,
+            normFields: writeBackMeta.normFieldNames,
+            columnsByTable: columnsByTable,
+          )
+        : const <String, Object?>{};
+
     await txn.update(
       parentTable,
       <String, Object?>{
+        // First, so the sync bookkeeping below always wins. The helper
+        // already excludes every system column; this is belt and braces.
+        ...parentFieldValues,
         'server_name': serverName,
         'modified': serverModified,
         'sync_status': hasMore ? 'dirty' : 'synced',
@@ -171,6 +223,9 @@ class ResponseWriteback {
       final tableName = entry.value;
       final childList = response[fieldname] as List?;
       if (childList == null) continue;
+      final childMeta = writeServerFields
+          ? writeBackChildMetas[fieldname]
+          : null;
       // Match priority:
       //   1. mobile_uuid — when mobile_control echoes it back, the
       //      most stable key.
@@ -182,6 +237,15 @@ class ResponseWriteback {
       for (var pos = 0; pos < childList.length; pos++) {
         final cm = Map<String, dynamic>.from(childList[pos] as Map);
         final values = <String, Object?>{
+          if (childMeta != null)
+            ...await _serverFieldValues(
+              txn: txn,
+              table: tableName,
+              meta: childMeta,
+              systemColumns: systemChildColumnNames,
+              doc: cm,
+              columnsByTable: columnsByTable,
+            ),
           'server_name': cm['name'],
           'modified': cm['modified'],
         };
@@ -211,7 +275,7 @@ class ResponseWriteback {
           // looks unsynced and re-pushes next drain. Should never happen for a
           // row the server just echoed; surface it instead of failing silently
           // (PR#36 round-4 H2).
-          debugPrint(
+          sdkLog(
             'ResponseWriteback: no local row matched server child '
             "'${cm['name']}' (parentfield=$fieldname, pos=$pos, "
             'mobile_uuid=$childMobileUuid) under parent ${row.mobileUuid}; '
@@ -224,5 +288,64 @@ class ResponseWriteback {
     // Outbox holds only owed-to-server work (Invariant 2). Delete the
     // row outright instead of marking it `done`.
     await txn.delete('outbox', where: 'id = ?', whereArgs: [row.id]);
+  }
+
+  /// The column values to write for the server-field writeback of one
+  /// document [doc] (a parent response or one of its child rows) into
+  /// [table].
+  ///
+  /// Written: every field of [meta] that [isServerMirroredField] accepts
+  /// (not a system / sync-metadata column such as `mobile_uuid`,
+  /// `sync_status`, `docstatus`, `modified` or the audit fields, which the
+  /// caller handles itself) AND whose key is present in [doc]. Values go
+  /// through [putServerFieldValue], the same conversion a pull uses, so a
+  /// Link gets `__is_local = 0` and a search field its `__norm` column.
+  ///
+  /// Not written:
+  /// * keys [doc] does not carry — a lean response must not blank a column
+  ///   (an explicit null IS written: that is the server's value);
+  /// * keys that are not fields of [meta] — unknown to this device;
+  /// * columns the live table does not have (meta newer than the schema),
+  ///   filtered with one `PRAGMA table_info` per table (cached in
+  ///   [columnsByTable]), so the UPDATE can never fail
+  ///   with `no such column` and roll back the whole writeback;
+  /// * a `Map` / `List` value (SQLite cannot bind it; it would roll back the
+  ///   writeback and re-push a document the server already accepted). Logged
+  ///   by fieldname only, never the value.
+  static Future<Map<String, Object?>> _serverFieldValues({
+    required Transaction txn,
+    required String table,
+    required DocTypeMeta meta,
+    required Set<String> systemColumns,
+    required Map<String, dynamic> doc,
+    required Map<String, Set<String?>> columnsByTable,
+    Set<String> normFields = const <String>{},
+  }) async {
+    final out = <String, Object?>{};
+    for (final field in meta.fields) {
+      if (!isServerMirroredField(field, systemColumns)) continue;
+      final name = field.fieldname!;
+      if (!doc.containsKey(name)) continue;
+      final value = doc[name];
+      if (value is Map || value is List) {
+        sdkLog(
+          'ResponseWriteback: skipped server value for $table.$name '
+          '(${value.runtimeType} cannot be stored in a column).',
+        );
+        continue;
+      }
+      putServerFieldValue(
+        into: out,
+        field: field,
+        value: value,
+        normFields: normFields,
+      );
+    }
+    if (out.isEmpty) return out;
+    final tableCols = columnsByTable[table] ??= (await txn.rawQuery(
+      'PRAGMA table_info("$table")',
+    )).map((r) => r['name'] as String?).toSet();
+    out.removeWhere((col, _) => !tableCols.contains(col));
+    return out;
   }
 }

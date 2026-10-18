@@ -231,6 +231,7 @@ class SyncEngineBuilder {
     SyncStateNotifier? sharedNotifier,
     SchemaReconcilerFn? schemaReconciler,
     PayloadTransformerFn? payloadTransformer,
+    Set<String> writeBackDoctypes = const {},
     int pullPageSize = 500,
     SessionUserService? sessionUserService,
   }) async {
@@ -380,6 +381,7 @@ class SyncEngineBuilder {
       attachmentUploader: attachmentUploader,
       writeQueueResolver: writeQueueResolver,
       payloadTransformer: payloadTransformer,
+      writeBackDoctypes: writeBackDoctypes,
       // M3: drain() materialises + clears the collector; if flush() then fails
       // (e.g. network), those aggregated records are dropped, NOT re-queued.
       // This loss-on-failure is intentional — error logs are best-effort

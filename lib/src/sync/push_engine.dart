@@ -129,6 +129,13 @@ class PushEngine {
   /// and before HTTP dispatch. See [PayloadTransformerFn].
   final PayloadTransformerFn? payloadTransformer;
 
+  /// Doctypes whose successful push responses are written back IN FULL:
+  /// every returned field that has a local column (parent and children), not
+  /// only `name` / `modified` / the audit fields. Empty by default (no
+  /// change). See `ResponseWriteback.applyInTxn` and
+  /// `FrappeSDK.writeBackDoctypes`.
+  final Set<String> writeBackDoctypes;
+
   /// Optional. Invoked once at the end of every [runOnce] (in the `finally`,
   /// after the rerun loop completes). Used to flush the per-drain error-log
   /// collector. Best-effort: exceptions are swallowed so a flush failure can
@@ -167,6 +174,7 @@ class PushEngine {
     this.writeQueueResolver,
     this.payloadTransformer,
     this.onDrainComplete,
+    this.writeBackDoctypes = const {},
     this.attachmentBackoff = kDefaultSyncBackoff,
     this.networkBackoff = kDefaultSyncBackoff,
   }) : dependencyScanner = dependencyScanner ?? _defaultDependencyScanner;
@@ -643,6 +651,12 @@ class PushEngine {
       );
     }
     final parentTable = await metaDao.tableNameFor(row.doctype);
+    // Opt-in full writeback of server-set fields (see [writeBackDoctypes]).
+    final writeBack = writeBackDoctypes.contains(row.doctype);
+    final writeBackMeta = writeBack ? meta : null;
+    final writeBackChildMetas = writeBack
+        ? {for (final e in childMetas.entries) e.key: e.value.meta}
+        : const <String, DocTypeMeta>{};
     if (writeQueueResolver != null) {
       final wq = _writeQueues.putIfAbsent(
         row.doctype,
@@ -655,6 +669,8 @@ class PushEngine {
           parentTable: parentTable,
           childTablesByFieldname: childTablesByFieldname,
           response: response,
+          writeBackMeta: writeBackMeta,
+          writeBackChildMetas: writeBackChildMetas,
         );
       });
     } else {
@@ -664,6 +680,8 @@ class PushEngine {
         parentTable: parentTable,
         childTablesByFieldname: childTablesByFieldname,
         response: response,
+        writeBackMeta: writeBackMeta,
+        writeBackChildMetas: writeBackChildMetas,
       );
     }
   }
