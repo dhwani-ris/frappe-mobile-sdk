@@ -45,6 +45,9 @@ export 'src/utils/media_store.dart' show ReclaimAttachmentFn;
 
 // Database
 export 'src/database/app_database.dart';
+export 'src/database/cipher_database_factory.dart' show CipherDatabaseFactory;
+export 'src/database/encrypted_database.dart'
+    show encryptedDatabaseResolver, isPlainSqliteFile;
 export 'src/database/entities/doctype_meta_entity.dart';
 export 'src/database/entities/link_option_entity.dart';
 export 'src/database/daos/doctype_meta_dao.dart';

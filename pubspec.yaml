@@ -36,8 +36,10 @@ dependencies:
   # Path utilities
   path: ^1.8.3
 
-  # SQLite database
-  sqflite: ^2.3.0
+  # SQLite database. Floor 2.3.2: from there sqflite no longer uses the FMDB
+  # pod on iOS, which could not be linked alongside sqflite_sqlcipher's
+  # FMDB/SQLCipher.
+  sqflite: ^2.3.2
 
   # State Management
   provider: ^6.1.1
@@ -113,6 +115,10 @@ dependencies:
   # and declaring `sqlite3: ^3.0.0` forced the package's Flutter floor up to 3.38
   # (its `sdk: >=3.9.999` means Dart 3.10, which first ships in Flutter 3.38).
   sqflite_common_ffi: ^2.3.0
+
+  # SQLCipher engine for the opt-in encrypted database
+  # (`FrappeSDK(encryptDatabase: true)`). Unused unless an app opts in.
+  sqflite_sqlcipher: ^3.1.0
 
 dev_dependencies:
   flutter_test:
