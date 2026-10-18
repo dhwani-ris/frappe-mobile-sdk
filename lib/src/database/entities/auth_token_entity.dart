@@ -1,13 +1,18 @@
-/// Entity for storing mobile auth tokens (stateless login).
+/// Entity for mobile auth tokens (stateless login).
 ///
-/// Stores access_token, refresh_token, user info from mobile_auth.login API.
+/// Carries access_token, refresh_token and user info from the
+/// mobile_auth.login API. When persisted to the `auth_tokens` table the token
+/// fields are written EMPTY: `AuthService` keeps the tokens themselves in
+/// secure storage, and the row holds only the non-secret metadata (user, full
+/// name, issue time). Rows written by older SDK versions may still carry
+/// tokens; `AuthService` moves them to secure storage on first read.
 class AuthTokenEntity {
   final int id; // Always 1, single row for current user
 
-  /// Access token for API authentication
+  /// Access token for API authentication. Empty in the database row.
   final String accessToken;
 
-  /// Refresh token for obtaining new access tokens
+  /// Refresh token for obtaining new access tokens. Empty in the database row.
   final String refreshToken;
 
   /// User email/username
