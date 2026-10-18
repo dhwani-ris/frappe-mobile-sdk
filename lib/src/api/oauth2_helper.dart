@@ -26,11 +26,13 @@ Uri _oauthUri(String baseUrl, String path) {
 Future<Map<String, dynamic>> _postFormEncoded(
   Uri uri,
   Map<String, String> body,
-  String errorLabel,
-) async {
+  String errorLabel, {
+  Map<String, String>? headers,
+}) async {
   final response = await http.post(
     uri,
     headers: {
+      ...?headers,
       'Content-Type': 'application/x-www-form-urlencoded',
       'Accept': 'application/json',
     },
@@ -95,6 +97,10 @@ class OAuth2TokenResponse {
 }
 
 /// Frappe OAuth 2.0 helper (authorization code + PKCE).
+///
+/// The request methods take optional `headers`, added to the request as-is.
+/// `AuthService` passes `RestHelper.clientHeaders` so token calls carry
+/// `X-Client-Info` like every other request.
 class OAuth2Helper {
   static Map<String, dynamic> _unwrapFrappeResponse(Map<String, dynamic> json) {
     if (json.containsKey('access_token')) return json;
@@ -162,6 +168,7 @@ class OAuth2Helper {
     required String code,
     String? codeVerifier,
     String? clientSecret,
+    Map<String, String>? headers,
   }) async {
     final uri = _oauthUri(baseUrl, 'frappe.integrations.oauth2.get_token');
     final body = <String, String>{
@@ -176,7 +183,12 @@ class OAuth2Helper {
     if (clientSecret != null && clientSecret.isNotEmpty) {
       body['client_secret'] = clientSecret;
     }
-    final json = await _postFormEncoded(uri, body, 'OAuth token exchange');
+    final json = await _postFormEncoded(
+      uri,
+      body,
+      'OAuth token exchange',
+      headers: headers,
+    );
     if (json['error'] != null) {
       throw Exception(
         'OAuth error: ${json['error']} - ${json['error_description'] ?? ''}',
@@ -198,6 +210,7 @@ class OAuth2Helper {
     required String clientId,
     required String refreshToken,
     String? clientSecret,
+    Map<String, String>? headers,
   }) async {
     final uri = _oauthUri(baseUrl, 'frappe.integrations.oauth2.get_token');
     final body = <String, String>{
@@ -208,7 +221,12 @@ class OAuth2Helper {
     if (clientSecret != null && clientSecret.isNotEmpty) {
       body['client_secret'] = clientSecret;
     }
-    final json = await _postFormEncoded(uri, body, 'OAuth refresh');
+    final json = await _postFormEncoded(
+      uri,
+      body,
+      'OAuth refresh',
+      headers: headers,
+    );
     // An RFC 6749 §5.2 error object. [exchangeCodeForToken] hits the SAME
     // endpoint and has always checked for this on a 200, so the shape occurs;
     // this leg never did, and `fromJson` happily produced an empty token from it.
@@ -251,11 +269,12 @@ class OAuth2Helper {
   static Future<Map<String, dynamic>> verifyToken({
     required String baseUrl,
     required String accessToken,
+    Map<String, String>? headers,
   }) async {
     final uri = _oauthUri(baseUrl, 'frappe.integrations.oauth2.openid_profile');
     final response = await http.get(
       uri,
-      headers: {'Authorization': 'Bearer $accessToken'},
+      headers: {...?headers, 'Authorization': 'Bearer $accessToken'},
     );
     if (response.statusCode != 200) {
       // See [_postFormEncoded]: the userinfo body can contain profile PII —
@@ -269,11 +288,15 @@ class OAuth2Helper {
   static Future<void> revokeToken({
     required String baseUrl,
     required String token,
+    Map<String, String>? headers,
   }) async {
     final uri = _oauthUri(baseUrl, 'frappe.integrations.oauth2.revoke_token');
     await http.post(
       uri,
-      headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+      headers: {
+        ...?headers,
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
       body: 'token=${Uri.encodeComponent(token)}',
     );
   }

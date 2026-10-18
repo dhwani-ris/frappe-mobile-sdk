@@ -51,6 +51,7 @@ export 'src/database/daos/doctype_meta_dao.dart';
 
 // API Client (Direct Frappe API Access)
 export 'src/api/client.dart' show FrappeClient;
+export 'src/api/client_info.dart' show ClientInfo;
 export 'src/api/doctype_service.dart' show DoctypeService;
 export 'src/api/document_service.dart' show DocumentService;
 // Narrowed on purpose: hosts need the field name and the blank-stripping
