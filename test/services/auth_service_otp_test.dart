@@ -14,6 +14,7 @@ import 'package:http/testing.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'package:frappe_mobile_sdk/src/api/client.dart';
+import 'package:frappe_mobile_sdk/src/api/exceptions.dart';
 import 'package:frappe_mobile_sdk/src/database/app_database.dart';
 import 'package:frappe_mobile_sdk/src/services/auth_service.dart';
 
@@ -76,7 +77,12 @@ void main() {
       );
       final auth = AuthService.forTesting(client, database: db);
 
-      await expectLater(auth.sendLoginOtp('9876543210'), throwsA(anything));
+      await expectLater(
+        auth.sendLoginOtp('9876543210'),
+        throwsA(
+          isA<ApiException>().having((e) => e.statusCode, 'statusCode', 429),
+        ),
+      );
       expect(auth.isAuthenticated, isFalse);
     });
 
@@ -94,7 +100,12 @@ void main() {
         );
         final auth = AuthService.forTesting(client, database: db);
 
-        await expectLater(auth.sendLoginOtp('0000000000'), throwsA(anything));
+        await expectLater(
+          auth.sendLoginOtp('0000000000'),
+          throwsA(
+            isA<ApiException>().having((e) => e.statusCode, 'statusCode', 404),
+          ),
+        );
       },
     );
   });
@@ -195,10 +206,12 @@ void main() {
     );
 
     test('throws and leaves the client unauthenticated when the database '
-        'has not been configured', () async {
+        'has not been configured, without ever calling the server', () async {
+      var calls = 0;
       final client = FrappeClient(
         'http://x',
         httpClient: MockClient((req) async {
+          calls++;
           return http.Response(jsonEncode(successBody()), 200);
         }),
       );
@@ -209,6 +222,13 @@ void main() {
         throwsException,
       );
       expect(auth.isAuthenticated, isFalse);
+      expect(
+        calls,
+        0,
+        reason:
+            'the missing-database guard must fail fast before any network '
+            'call, or a verified OTP could be silently discarded server-side',
+      );
     });
 
     test('rejects an invalid/expired OTP (400) and does not authenticate '
@@ -226,7 +246,9 @@ void main() {
 
       await expectLater(
         auth.verifyLoginOtp('tmp-abc123', '000000'),
-        throwsA(anything),
+        throwsA(
+          isA<ApiException>().having((e) => e.statusCode, 'statusCode', 400),
+        ),
       );
       expect(auth.isAuthenticated, isFalse);
       expect(await db.authTokenDao.getCurrentToken(), isNull);
@@ -246,7 +268,9 @@ void main() {
 
       await expectLater(
         auth.verifyLoginOtp('tmp-abc123', '111111'),
-        throwsA(anything),
+        throwsA(
+          isA<ApiException>().having((e) => e.statusCode, 'statusCode', 429),
+        ),
       );
       expect(auth.isAuthenticated, isFalse);
     });
@@ -289,8 +313,8 @@ void main() {
       expect(auth.isAuthenticated, isFalse);
     });
 
-    test('a second verifyLoginOtp call updates the existing token row '
-        'instead of inserting a duplicate', () async {
+    test('a second verifyLoginOtp call (e.g. re-login on the same device) '
+        'replaces the previously stored token with the new one', () async {
       var call = 0;
       final client = FrappeClient(
         'http://x',
@@ -307,9 +331,20 @@ void main() {
       final auth = AuthService.forTesting(client, database: db);
 
       await auth.verifyLoginOtp('tmp-1', '111111');
-      await auth.verifyLoginOtp('tmp-2', '222222');
+      final firstToken = await db.authTokenDao.getCurrentToken();
+      expect(firstToken!.accessToken, 'AT-1');
 
-      expect((await db.authTokenDao.getCurrentToken())!.accessToken, 'AT-2');
+      await auth.verifyLoginOtp('tmp-2', '222222');
+      final secondToken = await db.authTokenDao.getCurrentToken();
+
+      // `AuthTokenEntity.id` is always 1 (single-row table) and
+      // `AuthTokenDao.insertToken` uses `ConflictAlgorithm.replace`, so a
+      // duplicate row cannot exist structurally; what this test actually
+      // pins is the *value* the stored row ends up with after a second
+      // login — the old access/refresh token must not linger.
+      expect(secondToken!.accessToken, 'AT-2');
+      expect(secondToken.refreshToken, 'RT-2');
+      expect(secondToken.id, firstToken.id);
     });
   });
 }
