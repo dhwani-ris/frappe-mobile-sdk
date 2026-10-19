@@ -285,7 +285,6 @@ class AuthService {
       if (user == null || user.isEmpty) {
         throw Exception('Login response missing user');
       }
-      dev.log('access_token: $accessToken', name: 'Auth');
 
       await _processLoginResponse(
         response,
@@ -397,7 +396,6 @@ class AuthService {
       if (user == null || user.isEmpty) {
         throw Exception('Verify OTP response missing user');
       }
-      dev.log('access_token: $accessToken', name: 'Auth');
 
       _roles = _parseRoles(response['roles']);
       _language = response['language'] as String?;
