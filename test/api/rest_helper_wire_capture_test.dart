@@ -63,4 +63,23 @@ void main() {
       expect(e.responseBodyRaw, contains('ValidationError'));
     }
   });
+
+  test(
+    'a failed auth call carries a REDACTED requestBody, not the live '
+    'password/otp/refresh_token — this field is stamped unconditionally '
+    '(not gated by kDebugMode) and is surfaced by error_capture.dart, so an '
+    'app that logs it on a failure must never see the real credential',
+    () async {
+      final h = helperReturning(401);
+      try {
+        await h.post(
+          '/api/method/mobile_auth.verify_login_otp',
+          body: {'tmp_id': 'tmp-abc123', 'otp': '123456'},
+        );
+        fail('expected throw');
+      } on AuthException catch (e) {
+        expect(e.requestBody, {'tmp_id': 'tmp-abc123', 'otp': '[REDACTED]'});
+      }
+    },
+  );
 }
