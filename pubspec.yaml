@@ -87,9 +87,11 @@ dependencies:
   # Image picker for image fields
   image_picker: ^1.1.2
 
-  # Pure-Dart decode/resize/encode for the opt-in photo size limit
-  # (ImageUploadSettings.captureLimits). No native code.
-  image: ^4.2.0
+  # EXIF read and JPEG encode for the opt-in photo size limit
+  # (ImageUploadSettings.captureLimits). The decode and resize run in Flutter's
+  # engine (dart:ui instantiateImageCodec); this package is pure Dart and adds
+  # no native code. Lower bound = the version the shrink was tested with.
+  image: ^4.10.1
 
   # Open downloaded attachments (PDF/doc/etc.) in the device's default app
   open_filex: ^4.7.0

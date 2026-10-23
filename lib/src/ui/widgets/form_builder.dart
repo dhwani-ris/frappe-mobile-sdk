@@ -1681,6 +1681,10 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
               parentFormData: effectiveParentFormData,
               getLinkFilterBuilder: widget.getLinkFilterBuilder,
               cascadeProgrammaticChanges: widget.cascadeProgrammaticChanges,
+              // A new row gets its own `__user` defaults, as Desk's
+              // add_child does, and rounds like the parent form.
+              sessionUser: widget.sessionUser,
+              roundNumbersOnSave: widget.roundNumbersOnSave,
             )
           : null,
       onButtonPressed: widget.onButtonPressed,

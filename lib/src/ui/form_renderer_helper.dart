@@ -22,6 +22,10 @@ class FrappeFormRenderer {
 
   /// Render a form widget for a doctype
   ///
+  /// `__user`, `user` and `user_fullname` defaults on a new document resolve
+  /// for [FrappeSDK.sessionUser]. [roundNumbersOnSave] is forwarded to
+  /// [FrappeFormBuilder.roundNumbersOnSave] (off by default).
+  ///
   /// Example:
   /// ```dart
   /// final renderer = FrappeFormRenderer(sdk: sdk);
@@ -33,6 +37,7 @@ class FrappeFormRenderer {
     Function(Map<String, dynamic>)? onSubmit,
     bool readOnly = false,
     ButtonPressedCallback? onButtonPressed,
+    bool roundNumbersOnSave = false,
   }) async {
     final meta = await sdk.meta.getMeta(doctype);
 
@@ -44,6 +49,8 @@ class FrappeFormRenderer {
       linkOptionService: sdk.linkOptions,
       style: style ?? DefaultFormStyle.standard,
       onButtonPressed: onButtonPressed,
+      sessionUser: sdk.sessionUser,
+      roundNumbersOnSave: roundNumbersOnSave,
       // This form has no marker map or resolver — it is the minimal host tier.
       // The reclaim still matters: its fields can pick and discard, and the
       // default would delete a staged file the host's own save already queued.
@@ -52,6 +59,9 @@ class FrappeFormRenderer {
   }
 
   /// Navigate to a form screen
+  ///
+  /// The screen gets [FrappeSDK.sessionUser] for user defaults, and
+  /// [roundNumbersOnSave] for [FormScreen.roundNumbersOnSave] (off by default).
   ///
   /// Example:
   /// ```dart
@@ -63,6 +73,7 @@ class FrappeFormRenderer {
     Map<String, dynamic>? initialData,
     Function()? onSaveSuccess,
     OnButtonPressedCallback? onButtonPressed,
+    bool roundNumbersOnSave = false,
   }) async {
     final meta = await sdk.meta.getMeta(doctype);
 
@@ -88,6 +99,8 @@ class FrappeFormRenderer {
           onSaveSuccess: onSaveSuccess,
           getMobileUuid: () => sdk.getMobileUuid(),
           onButtonPressed: onButtonPressed,
+          sessionUser: sdk.sessionUser,
+          roundNumbersOnSave: roundNumbersOnSave,
         ),
       ),
     );
