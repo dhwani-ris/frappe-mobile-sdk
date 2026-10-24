@@ -430,7 +430,7 @@ packages:
       path: ".."
       relative: true
     source: path
-    version: "2.0.0-beta.4"
+    version: "2.0.0-beta.5"
   fwfh_cached_network_image:
     dependency: transitive
     description:
