@@ -9,6 +9,7 @@ import 'package:path/path.dart';
 import 'exceptions.dart';
 import 'utils.dart';
 import '../utils/api_tracer.dart';
+import '../utils/sensitive_fields.dart';
 
 /// Shared RNG for retry jitter. Not security-sensitive; a single instance
 /// avoids re-seeding cost and gives independent draws across retries.
@@ -209,7 +210,7 @@ class RestHelper {
       method: method,
       url: uri.toString(),
       queryParams: method == 'GET' ? queryParams : null,
-      body: method != 'GET' ? body : null,
+      body: method != 'GET' ? redactSensitiveFields(body) : null,
     );
 
     final effectiveTimeout = timeout ?? requestTimeout;
@@ -270,7 +271,7 @@ class RestHelper {
           response,
           requestUrl: uri.toString(),
           requestMethod: method,
-          requestBody: method != 'GET' ? body : null,
+          requestBody: method != 'GET' ? redactSensitiveFields(body) : null,
         );
       } on AuthException catch (e) {
         // `includeAuth` is load-bearing, not a tidy-up. Without it the refresh
@@ -484,7 +485,7 @@ class RestHelper {
         response,
         requestUrl: uri.toString(),
         requestMethod: 'POST',
-        requestBody: fields,
+        requestBody: redactSensitiveFields(fields),
       );
     } on TimeoutException {
       throw NetworkException(
