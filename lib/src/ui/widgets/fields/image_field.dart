@@ -290,7 +290,9 @@ class ImageField extends BaseField {
     // Opt-in size limit (ImageUploadSettings.captureLimits); a no-op unless the
     // host app turned it on. Runs before the durable copy, so the smaller file
     // is what gets staged and uploaded, online or offline.
+    final original = file;
     file = await preparePickedImage(file);
+    final shrunk = file;
     // Durable-copy-first (survives camera-process kill / cache reclaim); upload
     // inline when online, else keep the local path for save-time queueing.
     //
@@ -304,12 +306,18 @@ class ImageField extends BaseField {
     // more, and none of them notifies.
     final String? stored;
     try {
-      stored = await resolvePickedAttachment(
-        picked: file,
-        online: isOnline?.call() ?? true,
-        offlineModeEnabled: isOfflineMode?.call() ?? false,
-        uploadFile: uploadFile,
-      );
+      stored =
+          await resolvePickedAttachment(
+            picked: file,
+            online: isOnline?.call() ?? true,
+            offlineModeEnabled: isOfflineMode?.call() ?? false,
+            uploadFile: uploadFile,
+          ).whenComplete(
+            // Resolved either way: the field now holds (or uploaded) the
+            // attachment-store copy, or the pick failed, so the shrunk
+            // file in its `downscaled_` folder is no longer used.
+            () => discardDownscaledCopy(original: original, shrunk: shrunk),
+          );
     } on AttachmentTooLargeException catch (e) {
       // Surfaced at pick time so the user can retake at a lower resolution,
       // rather than discovering it as a blocked document after sync.

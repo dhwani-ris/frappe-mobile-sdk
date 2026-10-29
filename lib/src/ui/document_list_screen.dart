@@ -10,6 +10,7 @@ import '../models/doc_type_meta.dart';
 import '../models/document.dart';
 import '../models/link_filter_result.dart';
 import '../models/outbox_row.dart';
+import '../models/session_user.dart';
 import '../query/unified_resolver.dart';
 import '../services/link_option_service.dart';
 import '../services/meta_service.dart';
@@ -107,6 +108,14 @@ class DocumentListScreen extends StatefulWidget {
   /// receives the same controller so its banner can offer Retry.
   final SyncController? syncController;
 
+  /// The signed-in user, passed to the opened [FormScreen] for `__user`,
+  /// `user` and `user_fullname` defaults on a new document. Pass
+  /// `FrappeSDK.sessionUser`; null leaves those fields for the server to fill.
+  final SessionUser? sessionUser;
+
+  /// Forwarded to [FormScreen.roundNumbersOnSave]. Off by default.
+  final bool roundNumbersOnSave;
+
   const DocumentListScreen({
     super.key,
     required this.doctype,
@@ -130,6 +139,8 @@ class DocumentListScreen extends StatefulWidget {
     this.formStyle,
     this.formScreenStyle,
     this.syncController,
+    this.sessionUser,
+    this.roundNumbersOnSave = false,
   });
 
   @override
@@ -723,6 +734,8 @@ class _DocumentListScreenState extends State<DocumentListScreen> {
           canSave: isNew ? _canCreate : _canWrite,
           canDelete: !isNew && _canDelete,
           translate: widget.translate,
+          sessionUser: widget.sessionUser,
+          roundNumbersOnSave: widget.roundNumbersOnSave,
         ),
       ),
     ).then((_) {

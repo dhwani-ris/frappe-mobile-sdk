@@ -23,7 +23,20 @@ void main() {
     expect(frappeRound(0.15, 1), 0.2);
     expect(frappeRound(33.3333, 2), 33.33);
     expect(frappeRound(-2.345, 2), -2.35);
+    expect(frappeRound(0.125, 2), 0.13);
+  });
+
+  // What a Desk form saves for a field with precision "0": `_round(v, "0")`,
+  // recorded by executing Frappe's number_format.js. The even-neighbour rule
+  // (2.5 → 2) needs a falsy precision, and the meta's Select string "0" is not.
+  test('Frappe rounding at precision 0 rounds a half up, as a Desk form '
+      'does', () {
     expect(frappeRound(2.5, 0), 3);
+    expect(frappeRound(3.5, 0), 4);
+    expect(frappeRound(0.5, 0), 1);
+    expect(frappeRound(-2.5, 0), -3);
+    expect(frappeRound(2.4, 0), 2);
+    expect(frappeRound(-2.6, 0), -3);
   });
 
   test('with roundNumbers, only numbers in fields with a precision are '

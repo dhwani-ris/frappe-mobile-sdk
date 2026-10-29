@@ -616,6 +616,7 @@ class _MobileHomeScreenState extends State<MobileHomeScreen>
               validator: widget.getValidator?.call(doctype),
               getLinkFilterBuilder: widget.getLinkFilterBuilder,
               syncController: widget.sdk.syncController,
+              sessionUser: widget.sdk.sessionUser,
             ),
           ),
         );

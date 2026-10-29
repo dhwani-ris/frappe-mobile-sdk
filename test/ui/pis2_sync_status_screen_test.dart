@@ -53,6 +53,14 @@ Document _doc(
   modified: 0,
 );
 
+// The per-doctype "Sync" buttons are `TextButton.icon`. Before Flutter 3.41
+// that returned a private TextButton subclass, which `find.byType(TextButton)`
+// (and so `find.widgetWithText(TextButton, ...)`) does not match.
+Finder _syncButtons() => find.ancestor(
+  of: find.text('Sync'),
+  matching: find.byWidgetPredicate((w) => w is TextButton),
+);
+
 Future<void> _pump(WidgetTester tester, _FakeRepo repo, _FakeSync sync) async {
   await tester.pumpWidget(
     MaterialApp(
@@ -90,7 +98,7 @@ void main() {
     // One header per doctype: "Task" and "ToDo" each once.
     expect(find.text('Task'), findsOneWidget);
     expect(find.text('ToDo'), findsOneWidget);
-    expect(find.widgetWithText(TextButton, 'Sync'), findsNWidgets(2));
+    expect(_syncButtons(), findsNWidgets(2));
 
     // New (no server id): title is the local id, "not synced" subtitle.
     expect(find.text('uuid-new'), findsOneWidget);
@@ -182,7 +190,7 @@ void main() {
       ..docs = [_doc('Task', 'uuid-1'), _doc('ToDo', 'uuid-2')];
     final sync = _FakeSync()..result = (_) => SyncResult(1, 0, 1, null);
     await _pump(tester, repo, sync);
-    await tester.tap(find.widgetWithText(TextButton, 'Sync').last);
+    await tester.tap(_syncButtons().last);
     await tester.pump();
     await tester.pump();
     expect(sync.calls, ['ToDo']);
@@ -245,7 +253,7 @@ void main() {
         ],
       );
     await _pump(tester, repo, sync);
-    await tester.tap(find.widgetWithText(TextButton, 'Sync'));
+    await tester.tap(_syncButtons());
     await tester.pump();
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
@@ -281,7 +289,7 @@ void main() {
     final repo = _FakeRepo()..docs = [_doc('Task', 'uuid-1')];
     final sync = _FakeSync()..error = StateError('timeout');
     await _pump(tester, repo, sync);
-    await tester.tap(find.widgetWithText(TextButton, 'Sync'));
+    await tester.tap(_syncButtons());
     await tester.pump();
     await tester.pump();
     expect(sync.calls, ['Task']);

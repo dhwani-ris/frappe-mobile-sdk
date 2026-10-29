@@ -4,6 +4,7 @@ import '../../../models/doc_field.dart';
 import '../../../models/doc_type_meta.dart';
 import '../../../services/mobile_creation_capture.dart';
 import '../../../utils/mobile_creation_stamp.dart';
+import '../pending_field_work.dart' show FieldWorkWaitScope;
 import '../screen_helpers.dart';
 import 'child_table_cells.dart';
 
@@ -500,6 +501,16 @@ class _ChildTableSheet extends StatefulWidget {
 class _ChildTableSheetState extends State<_ChildTableSheet> {
   void Function()? _submitFn;
 
+  /// True while the row form waits for a photo still uploading before it
+  /// saves (reported through [FieldWorkWaitScope]).
+  final ValueNotifier<bool> _waitingForFieldWork = ValueNotifier<bool>(false);
+
+  @override
+  void dispose() {
+    _waitingForFieldWork.dispose();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
     final mq = MediaQuery.of(context);
@@ -565,32 +576,35 @@ class _ChildTableSheetState extends State<_ChildTableSheet> {
               // way `LocationRequiredBarrier` does in this release.
               child: AbsorbPointer(
                 absorbing: widget.isReadOnly,
-                child: widget.formBuilder(
-                  widget.childMeta,
-                  widget.initialData,
-                  (data) => widget.onSubmit(data),
-                  registerSubmit: widget.isReadOnly
-                      ? null
-                      : (fn) {
-                          final wasUnregistered = _submitFn == null;
-                          _submitFn = fn;
-                          // Rebuild ONLY on the unregistered -> registered
-                          // transition, which is the single moment the action
-                          // button has to flip from disabled to enabled.
-                          //
-                          // Rebuilding on every registration is an unbounded
-                          // frame loop: the host calls registerSubmit from
-                          // inside its own build, so setState re-enters
-                          // formBuilder, which registers again, which schedules
-                          // another setState. The sheet never settles —
-                          // pumpAndSettle hangs in tests and the render loop
-                          // never idles on device.
-                          if (!wasUnregistered) return;
-                          WidgetsBinding.instance.addPostFrameCallback((_) {
-                            if (mounted) setState(() {});
-                          });
-                        },
-                  readOnly: widget.isReadOnly,
+                child: FieldWorkWaitScope(
+                  waiting: _waitingForFieldWork,
+                  child: widget.formBuilder(
+                    widget.childMeta,
+                    widget.initialData,
+                    (data) => widget.onSubmit(data),
+                    registerSubmit: widget.isReadOnly
+                        ? null
+                        : (fn) {
+                            final wasUnregistered = _submitFn == null;
+                            _submitFn = fn;
+                            // Rebuild ONLY on the unregistered -> registered
+                            // transition, which is the single moment the action
+                            // button has to flip from disabled to enabled.
+                            //
+                            // Rebuilding on every registration is an unbounded
+                            // frame loop: the host calls registerSubmit from
+                            // inside its own build, so setState re-enters
+                            // formBuilder, which registers again, which schedules
+                            // another setState. The sheet never settles —
+                            // pumpAndSettle hangs in tests and the render loop
+                            // never idles on device.
+                            if (!wasUnregistered) return;
+                            WidgetsBinding.instance.addPostFrameCallback((_) {
+                              if (mounted) setState(() {});
+                            });
+                          },
+                    readOnly: widget.isReadOnly,
+                  ),
                 ),
               ),
             ),
@@ -627,23 +641,29 @@ class _ChildTableSheetState extends State<_ChildTableSheet> {
                         child: const Text('Cancel'),
                       ),
                       const SizedBox(width: 8),
-                      FilledButton.icon(
-                        onPressed: _submitFn != null
-                            ? () => _submitFn!()
-                            : null,
-                        icon: _submitFn != null
-                            ? const Icon(Icons.check, size: 20)
-                            : const SizedBox(
-                                width: 16,
-                                height: 16,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  valueColor: AlwaysStoppedAnimation<Color>(
-                                    Colors.white,
+                      ValueListenableBuilder<bool>(
+                        valueListenable: _waitingForFieldWork,
+                        builder: (context, waiting, _) {
+                          // Off, with a spinner, until the form registers its
+                          // submit and while it waits for a photo to upload.
+                          final ready = _submitFn != null && !waiting;
+                          return FilledButton.icon(
+                            onPressed: ready ? () => _submitFn!() : null,
+                            icon: ready
+                                ? const Icon(Icons.check, size: 20)
+                                : const SizedBox(
+                                    width: 16,
+                                    height: 16,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      valueColor: AlwaysStoppedAnimation<Color>(
+                                        Colors.white,
+                                      ),
+                                    ),
                                   ),
-                                ),
-                              ),
-                        label: const Text('Save'),
+                            label: const Text('Save'),
+                          );
+                        },
                       ),
                     ],
                   ],
