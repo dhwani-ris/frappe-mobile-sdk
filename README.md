@@ -1325,7 +1325,9 @@ dart run flutter_pre_commit
 # Or pre-commit framework
 pre-commit run --all-files
 ```
-
+```
+This project is tested with BrowserStack.
+```
 **GitHub Actions** run automatically on every **push** and **pull request** to `main`, `master`, and `develop`:
 - **CI** – `flutter analyze`, `dart format`, `flutter test`
 - **Semantic commits** – validates Conventional Commits format
@@ -1339,31 +1341,3 @@ MIT License - see [LICENSE](LICENSE) file
 <p align="center">
   <img src="logo.png" alt="Maintainers logo" width="120" />
 </p>
-
-<!-- Security scan triggered at 2026-08-31 16:57:04 -->
-
-<!-- Security scan triggered at 2026-08-31 16:44:00 -->
-
-<!-- Security scan triggered at 2026-08-31 18:15:22 -->
-
-<!-- Security scan triggered at 2026-09-02 06:40:31 -->
-
-<!-- Security scan triggered at 2026-09-02 06:44:46 -->
-
-<!-- Security scan triggered at 2026-09-02 14:37:43 -->
-
-<!-- Security scan triggered at 2026-09-02 15:27:11 -->
-
-<!-- Security scan triggered at 2026-09-03 22:15:30 -->
-
-<!-- Security scan triggered at 2026-09-03 23:11:35 -->
-
-<!-- Security scan triggered at 2026-09-04 13:08:32 -->
-
-<!-- Security scan triggered at 2026-09-08 02:04:55 -->
-
-<!-- Security scan triggered at 2026-09-10 04:24:05 -->
-
-<!-- Security scan triggered at 2026-09-11 07:33:07 -->
-
-<!-- Security scan triggered at 2026-10-07 11:24:24 -->
