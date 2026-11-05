@@ -5,7 +5,7 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.0.0-beta.5] - 2026-10-24
 
 ### Changed
 
@@ -103,7 +103,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - A photo that fails to upload does not block the save: the wait ends and the form saves as the field stands.
   - A form with nothing uploading saves at once, as before.
 - **A photo or file was lost when its tab was left while it uploaded.** A tab that is off screen is disposed, so when the upload finished, the field's state was gone: the update threw, `onChanged` never ran, and the record saved without the new file. A replaced file had already been reclaimed. `ImageField` and `AttachField` now hand the new value to `onChanged` first, update the field only while it is mounted, and reclaim the replaced file only after the new one is committed. A failing reclaim is logged and no longer reported as a failed pick.
+- **A negative value in a `non_negative` numeric field is refused on the device, as Frappe refuses it on save.** It used to save offline and then fail at sync. The Int, Float, Currency or Percent field shows "Value cannot be negative for {label}" and Save is blocked.
 - **`non_negative` was not enforced in reactive (`FormController`) mode.** A negative value in a non-negative Int, Float, Currency or Percent field passed validation, saved locally and was refused at sync. `FormController` validation now refuses it with the same message as the legacy form.
+- **`set_only_once` fields lock once the document is saved, and virtual fields are read-only, as in Desk** (`frappe.perm.get_field_display_status`).
+  - An edit to a `set_only_once` field on a synced record used to fail at sync (`CannotChangeConstantError`), and an edit to a virtual field was discarded by the server.
+  - "Saved" now also covers a record read from the offline store, which carries `server_name` rather than `name`. The same check feeds `__islocal` in `depends_on`, so `eval:!doc.__islocal` fields show on synced records. An offline record that has not synced yet is still new.
+  - `DocField.setOnlyOnce` reads the flag from the raw meta, so it survives meta round trips. Both form engines apply it.
+- **Data fields with Email, Phone, Name or URL options are checked before save**, with Frappe's messages, as `BaseDocument._validate_data_fields` checks them on the server. An invalid value used to save offline and then fail at sync.
+- **Dates are saved in Frappe's format, and an empty date as `null`.**
+  - Date pickers now emit `YYYY-MM-DD`, and Datetime pickers `YYYY-MM-DD HH:mm:ss`. Both used to emit ISO text (`2026-10-13T00:00:00.000`), and an empty optional date was saved as `''`.
+  - A stored `''` crashed the picker when the document was opened again. Documents already saved with `''` or ISO text now open.
+  - Clearing a Time field now saves `null`. It used to report nothing, so the old time stayed.
+- **Long read-only Text, Small Text and Long Text values can be scrolled** (#119). They used to be cut off. A field keeps its state when `read_only_depends_on` flips it, and a drag past either end of the text scrolls the page.
 
 ### Changed
 
@@ -116,6 +127,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - The migration blanks the row with `secure_delete` on and then runs a TRUNCATE checkpoint, so the old token bytes are not left in free pages or the WAL.
   - `AuthService.forTesting` takes an optional `storage`.
 - **Tokens and passwords are no longer logged.** `login` and `verifyLoginOtp` logged the full access token through `dart:developer` `log`. Those lines are removed. The debug-mode request tracer (`[Frappe API]`) printed request bodies verbatim, including the login password, the OTP and the refresh token; credential-named fields (`password`, `otp`, `*token*`, `*secret*`, `api_key`, and a whole key named `key` or `code`) are now replaced with `REDACTED` in traced bodies, query parameters and URLs. String bodies are covered too: form-encoded and JSON text, JSON held as a string inside a map or query value, and error response bodies.
+
+### Contributors
+
+- @RamanMishraDhwani: read-only text fields that scroll (#119).
+- @sunandan89: login tokens kept in secure storage only, and credentials redacted in the request tracer (#132).
+- @ankitDhwani: Link search, the Desk-parity fixes (#130), image optimisation and the photo size limit (#131), and the rest of #142.
+- Reported by @chitranshijain-stack (#127, #128, #129) and @RamanMishraDhwani (#120). Reviewed by @deepak-dhwani.
 
 ## [2.0.0-beta.4] - 2026-09-21
 

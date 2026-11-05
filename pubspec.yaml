@@ -1,6 +1,6 @@
 name: frappe_mobile_sdk
 description: Flutter SDK for offline-first Frappe/ERPNext mobile apps with auth, API access, dynamic forms, and sync-aware local data operations.
-version: 2.0.0-beta.4
+version: 2.0.0-beta.5
 homepage: https://github.com/dhwani-ris/frappe-mobile-sdk
 repository: https://github.com/dhwani-ris/frappe-mobile-sdk
 issue_tracker: https://github.com/dhwani-ris/frappe-mobile-sdk/issues
@@ -125,6 +125,18 @@ dev_dependencies:
 
   # imported by test/api/attachment_service_test.dart
   path_provider_platform_interface: ^2.1.2
+
+  # imported by test/ui/pis2_login_screen_*_test.dart
+  app_links_platform_interface: ^2.0.2
+  # imported by test/widgets/pis2_image_field_pick_test.dart and
+  # test/ui/widgets/fields/attachment_upload_after_unmount_test.dart
+  image_picker_platform_interface: ^2.11.1
+  # imported by test/utils/attachment_storage_test.dart and the image field and
+  # form submit upload tests under test/ui/widgets/
+  plugin_platform_interface: ^2.1.8
+  # imported by test/ui/pis2_app_guard_status_test.dart and
+  # test/ui/pis2_login_screen_otp_oauth_test.dart
+  url_launcher_platform_interface: ^2.3.2
 
   # Pre-commit: format + analyze before commit (run: dart run flutter_pre_commit)
   flutter_pre_commit: ^0.2.4
