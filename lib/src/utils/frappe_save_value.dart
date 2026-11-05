@@ -41,6 +41,12 @@ Object? frappeSaveValue(
 /// Frappe's `_round` with its default method ("Banker's Rounding (legacy)")
 /// and an explicit precision: the magnitude, first fixed to 8 decimals to drop
 /// float noise, rounded half up, sign restored.
+///
+/// Half up at precision 0 too (2.5 → 3), as a Desk form saves it: `_round`
+/// sends an exact half to the even neighbour only when `!precision`, and
+/// `ControlFloat.get_precision()` passes the DocField's precision as it is in
+/// the meta, a Select, so the string "0", which is truthy. The server's
+/// `rounded(2.5, 0)` gives 2, but the server does not round on save.
 num frappeRound(num value, int precision) {
   final m = math.pow(10, precision);
   final n = double.parse((value.abs() * m).toStringAsFixed(8));

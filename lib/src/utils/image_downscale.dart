@@ -113,7 +113,10 @@ class ImageUploadSettings {
 /// - The decoder applies the camera's rotation (EXIF orientation), so the
 ///   result is upright and its orientation tag is reset. Other EXIF, such as
 ///   time and GPS, is copied across.
-/// - The result keeps the original file name, in a new folder next to it.
+/// - The result keeps the original file name, in a new `downscaled_` folder
+///   next to it. A caller other than the image field owns that folder and
+///   deletes it once it has used the file; the image field removes it itself
+///   after copying the photo into the attachment store.
 ///
 /// Uses `dart:ui`, so it runs on the UI isolate; the decode itself happens off
 /// the UI thread, and the JPEG encode runs on a background isolate.
@@ -194,6 +197,35 @@ Future<File?> _downscale(File file, ImageCaptureLimits limits) async {
   final out = File(p.join(folder.path, p.basename(path)));
   await out.writeAsBytes(encoded, flush: true);
   return out;
+}
+
+/// Removes the `downscaled_` folder [downscalePickedImage] wrote [shrunk] to,
+/// once [shrunk] has been copied into the attachment store (or the pick
+/// failed). Never throws.
+///
+/// The image field never stores or uploads [shrunk] itself: it copies it into
+/// the attachment store first, and that copy is what the field holds and what
+/// is uploaded. So the folder is dead once the pick is resolved.
+///
+/// Does nothing when [shrunk] is [original] (the photo was not shrunk) or is
+/// not in a `downscaled_` folder next to [original]. Only [shrunk] and its
+/// then-empty folder are deleted; a folder holding anything else is kept.
+Future<void> discardDownscaledCopy({
+  required File original,
+  required File shrunk,
+}) async {
+  if (p.equals(shrunk.path, original.path)) return;
+  final folder = shrunk.parent;
+  if (!p.basename(folder.path).startsWith('downscaled_') ||
+      !p.equals(folder.parent.path, p.dirname(original.path))) {
+    return;
+  }
+  try {
+    if (await shrunk.exists()) await shrunk.delete();
+    await folder.delete();
+  } catch (e, st) {
+    sdkLog('discardDownscaledCopy: left ${folder.path} — $e\n$st');
+  }
 }
 
 /// What an image field runs on every picked or captured photo: shrinks it when

@@ -19,6 +19,15 @@ name: Release
 # configured for, so `develop` stays in `.releaserc` even though it is absent
 # below. Adding it to `push.branches` is all that is needed to make betas
 # automatic later.
+#
+# A prerelease merged into `main` (a release PR whose `pubspec.yaml` already says
+# `2.0.0-beta.N`) is NOT handed to semantic-release. On `main` it ignores the
+# `-beta` tags, takes the last stable tag as the base and computes the next
+# stable version instead: measured with `npx semantic-release --dry-run --no-ci`
+# on `main` merged with `develop`, it found `v1.3.0` and computed `1.4.0`. So
+# such a push tags the version the pubspec carries, `v<version>`, and creates
+# the GitHub prerelease itself. A stable version on `main`, and every
+# `develop` dispatch, still goes through semantic-release unchanged.
 on:
   push:
     branches: [ main, master ]
@@ -91,7 +100,50 @@ jobs:
           git config --global user.name "dhwani-release-bot"
           git config --global user.email "dhwani-release-bot[bot]@users.noreply.github.com"
 
+      - name: Read package version
+        id: pkg
+        run: |
+          # Up to any `#` comment, as `.github/helper/update-version.py` reads it.
+          version=$(sed -n 's/^version:[[:space:]]*\([^#[:space:]]*\).*/\1/p' pubspec.yaml | head -n 1)
+          if [ -z "$version" ]; then
+            echo "::error::Could not read version from pubspec.yaml"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          case "$version" in
+            *-*) prerelease=true ;;
+            *) prerelease=false ;;
+          esac
+          if [ "$prerelease" = true ] && { [ "$GITHUB_REF_NAME" = main ] || [ "$GITHUB_REF_NAME" = master ]; }; then
+            echo "main_prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "main_prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create prerelease from pubspec version
+        if: steps.pkg.outputs.main_prerelease == 'true'
+        env:
+          GH_TOKEN: ${{ steps.generate-token.outputs.token }}
+          VERSION: ${{ steps.pkg.outputs.version }}
+        run: |
+          tag="v$VERSION"
+          # Re-runs and later pushes of the same version are a no-op.
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null; then
+            echo "$tag already exists, nothing to release"
+            exit 0
+          fi
+          # The nearest earlier tag, so the generated notes cover this release only.
+          previous=$(git describe --tags --abbrev=0 --match 'v[0-9]*' "$GITHUB_SHA")
+          gh release create "$tag" \
+            --target "$GITHUB_SHA" \
+            --prerelease \
+            --title "$tag" \
+            --generate-notes \
+            --notes-start-tag "$previous" \
+            --notes "See [CHANGELOG.md](https://github.com/$GITHUB_REPOSITORY/blob/$tag/CHANGELOG.md) for the full notes."
+
       - name: Create Release
+        if: steps.pkg.outputs.main_prerelease != 'true'
         env:
           GITHUB_TOKEN: ${{ steps.generate-token.outputs.token }}
           GIT_AUTHOR_NAME: "dhwani-release-bot"

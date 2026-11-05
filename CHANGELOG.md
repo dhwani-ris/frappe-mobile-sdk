@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`FormScreen.roundNumbersOnSave`, `DocumentListScreen.sessionUser` and `DocumentListScreen.roundNumbersOnSave`, and a `roundNumbersOnSave` argument on `FrappeFormRenderer.renderForm` / `navigateToForm`.** All default to off / null, so nothing changes unless a host passes them.
+
+### Changed
+
+- **The Data checks for Email, Phone, Name and URL options now follow Frappe's own rules exactly** (`BaseDocument._validate_data_fields`). The legacy form and `FormController` validation both run them.
+  - The checks are ports of `split_emails`, `validate_email_address`, `validate_name`, `validate_phone_number` and `validate_url` (`frappe/utils/__init__.py`, version-15), checked by executing Frappe's own functions: of about 35,000 fuzzed Email and URL values, none that Frappe accepts is refused.
+  - **Name** follows Python's `\w`: letters, numbers and `_` of any script, but not combining marks. A name with a vowel sign or virama (`किशोर`, `प्रिया`) or with a combining accent is refused, because the server refuses it; a precomposed accent passes.
+  - **Email**: every comma separates a part, quoted or not, so `"Doe, John" <j@example.com>` is refused, as on the server. A line break or tab is a space, so two addresses on two lines are refused. Text after a valid address (`a@example.com.`) passes, because Frappe matches from the start only. A value with quotes, comments or groups is refused only when it cannot hold an address; the server decides the rest.
+  - **URL** follows `urlparse`: a scheme with a host or path (`foo:bar` and `mailto:` pass), or a value starting with `/`. A host with an unpaired bracket is refused.
+  - Name, Phone and URL refuse a value of spaces only, as Frappe does. An Email list with no address passes.
+- **Saving while a photo is still uploading:** `FormScreen`'s Save and a child-table row's Save show a spinner and are off while the form waits. The wait now ends after 6 minutes even if the work has not, and the form saves as the fields stand. The SDK's own upload gives up after 5 minutes and the photo is then kept as a local file queued at save, so the bound only cuts work with no limit of its own, such as a host `uploadFile` without a timeout. A later Save waits again.
+- **The `image` constraint is `^4.10.1`**, the version the photo shrink was tested with (was `^4.2.0`). The package reads the EXIF and encodes the JPEG; the decode and resize run in Flutter's engine (`dart:ui`).
+
+### Fixed
+
+- **`__user`, `user` and `user_fullname` defaults resolved to null in the SDK's own screens.** `DocumentListScreen`, `FrappeFormRenderer` and `MobileHomeScreen` opened forms without the signed-in user. `FrappeFormRenderer` and `MobileHomeScreen` now pass `FrappeSDK.sessionUser`; a host building `DocumentListScreen` itself passes `sessionUser:`. A child-table row form now gets the parent form's `sessionUser` and `roundNumbersOnSave`, so a new row's own defaults resolve too.
+- **A shrunk photo's copy was left on the device.** The shrink writes it to a `downscaled_` folder next to the picked file. The image field now removes that folder as soon as the photo is in the attachment store (uploaded, kept for the queue, refused or failed); the field's value and the uploaded file are the attachment-store copy, so neither is touched. A host that calls `downscalePickedImage` directly owns the folder.
+- The doc comments of `readCappedMediaBody` and `FormScreenStyle` are back on their own declarations; one had been left above `mediaFetchRequest`. No code change.
+
+## [2.0.0-beta.5] - 2026-10-24
+
 ### Changed
 
 - **Online-first Link pickers search the server, so every record of a large target is reachable.**
@@ -103,11 +126,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - A photo that fails to upload does not block the save: the wait ends and the form saves as the field stands.
   - A form with nothing uploading saves at once, as before.
 - **A photo or file was lost when its tab was left while it uploaded.** A tab that is off screen is disposed, so when the upload finished, the field's state was gone: the update threw, `onChanged` never ran, and the record saved without the new file. A replaced file had already been reclaimed. `ImageField` and `AttachField` now hand the new value to `onChanged` first, update the field only while it is mounted, and reclaim the replaced file only after the new one is committed. A failing reclaim is logged and no longer reported as a failed pick.
+- **A negative value in a `non_negative` numeric field is refused on the device, as Frappe refuses it on save.** It used to save offline and then fail at sync. The Int, Float, Currency or Percent field shows "Value cannot be negative for {label}" and Save is blocked.
 - **`non_negative` was not enforced in reactive (`FormController`) mode.** A negative value in a non-negative Int, Float, Currency or Percent field passed validation, saved locally and was refused at sync. `FormController` validation now refuses it with the same message as the legacy form.
+- **`set_only_once` fields lock once the document is saved, and virtual fields are read-only, as in Desk** (`frappe.perm.get_field_display_status`).
+  - An edit to a `set_only_once` field on a synced record used to fail at sync (`CannotChangeConstantError`), and an edit to a virtual field was discarded by the server.
+  - "Saved" now also covers a record read from the offline store, which carries `server_name` rather than `name`. The same check feeds `__islocal` in `depends_on`, so `eval:!doc.__islocal` fields show on synced records. An offline record that has not synced yet is still new.
+  - `DocField.setOnlyOnce` reads the flag from the raw meta, so it survives meta round trips. Both form engines apply it.
+- **Data fields with Email, Phone, Name or URL options are checked before save**, with Frappe's messages, as `BaseDocument._validate_data_fields` checks them on the server. An invalid value used to save offline and then fail at sync.
+- **Dates are saved in Frappe's format, and an empty date as `null`.**
+  - Date pickers now emit `YYYY-MM-DD`, and Datetime pickers `YYYY-MM-DD HH:mm:ss`. Both used to emit ISO text (`2026-10-13T00:00:00.000`), and an empty optional date was saved as `''`.
+  - A stored `''` crashed the picker when the document was opened again. Documents already saved with `''` or ISO text now open.
+  - Clearing a Time field now saves `null`. It used to report nothing, so the old time stayed.
+- **Long read-only Text, Small Text and Long Text values can be scrolled** (#119). They used to be cut off. A field keeps its state when `read_only_depends_on` flips it, and a drag past either end of the text scrolls the page.
 
 ### Changed
 
 - The comment on Rating's re-tap-clears behaviour now cites Frappe Desk's Rating control instead of a client app's component. No code change.
+- The doc comments of `readCappedMediaBody` and `FormScreenStyle` are back on their own declarations; one had been left above `mediaFetchRequest`. No code change.
 
 ### Security
 
@@ -116,6 +151,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - The migration blanks the row with `secure_delete` on and then runs a TRUNCATE checkpoint, so the old token bytes are not left in free pages or the WAL.
   - `AuthService.forTesting` takes an optional `storage`.
 - **Tokens and passwords are no longer logged.** `login` and `verifyLoginOtp` logged the full access token through `dart:developer` `log`. Those lines are removed. The debug-mode request tracer (`[Frappe API]`) printed request bodies verbatim, including the login password, the OTP and the refresh token; credential-named fields (`password`, `otp`, `*token*`, `*secret*`, `api_key`, and a whole key named `key` or `code`) are now replaced with `REDACTED` in traced bodies, query parameters and URLs. String bodies are covered too: form-encoded and JSON text, JSON held as a string inside a map or query value, and error response bodies.
+
+### Contributors
+
+- @RamanMishraDhwani: read-only text fields that scroll (#119).
+- @sunandan89: login tokens kept in secure storage only, and credentials redacted in the request tracer (#132).
+- @ankitDhwani: Link search, the Desk-parity fixes (#130), image optimisation and the photo size limit (#131), and the rest of #142.
+- Reported by @chitranshijain-stack (#127, #128, #129) and @RamanMishraDhwani (#120). Reviewed by @deepak-dhwani.
 
 ## [2.0.0-beta.4] - 2026-09-21
 

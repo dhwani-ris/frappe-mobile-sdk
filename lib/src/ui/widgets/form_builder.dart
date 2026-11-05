@@ -1681,6 +1681,10 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
               parentFormData: effectiveParentFormData,
               getLinkFilterBuilder: widget.getLinkFilterBuilder,
               cascadeProgrammaticChanges: widget.cascadeProgrammaticChanges,
+              // A new row gets its own `__user` defaults, as Desk's
+              // add_child does, and rounds like the parent form.
+              sessionUser: widget.sessionUser,
+              roundNumbersOnSave: widget.roundNumbersOnSave,
             )
           : null,
       onButtonPressed: widget.onButtonPressed,
@@ -2102,13 +2106,30 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
   /// uploading, so a submit does not read the field from before it landed.
   /// False when the form went away meanwhile, or when a submit is already
   /// waiting, so a second tap does not submit twice.
+  ///
+  /// Gives up after [kFieldWorkSaveTimeout] and returns true, so the form
+  /// saves as the fields stand rather than never. A [FieldWorkWaitScope]
+  /// above the form hears that it is waiting, for its Save button.
   Future<bool> _waitForFieldWork() async {
     if (_waitingForFieldWork) return false;
     _waitingForFieldWork = true;
+    final waiting = FieldWorkWaitScope.maybeOf(context);
+    waiting?.value = true;
     try {
-      await _pendingFieldWork.whenIdle();
+      final idle = await _pendingFieldWork.whenIdle(
+        timeout: kFieldWorkSaveTimeout,
+      );
+      if (!idle) {
+        sdkLog(
+          'FrappeFormBuilder(${widget.meta.name}): field work still running '
+          'after ${kFieldWorkSaveTimeout.inMinutes} min; saving the fields '
+          'as they stand',
+        );
+      }
     } finally {
       _waitingForFieldWork = false;
+      // The scope's owner is an ancestor, so it is still alive while we are.
+      if (mounted) waiting?.value = false;
     }
     return mounted;
   }
@@ -2117,11 +2138,17 @@ class _FrappeFormBuilderState extends State<FrappeFormBuilder>
     if (_pendingFieldWork.isBusy) {
       unawaited(
         _waitForFieldWork().then((proceed) {
-          if (proceed) _handleSubmit();
+          // Straight to the save: work still running after the bound must
+          // not start another wait.
+          if (proceed) _submitFieldsAsTheyStand();
         }),
       );
       return;
     }
+    _submitFieldsAsTheyStand();
+  }
+
+  void _submitFieldsAsTheyStand() {
     final state = _formKey.currentState;
     if (state == null) return;
 
