@@ -511,11 +511,40 @@ class SyncService {
     int start = 0;
     var currentFetch = fetchPage(start);
 
+    // The doctype is drained but the current window applied no row, so the
+    // per-page cursor write below didn't run. Without this the cursor never
+    // reaches `complete: true` in two cases:
+    //   * RESUME / INITIAL whose last full page was followed by an empty
+    //     window (row count an exact multiple of the page size): the cursor
+    //     stays `complete: false` and every later sync resumes for ever;
+    //   * a doctype with no rows on the server at all (e.g. a form nobody has
+    //     filled yet): no cursor is written, so it reads as INITIAL for ever
+    //     and an "is the first pull done?" gate never opens.
+    // The second writes the drained state with no watermark — the same
+    // `{complete: true}` that PullEngine persists via
+    // `Cursor.empty.markComplete()` — so the next pull still runs unfiltered
+    // and its first row sets a real cursor.
+    Future<void> markDrained() async {
+      if (cursorComplete) return;
+      await _database.doctypeMetaDao.setLastOkCursor(
+        doctype,
+        jsonEncode({
+          'modified': cursorModified,
+          'name': cursorName,
+          'complete': true,
+        }),
+      );
+      cursorComplete = true;
+    }
+
     while (true) {
       final fetched = await currentFetch;
       final page = fetched.rows;
       // Drained only when the server had nothing left in the window.
-      if (fetched.scanned == 0) break;
+      if (fetched.scanned == 0) {
+        await markDrained();
+        break;
+      }
       total += page.length;
 
       // Only fire a look-ahead when this window came back full — i.e.
@@ -632,21 +661,13 @@ class SyncService {
         cursorModified = pageLastModified;
         cursorName = pageLastName;
         if (isFinalPage) cursorComplete = true;
-      } else if (isFinalPage && cursorModified != null && !cursorComplete) {
+      } else if (isFinalPage) {
         // Edge case: server returned a page (possibly all skipped via
         // tie-skip) and the next page is empty — no row was applied
         // here, but the doctype IS drained. Promote the existing
         // cursor to complete=true so we don't get stuck in RESUME
         // forever for an unchanged doctype.
-        await _database.doctypeMetaDao.setLastOkCursor(
-          doctype,
-          jsonEncode({
-            'modified': cursorModified,
-            'name': cursorName,
-            'complete': true,
-          }),
-        );
-        cursorComplete = true;
+        await markDrained();
       }
 
       if (lookahead == null) break;

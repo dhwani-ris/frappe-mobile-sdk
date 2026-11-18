@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`SyncService` now marks a drained doctype's pull complete when the last window applied no row.**
+  - A doctype with no rows on the server (for example a form nobody has filled yet) never got a cursor, so `getPullPhase` returned `initial` for ever and an app gate waiting for the first pull never opened. It now gets `{modified: null, name: null, complete: true}`, the same drained state `PullEngine` persists with `Cursor.empty.markComplete()`. The next pull still runs unfiltered, and its first row sets a real cursor.
+  - When the row count was an exact multiple of the page size, the last full page was written `complete: false` and the following empty window broke the loop before any cursor write, so the doctype stayed in RESUME. The existing cursor is now promoted to `complete: true` there too.
+
 ### Changed
 
 - **Online-first Link pickers search the server, so every record of a large target is reachable.**
